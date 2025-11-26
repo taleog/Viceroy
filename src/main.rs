@@ -32,6 +32,7 @@ mod search_engine;
 mod settings;
 mod system_commands;
 mod web_search;
+mod usage;
 
 struct ViceroyApp {
     window: Arc<Mutex<Option<Window>>>,
@@ -237,13 +238,35 @@ impl AppDelegate for ViceroyApp {
                                                     let _: () = msg_send![app, activateIgnoringOtherApps: YES];
                                                     let _: () = msg_send![window, makeKeyAndOrderFront: nil];
 
-                                                    // Focus search field
+                                                    // Focus and reset search field on each hotkey show
                                                     let content_view: id = msg_send![window, contentView];
                                                     let subviews: id = msg_send![content_view, subviews];
                                                     let sv_count: usize = msg_send![subviews, count];
                                                     if sv_count > 1 {
-                                                        let search_field: id = msg_send![subviews, objectAtIndex:1];
-                                                        let _: () = msg_send![window, makeFirstResponder: search_field];
+                                                        // Container is at index 1
+                                                        let container: id = msg_send![subviews, objectAtIndex:1];
+                                                        let container_subviews: id = msg_send![container, subviews];
+                                                        let csv_count: usize = msg_send![container_subviews, count];
+                                                        if csv_count > 0 {
+                                                            let search_field: id = msg_send![container_subviews, objectAtIndex:csv_count-1];
+
+                                                            // Clear previous query text and any existing results
+                                                            let empty: id = NSString::alloc(nil).init_str("");
+                                                            let _: () = msg_send![search_field, setStringValue: empty];
+
+                                                            TABLE_RESULTS.lock().unwrap().clear();
+                                                            TABLE_DATA.lock().unwrap().clear();
+                                                            reload_table();
+
+                                                            // Ensure white insertion point before typing
+                                                            let field_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
+                                                            if field_editor != nil {
+                                                                let white: id = msg_send![class!(NSColor), whiteColor];
+                                                                let _: () = msg_send![field_editor, setInsertionPointColor: white];
+                                                            }
+
+                                                            let _: () = msg_send![window, makeFirstResponder: search_field];
+                                                        }
                                                     }
                                                 }
                                             });
@@ -326,11 +349,14 @@ unsafe fn register_custom_textfield_cell() {
     let mut decl = ClassDecl::new("MKTextFieldCell", superclass).unwrap();
 
     extern "C" fn draw_interior(this: &Object, _cmd: Sel, frame: NSRect, view: id) {
-        // Add horizontal padding and vertical centering
-        // Center a 30px height box in the 60px field
+        // With isFlipped = YES (0 is top)
+        // Height 60. Center is 30.
+        // Font height ~22-28.
+        // Rect height 28.
+        // Top y = 30 - 14 = 16.
         let inset_frame = NSRect::new(
-            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 15.0), 
-            NSSize::new(frame.size.width - 70.0, frame.size.height - 30.0)
+            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 16.0), 
+            NSSize::new(frame.size.width - 70.0, 28.0)
         );
         unsafe {
             let superclass = class!(NSTextFieldCell);
@@ -340,22 +366,22 @@ unsafe fn register_custom_textfield_cell() {
 
     extern "C" fn editing_rect(_this: &Object, _cmd: Sel, frame: NSRect) -> NSRect {
         NSRect::new(
-            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 15.0),
-            NSSize::new(frame.size.width - 70.0, frame.size.height - 30.0)
+            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 16.0),
+            NSSize::new(frame.size.width - 70.0, 28.0)
         )
     }
 
     extern "C" fn drawing_rect(_this: &Object, _cmd: Sel, frame: NSRect) -> NSRect {
         NSRect::new(
-            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 15.0),
-            NSSize::new(frame.size.width - 70.0, frame.size.height - 30.0)
+            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 16.0),
+            NSSize::new(frame.size.width - 70.0, 28.0)
         )
     }
 
     extern "C" fn select_rect(_this: &Object, _cmd: Sel, frame: NSRect) -> NSRect {
         NSRect::new(
-            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 15.0),
-            NSSize::new(frame.size.width - 70.0, frame.size.height - 30.0)
+            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 16.0),
+            NSSize::new(frame.size.width - 70.0, 28.0)
         )
     }
 
@@ -386,6 +412,10 @@ unsafe fn register_escape_textfield_class() {
     }
     let superclass = class!(NSTextField);
     let mut decl = ClassDecl::new("MKEscapeTextField", superclass).unwrap();
+
+    extern "C" fn is_flipped(_this: &Object, _cmd: Sel) -> BOOL {
+        YES
+    }
 
     extern "C" fn cancel_operation(_this: &Object, _cmd: Sel, _sender: id) {
         // cancelOperation: is called when Escape is pressed
@@ -493,6 +523,10 @@ unsafe fn register_escape_textfield_class() {
             perform_key_equivalent as extern "C" fn(&Object, Sel, id) -> BOOL,
         );
         decl.add_method(
+            sel!(isFlipped),
+            is_flipped as extern "C" fn(&Object, Sel) -> BOOL,
+        );
+        decl.add_method(
             sel!(cancelOperation:),
             cancel_operation as extern "C" fn(&Object, Sel, id),
         );
@@ -522,86 +556,86 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     register_custom_textfield_cell();
     register_escape_textfield_class();
 
-    // Use custom NSTextField subclass
-    let search_field: id = msg_send![class!(MKEscapeTextField), alloc];
-    // Position from TOP of window (20px from top, 60px tall)
-    let frame = NSRect::new(
+    // 1. Create Container View (The "Search Bar" visual)
+    let container: id = msg_send![class!(NSView), alloc];
+    let container_frame = NSRect::new(
         NSPoint::new(20.0, bounds.size.height - 80.0), // 20px from top
         NSSize::new(bounds.size.width - 40.0, 60.0),
     );
-    let search_field: id = msg_send![search_field, initWithFrame: frame];
-
-    // Replace with custom cell that handles padding
-    let custom_cell: id = msg_send![class!(MKTextFieldCell), alloc];
-    let custom_cell: id = msg_send![custom_cell, init];
-    let _: () = msg_send![search_field, setCell: custom_cell];
-
-    // Make it editable and selectable
-    let _: () = msg_send![search_field, setEditable: YES];
-    let _: () = msg_send![search_field, setSelectable: YES];
-    let _: () = msg_send![search_field, setEnabled: YES];
-
-    // Remove all chrome and focus indicators
-    let _: () = msg_send![search_field, setBezeled: NO];
-    let _: () = msg_send![search_field, setBordered: NO];
-    let _: () = msg_send![search_field, setDrawsBackground: YES]; // Need YES to show our background
-    let _: () = msg_send![search_field, setFocusRingType: 0]; // None
+    let container: id = msg_send![container, initWithFrame: container_frame];
+    let _: () = msg_send![container, setWantsLayer: YES];
+    let layer: id = msg_send![container, layer];
+    let _: () = msg_send![layer, setCornerRadius: 16.0f64];
+    let _: () = msg_send![layer, setMasksToBounds: YES];
     
-    // Disable focus ring on the cell
-    let cell: id = msg_send![search_field, cell];
-    let _: () = msg_send![cell, setFocusRingType: 0];
-    let _: () = msg_send![cell, setScrollable: YES];
-    let _: () = msg_send![cell, setDrawsBackground: NO];
-    
-    let _: () = msg_send![search_field, setAutoresizingMask: 0]; // No autoresizing - we'll position manually
-    
-    // iOS glass-style translucent background (more subtle)
-    let bg_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.05f64];
-    let _: () = msg_send![search_field, setBackgroundColor: bg_color];
-    
-    let _: () = msg_send![search_field, setWantsLayer: YES];
-    let layer: id = msg_send![search_field, layer];
-    let _: () = msg_send![layer, setCornerRadius: 16.0f64]; // More rounded like Viceroy
-    
-    // Add subtle border for definition
+    // Add subtle border
     let _: () = msg_send![layer, setBorderWidth: 0.5f64];
-    let border_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.15f64]; // More subtle
+    let border_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.15f64];
     let border_cg: id = msg_send![border_color, CGColor];
     let _: () = msg_send![layer, setBorderColor: border_cg];
-    let _: () = msg_send![layer, setBorderColor: border_cg];
 
-    // Add search icon (magnifying glass) - larger like Viceroy
+    // Add Visual Effect View for Glass Look (Dark HUD style)
+    let effect_view: id = msg_send![class!(NSVisualEffectView), alloc];
+    let effect_view: id = msg_send![effect_view, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), container_frame.size)];
+    let _: () = msg_send![effect_view, setMaterial: 13]; // HUDWindow (Dark, Translucent)
+    let _: () = msg_send![effect_view, setBlendingMode: 0]; // BehindWindow
+    let _: () = msg_send![effect_view, setState: 1]; // Active
+    let _: () = msg_send![effect_view, setAutoresizingMask: 18]; // Width+Height
+    let _: () = msg_send![container, addSubview: effect_view];
+
+    // 2. Add Icon (Vertically Centered)
     let icon_view: id = msg_send![class!(NSImageView), alloc];
-    let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(18.0, 16.0), NSSize::new(28.0, 28.0))];
+    // Center vertically in 60px height. Icon size 26x26 (slightly larger).
+    // y = (60 - 26) / 2 = 17.
+    let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(18.0, 17.0), NSSize::new(26.0, 26.0))];
     let icon_name = NSString::alloc(nil).init_str("magnifyingglass");
     let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName:icon_name accessibilityDescription:nil];
     let _: () = msg_send![icon_view, setImage: image];
-    let icon_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.5f64];
+    let icon_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.5f64]; // Subtle gray
     let _: () = msg_send![icon_view, setContentTintColor: icon_color];
-    let _: () = msg_send![search_field, addSubview: icon_view];
-    // Font and colors
+    let _: () = msg_send![container, addSubview: icon_view];
+
+    // 3. Create Search Input (Transparent, Centered)
+    let search_field: id = msg_send![class!(MKEscapeTextField), alloc];
+    // Height 30px is enough for text. Center vertically: (60 - 30) / 2 = 15.
+    // Adjusted to 14.0 to visually center with the larger font.
+    // Left padding: 18 + 26 + 12 = 56.
+    let input_frame = NSRect::new(
+        NSPoint::new(56.0, 14.0), 
+        NSSize::new(container_frame.size.width - 72.0, 30.0)
+    );
+    let search_field: id = msg_send![search_field, initWithFrame: input_frame];
+
+    // Configure Input Style (Transparent)
+    let _: () = msg_send![search_field, setBezeled: NO];
+    let _: () = msg_send![search_field, setBordered: NO];
+    let _: () = msg_send![search_field, setDrawsBackground: NO];
+    let _: () = msg_send![search_field, setFocusRingType: 0]; // None
+    let _: () = msg_send![search_field, setEditable: YES];
+    let _: () = msg_send![search_field, setSelectable: YES];
+    
+    // Font and Color
     let font = create_search_font();
     let _: () = msg_send![search_field, setFont: font];
     let text_color: id = msg_send![class!(NSColor), whiteColor];
     let _: () = msg_send![search_field, setTextColor: text_color];
 
-    // Clear any default text and set placeholder
-    let empty_string = NSString::alloc(nil).init_str("");
-    let _: () = msg_send![search_field, setStringValue: empty_string];
-    
+    // Placeholder
     let placeholder_text = NSString::alloc(nil).init_str("Search apps and commands");
-    let _: () = msg_send![search_field, setPlaceholderString: placeholder_text];
-    
-    // Style placeholder text (more subtle)
     let placeholder_attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
-    let placeholder_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.35f64];
+    let placeholder_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.3f64]; // Very subtle
     let _: () = msg_send![placeholder_attrs, setObject:placeholder_color forKey:NSString::alloc(nil).init_str("NSColor")];
     let _: () = msg_send![placeholder_attrs, setObject:font forKey:NSString::alloc(nil).init_str("NSFont")];
     let attributed_placeholder: id = msg_send![class!(NSAttributedString), alloc];
     let attributed_placeholder: id = msg_send![attributed_placeholder, initWithString:placeholder_text attributes:placeholder_attrs];
+    
+    let cell: id = msg_send![search_field, cell];
     let _: () = msg_send![cell, setPlaceholderAttributedString: attributed_placeholder];
+    let _: () = msg_send![cell, setScrollable: YES];
+    let _: () = msg_send![cell, setUsesSingleLineMode: YES];
 
-    let _: () = msg_send![content_view, addSubview: search_field];
+    let _: () = msg_send![container, addSubview: search_field];
+    let _: () = msg_send![content_view, addSubview: container];
 
     // Focus immediately
     let window: id = msg_send![content_view, window];
@@ -752,7 +786,13 @@ unsafe fn complete_from_selection() {
     if sv_count < 2 {
         return;
     }
-    let search_field: id = msg_send![subviews, objectAtIndex:1];
+    // Container is at index 1
+    let container: id = msg_send![subviews, objectAtIndex:1];
+    let container_subviews: id = msg_send![container, subviews];
+    let csv_count: usize = msg_send![container_subviews, count];
+    if csv_count == 0 { return; }
+    let search_field: id = msg_send![container_subviews, objectAtIndex:csv_count-1];
+
     let completion_ns = NSString::alloc(nil).init_str(&completion_text);
     let _: () = msg_send![search_field, setStringValue: completion_ns];
 }
@@ -845,6 +885,7 @@ unsafe fn perform_result_action(index: usize) {
 
     match result {
         search_engine::SearchResult::App { path, .. } => {
+            usage::record_app_launch(&path);
             let _ = crate::app_launcher::launch(&path);
         }
         search_engine::SearchResult::File { path, .. } => {
@@ -1073,6 +1114,21 @@ unsafe fn register_search_delegate_class() {
     }
     let mut decl = ClassDecl::new("MKSearchDelegate", class!(NSObject)).unwrap();
 
+    extern "C" fn begin_editing(_this: &Object, _cmd: Sel, notification: id) {
+        unsafe {
+            let object: id = msg_send![notification, object];
+            if object == nil { return; }
+            let window: id = msg_send![object, window];
+            if window != nil {
+                let field_editor: id = msg_send![window, fieldEditor:YES forObject:object];
+                if field_editor != nil {
+                    let white: id = msg_send![class!(NSColor), whiteColor];
+                    let _: () = msg_send![field_editor, setInsertionPointColor: white];
+                }
+            }
+        }
+    }
+
     extern "C" fn changed(_this: &Object, _cmd: Sel, notification: id) {
         unsafe {
             // Get the text field from notification
@@ -1080,6 +1136,17 @@ unsafe fn register_search_delegate_class() {
             if object == nil {
                 return;
             }
+            
+            // Ensure cursor is white (sometimes needs re-applying)
+            let window: id = msg_send![object, window];
+            if window != nil {
+                let field_editor: id = msg_send![window, fieldEditor:YES forObject:object];
+                if field_editor != nil {
+                    let white: id = msg_send![class!(NSColor), whiteColor];
+                    let _: () = msg_send![field_editor, setInsertionPointColor: white];
+                }
+            }
+
             let value: id = msg_send![object, stringValue];
             let cstr: *const std::os::raw::c_char = msg_send![value, UTF8String];
             if cstr.is_null() {
@@ -1167,6 +1234,10 @@ unsafe fn register_search_delegate_class() {
                         *TABLE_RESULTS.lock().unwrap() = results;
                         *TABLE_DATA.lock().unwrap() = rows;
                         reload_table();
+                        // Auto-complete disabled per user request
+                        // unsafe {
+                        //    update_autocomplete_preview(&query_clone);
+                        // }
                     });
                 }
             });
@@ -1179,6 +1250,10 @@ unsafe fn register_search_delegate_class() {
     }
 
     unsafe {
+        decl.add_method(
+            sel!(controlTextDidBeginEditing:),
+            begin_editing as extern "C" fn(&Object, Sel, id),
+        );
         decl.add_method(
             sel!(controlTextDidChange:),
             changed as extern "C" fn(&Object, Sel, id),
@@ -1241,7 +1316,12 @@ unsafe fn update_autocomplete_preview(current_query: &str) {
     if sv_count < 2 {
         return;
     }
-    let search_field: id = msg_send![subviews, objectAtIndex:1];
+    // Container is at index 1
+    let container: id = msg_send![subviews, objectAtIndex:1];
+    let container_subviews: id = msg_send![container, subviews];
+    let csv_count: usize = msg_send![container_subviews, count];
+    if csv_count == 0 { return; }
+    let search_field: id = msg_send![container_subviews, objectAtIndex:csv_count-1];
     
     // Create attributed string with typed part in white + completion in gray
     let full_text = format!("{}{}", current_query, remaining);
@@ -1316,14 +1396,13 @@ unsafe fn reload_table() {
     
     // Manually reposition search bar FIRST to stay at top (20px from top edge)
     if sv_count >= 2 {
-        let search_field: id = msg_send![subviews, objectAtIndex:1];
-        let search_frame: NSRect = msg_send![search_field, frame];
+        let container: id = msg_send![subviews, objectAtIndex:1];
         let new_search_y = new_height - 80.0; // Keep at 20px from top
         let new_search_frame = NSRect::new(
             NSPoint::new(20.0, new_search_y), // Also fix X to 20px
             NSSize::new(current_frame.size.width - 40.0, 60.0) // Also adjust width
         );
-        let _: () = msg_send![search_field, setFrame: new_search_frame];
+        let _: () = msg_send![container, setFrame: new_search_frame];
     }
     
     // Then resize window instantly (no animation to prevent search bar movement)
@@ -1514,20 +1593,43 @@ unsafe fn create_menu_actions_target() -> id {
                 let windows: id = msg_send![app, windows];
                 let count: usize = msg_send![windows, count];
 
-                if count > 0 {
-                    let window: id = msg_send![windows, objectAtIndex: 0];
-                    let _: () = msg_send![app, activateIgnoringOtherApps: YES];
-                    let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+                    if count > 0 {
+                        let window: id = msg_send![windows, objectAtIndex: 0];
+                        let _: () = msg_send![app, activateIgnoringOtherApps: YES];
+                        let _: () = msg_send![window, makeKeyAndOrderFront: nil];
 
-                    // Focus search field
-                    let content_view: id = msg_send![window, contentView];
-                    let subviews: id = msg_send![content_view, subviews];
-                    let sv_count: usize = msg_send![subviews, count];
-                    if sv_count > 1 {
-                        let search_field: id = msg_send![subviews, objectAtIndex: 1];
-                        let _: () = msg_send![window, makeFirstResponder: search_field];
+                        // Focus and reset search field on each open
+                        let content_view: id = msg_send![window, contentView];
+                        let subviews: id = msg_send![content_view, subviews];
+                        let sv_count: usize = msg_send![subviews, count];
+                        if sv_count > 1 {
+                            // Container is at index 1
+                            let container: id = msg_send![subviews, objectAtIndex:1];
+                            let container_subviews: id = msg_send![container, subviews];
+                            let csv_count: usize = msg_send![container_subviews, count];
+                            if csv_count > 0 {
+                                let search_field: id = msg_send![container_subviews, objectAtIndex:csv_count-1];
+
+                                // Clear any previous text and results so each invocation starts fresh
+                                let empty: id = NSString::alloc(nil).init_str("");
+                                let _: () = msg_send![search_field, setStringValue: empty];
+
+                                // Clear results backing state and table
+                                TABLE_RESULTS.lock().unwrap().clear();
+                                TABLE_DATA.lock().unwrap().clear();
+                                reload_table();
+
+                                // Ensure cursor is white even on first edit session
+                                let field_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
+                                if field_editor != nil {
+                                    let white: id = msg_send![class!(NSColor), whiteColor];
+                                    let _: () = msg_send![field_editor, setInsertionPointColor: white];
+                                }
+
+                                let _: () = msg_send![window, makeFirstResponder: search_field];
+                            }
+                        }
                     }
-                }
             }
         }
 
@@ -1674,8 +1776,15 @@ unsafe fn setup_window_delegate(ns_window: id) {
                 let subviews: id = msg_send![content_view, subviews];
                 let sv_count: usize = msg_send![subviews, count];
                 if sv_count > 1 {
-                    let search_field: id = msg_send![subviews, objectAtIndex:1];
-                    let _: () = msg_send![window, makeFirstResponder: search_field];
+                    // Container is at index 1
+                    let container: id = msg_send![subviews, objectAtIndex:1];
+                    let container_subviews: id = msg_send![container, subviews];
+                    let csv_count: usize = msg_send![container_subviews, count];
+                    // Search field is the last subview added to container (index 2: effect, icon, field)
+                    if csv_count > 0 {
+                        let search_field: id = msg_send![container_subviews, objectAtIndex:csv_count-1];
+                        let _: () = msg_send![window, makeFirstResponder: search_field];
+                    }
                 }
             }
         }

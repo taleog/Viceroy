@@ -1,6 +1,6 @@
 use crate::{
     app_launcher, calculator, clipboard, dictionary, emoji, file_search, system_commands,
-    web_search,
+    usage, web_search,
 };
 use anyhow::Result;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -330,7 +330,7 @@ fn get_smart_score(result: &SearchResult, query: &str, _matcher: &SkimMatcherV2,
     let query_len = query.len();
 
     let base_score = match result {
-        SearchResult::App { name, score, .. } => {
+        SearchResult::App { name, path, score, .. } => {
             let name_lower = name.to_lowercase();
             let mut boost = *score;
 
@@ -401,6 +401,34 @@ fn get_smart_score(result: &SearchResult, query: &str, _matcher: &SkimMatcherV2,
             let productivity = ["calendar", "reminders", "todoist", "things", "omnifocus"];
             if productivity.iter().any(|app| name_lower.contains(app)) {
                 boost += 6000;
+            }
+
+            // Personal usage-based boost: recently and frequently launched apps
+            if let Some((last_used, launch_count)) = usage::get_app_usage(path) {
+                let now = chrono::Utc::now().timestamp();
+                let age = now.saturating_sub(last_used).max(0);
+
+                // Recency tiers (in seconds)
+                let day: i64 = 86_400;
+                let week: i64 = day * 7;
+
+                if age <= 10 * 60 {
+                    // Used in last 10 minutes
+                    boost += 40_000;
+                } else if age <= day {
+                    // Used today
+                    boost += 25_000;
+                } else if age <= week {
+                    // Used this week
+                    boost += 15_000;
+                } else if age <= 30 * day {
+                    // Used this month
+                    boost += 5_000;
+                }
+
+                // Frequency boost (log-like: diminishing returns)
+                let freq_boost = (launch_count as i64).min(50) * 400;
+                boost += freq_boost;
             }
 
             boost
