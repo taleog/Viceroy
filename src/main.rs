@@ -1,0 +1,1742 @@
+use cacao::appkit::window::{Window, WindowConfig};
+use cacao::appkit::{App, AppDelegate};
+use cocoa::appkit::NSWindowStyleMask;
+use cocoa::base::{id, nil, BOOL, NO, YES};
+use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
+use global_hotkey::{
+    hotkey::{Code, HotKey, Modifiers},
+    GlobalHotKeyManager,
+};
+use lazy_static::lazy_static;
+use objc::declare::ClassDecl;
+use objc::runtime::{Object, Sel};
+use objc::{class, msg_send, sel, sel_impl};
+use std::sync::{Arc, Mutex};
+lazy_static! {
+    static ref TABLE_DATA: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // Start empty like Viceroy
+    static ref TABLE_RESULTS: Mutex<Vec<search_engine::SearchResult>> = Mutex::new(Vec::new());
+    static ref SEARCH_RT: tokio::runtime::Runtime = tokio::runtime::Runtime::new().unwrap();
+    static ref WINDOW_SHOWING: Mutex<bool> = Mutex::new(false);
+    static ref DISMISS_ON_ESCAPE: Mutex<bool> = Mutex::new(true);
+    static ref DISMISS_ON_CLICK_AWAY: Mutex<bool> = Mutex::new(true);
+}
+
+mod app_launcher;
+mod calculator;
+mod clipboard;
+mod database;
+mod dictionary;
+mod emoji;
+mod file_search;
+mod search_engine;
+mod settings;
+mod system_commands;
+mod web_search;
+
+struct ViceroyApp {
+    window: Arc<Mutex<Option<Window>>>,
+    is_showing: Arc<Mutex<bool>>,
+}
+
+impl Default for ViceroyApp {
+    fn default() -> Self {
+        Self {
+            window: Arc::new(Mutex::new(None)),
+            is_showing: Arc::new(Mutex::new(false)), // Start hidden
+        }
+    }
+}
+
+impl AppDelegate for ViceroyApp {
+    fn did_finish_launching(&self) {
+        // Load settings early so UI reflects preferences
+        if let Ok(s) = settings::load() {
+            *DISMISS_ON_ESCAPE.lock().unwrap() = s.dismiss_on_escape;
+            *DISMISS_ON_CLICK_AWAY.lock().unwrap() = s.dismiss_on_click_away;
+        }
+        unsafe {
+            // Create a custom window class that can become key even when borderless
+            register_key_window_class();
+            
+            let ns_window: id = msg_send![class!(MKKeyWindow), alloc];
+            let rect = NSRect::new(NSPoint::new(100.0, 100.0), NSSize::new(720.0, 106.0)); // Better proportions
+            
+            let style_mask = NSWindowStyleMask::NSBorderlessWindowMask
+                | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
+            
+            let ns_window: id = msg_send![ns_window, 
+                initWithContentRect:rect
+                styleMask:style_mask
+                backing:2 // NSBackingStoreBuffered
+                defer:NO
+            ];
+
+            // Make borderless window accept key status and mouse events
+            let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: YES];
+            let _: () = msg_send![ns_window, setIgnoresMouseEvents: NO];
+
+            // Borderless with full size content
+            let style_mask = NSWindowStyleMask::NSBorderlessWindowMask
+                | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
+            let _: () = msg_send![ns_window, setStyleMask: style_mask];
+            let _: () = msg_send![ns_window, setTitlebarAppearsTransparent: YES];
+            let _: () = msg_send![ns_window, setMovable: NO]; // Cannot be moved
+            let _: () = msg_send![ns_window, setMovableByWindowBackground: NO];
+            let _: () = msg_send![ns_window, setLevel: 1]; // Floating
+
+            // Rounded corners
+            let _: () = msg_send![ns_window, setOpaque: NO];
+            let _: () = msg_send![ns_window, setOpaque: NO];
+            let clear_color: id = msg_send![class!(NSColor), clearColor];
+            let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
+            let _: () = msg_send![ns_window, setHasShadow: YES];
+
+            let content_view: id = msg_send![ns_window, contentView];
+            let bounds: NSRect = msg_send![content_view, bounds];
+
+            // Force dark appearance for modern look
+            let dark_appearance: id = msg_send![class!(NSAppearance), appearanceNamed: NSString::alloc(nil).init_str("NSAppearanceNameVibrantDark")];
+            let _: () = msg_send![ns_window, setAppearance: dark_appearance];
+
+            // iOS-style translucent blur background
+            let effect_view: id = msg_send![class!(NSVisualEffectView), alloc];
+            let effect_view: id = msg_send![effect_view, initWithFrame: bounds];
+            let _: () = msg_send![effect_view, setMaterial: 7]; // Fullscreen UI - modern translucent
+            let _: () = msg_send![effect_view, setBlendingMode: 0]; // BehindWindow
+            let _: () = msg_send![effect_view, setState: 1]; // Active
+            let _: () = msg_send![effect_view, setAutoresizingMask: 18]; // Width+Height
+            let _: () = msg_send![effect_view, setWantsLayer: YES];
+            
+            // Set corner radius directly - simpler approach
+            let _: () = msg_send![content_view, setWantsLayer: YES];
+            let content_layer: id = msg_send![content_view, layer];
+            let _: () = msg_send![content_layer, setCornerRadius: 24.0f64];
+            let _: () = msg_send![content_layer, setMasksToBounds: YES];
+            
+            // Also set on effect view
+            let effect_layer: id = msg_send![effect_view, layer];
+            let _: () = msg_send![effect_layer, setCornerRadius: 24.0f64];
+            
+            // Add subtle shadow for floating effect
+            let _: () = msg_send![ns_window, setHasShadow: YES];
+
+            let _: () = msg_send![content_view, addSubview: effect_view];
+
+            // Search field with shimmer
+            create_search_field(content_view, bounds);
+
+            // Results table (Viceroy style placeholder)
+            create_results_table(content_view, bounds);
+
+            // Center on screen with snap animation
+            center_window_with_snap(ns_window);
+
+            // Prevent window from closing (only allow hiding)
+            let _: () = msg_send![ns_window, setReleasedWhenClosed: NO];
+
+            // Don't show window initially - wait for hotkey
+            // let _: () = msg_send![ns_window, makeKeyAndOrderFront: nil];
+            let _: () = msg_send![ns_window, setCollectionBehavior: 1]; // CanJoinAllSpaces
+
+            // Setup window delegate for click-away dismissal
+            setup_window_delegate(ns_window);
+            setup_app_observer(ns_window);
+
+            // Create menu bar icon
+            create_status_bar_item();
+            
+            // Retain the window so it doesn't get deallocated
+            let _: id = msg_send![ns_window, retain];
+        }
+
+        // Register global hotkey (Command+Shift+Space)
+        std::thread::spawn(move || {
+            use core_foundation::base::TCFType;
+            use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+            use std::time::{Duration, Instant};
+
+            match GlobalHotKeyManager::new() {
+                Ok(manager) => {
+                    let hotkey =
+                        HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+
+                    match manager.register(hotkey) {
+                        Ok(_) => {
+                            let receiver = global_hotkey::GlobalHotKeyEvent::receiver();
+                            // Debounce to avoid rapid repeat events while key held
+                            let mut last_toggle = Instant::now() - Duration::from_secs(1);
+                            let mut last_escape_check = Instant::now();
+
+                            #[link(name = "Carbon", kind = "framework")]
+                            extern "C" {
+                                fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
+                            }
+
+                            loop {
+                                // Check for Escape key every 50ms
+                                if last_escape_check.elapsed() >= Duration::from_millis(50) {
+                                    last_escape_check = Instant::now();
+
+                                    unsafe {
+                                        let showing = *WINDOW_SHOWING.lock().unwrap();
+                                        if showing {
+                                            if *DISMISS_ON_ESCAPE.lock().unwrap()
+                                                && CGEventSourceKeyState(1, 53)
+                                            {
+                                                // 53 = Escape
+                                                drop(showing); // Release lock before dispatch
+
+                                                // Use exec_sync to hide immediately
+                                                dispatch::Queue::main().exec_sync(|| unsafe {
+                                                    *WINDOW_SHOWING.lock().unwrap() = false;
+                                                    let app: id = msg_send![
+                                                        class!(NSApplication),
+                                                        sharedApplication
+                                                    ];
+                                                    let windows: id = msg_send![app, windows];
+                                                    let count: usize = msg_send![windows, count];
+                                                    if count > 0 {
+                                                        let window: id =
+                                                            msg_send![windows, objectAtIndex:0];
+                                                        let _: () =
+                                                            msg_send![window, orderOut: nil];
+                                                    } else {
+                                                        // No windows found
+                                                    }
+                                                });
+                                                std::thread::sleep(Duration::from_millis(300));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Check for hotkey events with timeout so Escape checking continues
+                                if let Ok(_event) = receiver.recv_timeout(Duration::from_millis(50))
+                                {
+                                    // Ignore if within debounce interval (key repeat spam)
+                                    if last_toggle.elapsed() < Duration::from_millis(250) {
+                                        continue;
+                                    }
+                                    last_toggle = Instant::now();
+                                    let mut showing = WINDOW_SHOWING.lock().unwrap();
+                                    let should_show = !*showing;
+                                    *showing = should_show;
+
+                                    // Dispatch to main queue
+                                    unsafe {
+                                        let queue = dispatch::ffi::dispatch_get_main_queue();
+
+                                        if should_show {
+                                            dispatch::Queue::main().exec_async(move || {
+                                                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                                                let windows: id = msg_send![app, windows];
+                                                let count: usize = msg_send![windows, count];
+
+                                                if count > 0 {
+                                                    let window: id = msg_send![windows, objectAtIndex: 0];
+                                                    let _: () = msg_send![app, activateIgnoringOtherApps: YES];
+                                                    let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+
+                                                    // Focus search field
+                                                    let content_view: id = msg_send![window, contentView];
+                                                    let subviews: id = msg_send![content_view, subviews];
+                                                    let sv_count: usize = msg_send![subviews, count];
+                                                    if sv_count > 1 {
+                                                        let search_field: id = msg_send![subviews, objectAtIndex:1];
+                                                        let _: () = msg_send![window, makeFirstResponder: search_field];
+                                                    }
+                                                }
+                                            });
+                                        } else {
+                                            dispatch::Queue::main().exec_async(move || {
+                                                let app: id = msg_send![
+                                                    class!(NSApplication),
+                                                    sharedApplication
+                                                ];
+                                                let windows: id = msg_send![app, windows];
+                                                let count: usize = msg_send![windows, count];
+
+                                                if count > 0 {
+                                                    let window: id =
+                                                        msg_send![windows, objectAtIndex: 0];
+                                                    let _: () = msg_send![window, orderOut: nil];
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("✗ Hotkey failed: {} (need Accessibility permission?)", e)
+                        }
+                    }
+                }
+                Err(e) => eprintln!("✗ Hotkey manager failed: {}", e),
+            }
+        });
+
+        // Initialize database (lightweight)
+        if let Err(e) = database::init() {
+            eprintln!("Database init error: {}", e);
+        }
+
+        // Pre-warm app cache in background
+        std::thread::spawn(|| {
+            let _ = app_launcher::get_all_apps();
+        });
+    }
+
+    fn should_terminate_after_last_window_closed(&self) -> bool {
+        false // Don't quit when window closes, we're a background app
+    }
+}
+
+unsafe fn register_key_window_class() {
+    if objc::runtime::Class::get("MKKeyWindow").is_some() {
+        return;
+    }
+    let superclass = class!(NSWindow);
+    let mut decl = ClassDecl::new("MKKeyWindow", superclass).unwrap();
+
+    extern "C" fn can_become_key(_this: &Object, _cmd: Sel) -> BOOL {
+        YES
+    }
+
+    extern "C" fn can_become_main(_this: &Object, _cmd: Sel) -> BOOL {
+        YES
+    }
+
+    decl.add_method(
+        sel!(canBecomeKeyWindow),
+        can_become_key as extern "C" fn(&Object, Sel) -> BOOL,
+    );
+    decl.add_method(
+        sel!(canBecomeMainWindow),
+        can_become_main as extern "C" fn(&Object, Sel) -> BOOL,
+    );
+    decl.register();
+}
+
+unsafe fn register_custom_textfield_cell() {
+    if objc::runtime::Class::get("MKTextFieldCell").is_some() {
+        return;
+    }
+    let superclass = class!(NSTextFieldCell);
+    let mut decl = ClassDecl::new("MKTextFieldCell", superclass).unwrap();
+
+    extern "C" fn draw_interior(this: &Object, _cmd: Sel, frame: NSRect, view: id) {
+        // Add horizontal padding and vertical centering
+        // Center a 30px height box in the 60px field
+        let inset_frame = NSRect::new(
+            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 15.0), 
+            NSSize::new(frame.size.width - 70.0, frame.size.height - 30.0)
+        );
+        unsafe {
+            let superclass = class!(NSTextFieldCell);
+            let _: () = msg_send![super(this, superclass), drawInteriorWithFrame:inset_frame inView:view];
+        }
+    }
+
+    extern "C" fn editing_rect(_this: &Object, _cmd: Sel, frame: NSRect) -> NSRect {
+        NSRect::new(
+            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 15.0),
+            NSSize::new(frame.size.width - 70.0, frame.size.height - 30.0)
+        )
+    }
+
+    extern "C" fn drawing_rect(_this: &Object, _cmd: Sel, frame: NSRect) -> NSRect {
+        NSRect::new(
+            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 15.0),
+            NSSize::new(frame.size.width - 70.0, frame.size.height - 30.0)
+        )
+    }
+
+    extern "C" fn select_rect(_this: &Object, _cmd: Sel, frame: NSRect) -> NSRect {
+        NSRect::new(
+            NSPoint::new(frame.origin.x + 54.0, frame.origin.y + 15.0),
+            NSSize::new(frame.size.width - 70.0, frame.size.height - 30.0)
+        )
+    }
+
+    unsafe {
+        decl.add_method(
+            sel!(drawInteriorWithFrame:inView:),
+            draw_interior as extern "C" fn(&Object, Sel, NSRect, id),
+        );
+        decl.add_method(
+            sel!(editingRectForBounds:),
+            editing_rect as extern "C" fn(&Object, Sel, NSRect) -> NSRect,
+        );
+        decl.add_method(
+            sel!(drawingRectForBounds:),
+            drawing_rect as extern "C" fn(&Object, Sel, NSRect) -> NSRect,
+        );
+        decl.add_method(
+            sel!(selectRectForBounds:),
+            select_rect as extern "C" fn(&Object, Sel, NSRect) -> NSRect,
+        );
+        decl.register();
+    }
+}
+
+unsafe fn register_escape_textfield_class() {
+    if objc::runtime::Class::get("MKEscapeTextField").is_some() {
+        return;
+    }
+    let superclass = class!(NSTextField);
+    let mut decl = ClassDecl::new("MKEscapeTextField", superclass).unwrap();
+
+    extern "C" fn cancel_operation(_this: &Object, _cmd: Sel, _sender: id) {
+        // cancelOperation: is called when Escape is pressed
+        unsafe {
+            if *DISMISS_ON_ESCAPE.lock().unwrap() {
+                // Update global state
+                *WINDOW_SHOWING.lock().unwrap() = false;
+                // Hide the window
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                let windows: id = msg_send![app, windows];
+                let count: usize = msg_send![windows, count];
+                if count > 0 {
+                    let window: id = msg_send![windows, objectAtIndex:0];
+                    let _: () = msg_send![window, orderOut: nil];
+                }
+            }
+        }
+    }
+
+    extern "C" fn insert_newline(_this: &Object, _cmd: Sel, _sender: id) {
+        unsafe {
+            activate_selected_row_or_first();
+        }
+    }
+
+    extern "C" fn text_view_do_command(_this: &Object, _cmd: Sel, _text_view: id, command_selector: Sel) -> BOOL {
+        unsafe {
+            let selector_name = std::ffi::CStr::from_ptr(objc::runtime::sel_getName(command_selector))
+                .to_str()
+                .unwrap_or("");
+            
+            eprintln!("Command: {}", selector_name); // Debug
+            
+            match selector_name {
+                "moveDown:" => {
+                    move_table_selection(true);
+                    YES // Handled
+                }
+                "moveUp:" => {
+                    move_table_selection(false);
+                    YES // Handled
+                }
+                "moveRight:" => {
+                    // Let NSTextField handle it normally
+                    NO
+                }
+                "insertTab:" => {
+                    complete_from_selection();
+                    YES // Handled
+                }
+                "insertNewline:" => {
+                    activate_selected_row_or_first();
+                    YES // Handled
+                }
+                _ => NO // Not handled, let NSTextField process it
+            }
+        }
+    }
+
+    // Override drawFocusRingMask to prevent any focus ring drawing
+    extern "C" fn draw_focus_ring_mask(_this: &Object, _cmd: Sel) {
+        // Do nothing - completely skip focus ring drawing
+    }
+
+    // Return empty rect for focus ring mask
+    extern "C" fn focus_ring_mask_bounds(_this: &Object, _cmd: Sel) -> NSRect {
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0))
+    }
+
+    extern "C" fn perform_key_equivalent(this: &Object, _cmd: Sel, event: id) -> BOOL {
+        unsafe {
+            let flags: u64 = msg_send![event, modifierFlags];
+            let chars: id = msg_send![event, charactersIgnoringModifiers];
+            let s: *const i8 = msg_send![chars, UTF8String];
+            let s = std::ffi::CStr::from_ptr(s).to_str().unwrap_or("");
+
+            if (flags & (1 << 20)) != 0 { // Command key
+                if s == "a" {
+                    let _: () = msg_send![this, selectText:nil];
+                    return YES;
+                }
+                if s == "c" {
+                    let _: () = msg_send![class!(NSApplication), sendAction:sel!(copy:) to:nil from:this];
+                    return YES;
+                }
+                if s == "v" {
+                    let _: () = msg_send![class!(NSApplication), sendAction:sel!(paste:) to:nil from:this];
+                    return YES;
+                }
+                if s == "x" {
+                    let _: () = msg_send![class!(NSApplication), sendAction:sel!(cut:) to:nil from:this];
+                    return YES;
+                }
+            }
+            
+            // Call super
+            let superclass = class!(NSTextField);
+            msg_send![super(this, superclass), performKeyEquivalent:event]
+        }
+    }
+
+    unsafe {
+        decl.add_method(
+            sel!(performKeyEquivalent:),
+            perform_key_equivalent as extern "C" fn(&Object, Sel, id) -> BOOL,
+        );
+        decl.add_method(
+            sel!(cancelOperation:),
+            cancel_operation as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(insertNewline:),
+            insert_newline as extern "C" fn(&Object, Sel, id),
+        );
+        // NSTextFieldDelegate method - called when field editor processes commands
+        decl.add_method(
+            sel!(textView:doCommandBySelector:),
+            text_view_do_command as extern "C" fn(&Object, Sel, id, Sel) -> BOOL,
+        );
+        decl.add_method(
+            sel!(drawFocusRingMask),
+            draw_focus_ring_mask as extern "C" fn(&Object, Sel),
+        );
+        decl.add_method(
+            sel!(focusRingMaskBounds),
+            focus_ring_mask_bounds as extern "C" fn(&Object, Sel) -> NSRect,
+        );
+        decl.register();
+    }
+}
+
+unsafe fn create_search_field(content_view: id, bounds: NSRect) {
+    // Register custom classes
+    register_custom_textfield_cell();
+    register_escape_textfield_class();
+
+    // Use custom NSTextField subclass
+    let search_field: id = msg_send![class!(MKEscapeTextField), alloc];
+    // Position from TOP of window (20px from top, 60px tall)
+    let frame = NSRect::new(
+        NSPoint::new(20.0, bounds.size.height - 80.0), // 20px from top
+        NSSize::new(bounds.size.width - 40.0, 60.0),
+    );
+    let search_field: id = msg_send![search_field, initWithFrame: frame];
+
+    // Replace with custom cell that handles padding
+    let custom_cell: id = msg_send![class!(MKTextFieldCell), alloc];
+    let custom_cell: id = msg_send![custom_cell, init];
+    let _: () = msg_send![search_field, setCell: custom_cell];
+
+    // Make it editable and selectable
+    let _: () = msg_send![search_field, setEditable: YES];
+    let _: () = msg_send![search_field, setSelectable: YES];
+    let _: () = msg_send![search_field, setEnabled: YES];
+
+    // Remove all chrome and focus indicators
+    let _: () = msg_send![search_field, setBezeled: NO];
+    let _: () = msg_send![search_field, setBordered: NO];
+    let _: () = msg_send![search_field, setDrawsBackground: YES]; // Need YES to show our background
+    let _: () = msg_send![search_field, setFocusRingType: 0]; // None
+    
+    // Disable focus ring on the cell
+    let cell: id = msg_send![search_field, cell];
+    let _: () = msg_send![cell, setFocusRingType: 0];
+    let _: () = msg_send![cell, setScrollable: YES];
+    let _: () = msg_send![cell, setDrawsBackground: NO];
+    
+    let _: () = msg_send![search_field, setAutoresizingMask: 0]; // No autoresizing - we'll position manually
+    
+    // iOS glass-style translucent background (more subtle)
+    let bg_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.05f64];
+    let _: () = msg_send![search_field, setBackgroundColor: bg_color];
+    
+    let _: () = msg_send![search_field, setWantsLayer: YES];
+    let layer: id = msg_send![search_field, layer];
+    let _: () = msg_send![layer, setCornerRadius: 16.0f64]; // More rounded like Viceroy
+    
+    // Add subtle border for definition
+    let _: () = msg_send![layer, setBorderWidth: 0.5f64];
+    let border_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.15f64]; // More subtle
+    let border_cg: id = msg_send![border_color, CGColor];
+    let _: () = msg_send![layer, setBorderColor: border_cg];
+    let _: () = msg_send![layer, setBorderColor: border_cg];
+
+    // Add search icon (magnifying glass) - larger like Viceroy
+    let icon_view: id = msg_send![class!(NSImageView), alloc];
+    let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(18.0, 16.0), NSSize::new(28.0, 28.0))];
+    let icon_name = NSString::alloc(nil).init_str("magnifyingglass");
+    let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName:icon_name accessibilityDescription:nil];
+    let _: () = msg_send![icon_view, setImage: image];
+    let icon_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.5f64];
+    let _: () = msg_send![icon_view, setContentTintColor: icon_color];
+    let _: () = msg_send![search_field, addSubview: icon_view];
+    // Font and colors
+    let font = create_search_font();
+    let _: () = msg_send![search_field, setFont: font];
+    let text_color: id = msg_send![class!(NSColor), whiteColor];
+    let _: () = msg_send![search_field, setTextColor: text_color];
+
+    // Clear any default text and set placeholder
+    let empty_string = NSString::alloc(nil).init_str("");
+    let _: () = msg_send![search_field, setStringValue: empty_string];
+    
+    let placeholder_text = NSString::alloc(nil).init_str("Search apps and commands");
+    let _: () = msg_send![search_field, setPlaceholderString: placeholder_text];
+    
+    // Style placeholder text (more subtle)
+    let placeholder_attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
+    let placeholder_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.35f64];
+    let _: () = msg_send![placeholder_attrs, setObject:placeholder_color forKey:NSString::alloc(nil).init_str("NSColor")];
+    let _: () = msg_send![placeholder_attrs, setObject:font forKey:NSString::alloc(nil).init_str("NSFont")];
+    let attributed_placeholder: id = msg_send![class!(NSAttributedString), alloc];
+    let attributed_placeholder: id = msg_send![attributed_placeholder, initWithString:placeholder_text attributes:placeholder_attrs];
+    let _: () = msg_send![cell, setPlaceholderAttributedString: attributed_placeholder];
+
+    let _: () = msg_send![content_view, addSubview: search_field];
+
+    // Focus immediately
+    let window: id = msg_send![content_view, window];
+    let _: () = msg_send![window, makeFirstResponder: search_field];
+
+    // Add delegate for live search updates
+    register_search_delegate_class();
+    let delegate_class = class!(MKSearchDelegate);
+    let delegate_instance: id = msg_send![delegate_class, new];
+    let _: () = msg_send![search_field, setDelegate: delegate_instance];
+}
+
+unsafe fn create_results_table(content_view: id, bounds: NSRect) {
+    register_table_delegate_class();
+
+    // Scroll view container with padding
+    let scroll: id = msg_send![class!(NSScrollView), alloc];
+    let table_height = bounds.size.height - 116.0; // below search field with proper spacing
+    let frame = NSRect::new(
+        NSPoint::new(0.0, 10.0), // Reduced bottom margin
+        NSSize::new(bounds.size.width, table_height),
+    );
+    let scroll: id = msg_send![scroll, initWithFrame: frame];
+    let _: () = msg_send![scroll, setBorderType: 0];
+    let _: () = msg_send![scroll, setDrawsBackground: NO];
+    let _: () = msg_send![scroll, setWantsLayer: YES];
+    let scroll_layer: id = msg_send![scroll, layer];
+    let _: () = msg_send![scroll_layer, setCornerRadius: 8.0f64];
+    let _: () = msg_send![scroll_layer, setMasksToBounds: YES];
+    let _: () = msg_send![scroll, setHasVerticalScroller: YES];
+    let _: () = msg_send![scroll, setHasHorizontalScroller: NO];
+    let _: () = msg_send![scroll, setAutoresizingMask: 18]; // width+height
+
+    // Table view with modern spacing
+    let table: id = msg_send![class!(NSTableView), alloc];
+    let table: id = msg_send![table, initWithFrame: NSRect::new(NSPoint::new(0.0,0.0), NSSize::new(bounds.size.width, table_height))];
+    let _: () = msg_send![table, setHeaderView: nil];
+    let _: () = msg_send![table, setRowHeight: 60.0f64];
+    let _: () = msg_send![table, setIntercellSpacing: NSSize::new(0.0, 8.0)]; // More spacing like Viceroy
+    let _: () = msg_send![table, setSelectionHighlightStyle: 1]; // Regular
+    let bg_color: id = msg_send![class!(NSColor), clearColor];
+    let _: () = msg_send![table, setBackgroundColor: bg_color];
+    let _: () = msg_send![table, setGridStyleMask: 0]; // No grid
+    
+    // Vibrant blue selection color like Viceroy
+    let selection_color: id = msg_send![class!(NSColor), colorWithCalibratedRed:0.04 green:0.52 blue:1.0 alpha:1.0]; // #0A84FF
+    // Note: NSTableView uses system selection colors, but we can customize via delegate
+    let _: () = msg_send![table, setBackgroundColor: bg_color];
+    
+    // Enable alternating row colors set to clear for consistent look
+    let _: () = msg_send![table, setUsesAlternatingRowBackgroundColors: NO];
+
+    // Single column
+    let column: id = msg_send![class!(NSTableColumn), alloc];
+    let column: id = msg_send![column, initWithIdentifier: NSString::alloc(nil).init_str("main")];
+    let _: () = msg_send![column, setWidth: bounds.size.width];
+    let _: () = msg_send![table, addTableColumn: column];
+
+    // Data source & delegate
+    let delegate_class = class!(MKTableDelegate);
+    let delegate_instance: id = msg_send![delegate_class, new];
+    let _: () = msg_send![table, setDelegate: delegate_instance];
+    let _: () = msg_send![table, setDataSource: delegate_instance];
+
+    // Row activation target for double-click
+    if objc::runtime::Class::get("MKRowActions").is_none() {
+        let superclass = class!(NSObject);
+        let mut decl = ClassDecl::new("MKRowActions", superclass).unwrap();
+        extern "C" fn row_activate(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                activate_selected_row_or_first();
+            }
+        }
+        unsafe {
+            decl.add_method(
+                sel!(rowActivate:),
+                row_activate as extern "C" fn(&Object, Sel, id),
+            );
+            decl.register();
+        }
+    }
+    let row_actions_class = class!(MKRowActions);
+    let row_actions: id = unsafe { msg_send![row_actions_class, new] };
+    let _: id = unsafe { msg_send![row_actions, retain] };
+    let _: () = unsafe { msg_send![table, setTarget: row_actions] };
+    let _: () = unsafe { msg_send![table, setDoubleAction: sel!(rowActivate:)] };
+
+    // Embed table in scroll
+    let _: () = msg_send![scroll, setDocumentView: table];
+    let _: () = msg_send![content_view, addSubview: scroll];
+
+    // Initial load
+    let _: () = msg_send![table, reloadData];
+}
+
+unsafe fn is_cursor_at_end(text_field: &Object) -> bool {
+    // Check if cursor is at the end of the text
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return false;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let text_editor: id = msg_send![window, fieldEditor:YES forObject:text_field as *const Object as id];
+    if text_editor == nil {
+        return false;
+    }
+    
+    let selected_range: cocoa::foundation::NSRange = msg_send![text_editor, selectedRange];
+    let string_value: id = msg_send![text_field as *const Object as id, stringValue];
+    let text_length: usize = msg_send![string_value, length];
+    
+    // Cursor is at end if selection starts at text length
+    selected_range.location == text_length as u64
+}
+
+unsafe fn complete_from_selection() {
+    // Get the first result's title and autocomplete the search field
+    let results = TABLE_RESULTS.lock().unwrap();
+    if results.is_empty() {
+        return;
+    }
+    
+    // Get the title of the first result
+    let completion_text = match &results[0] {
+        search_engine::SearchResult::App { name, .. } => name.clone(),
+        search_engine::SearchResult::File { name, .. } => name.clone(),
+        search_engine::SearchResult::Clipboard { custom_name, content, .. } => {
+            custom_name.clone().unwrap_or_else(|| content.chars().take(40).collect())
+        }
+        _ => return,
+    };
+    
+    drop(results);
+    
+    // Update the search field
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let content: id = msg_send![window, contentView];
+    let subviews: id = msg_send![content, subviews];
+    let sv_count: usize = msg_send![subviews, count];
+    if sv_count < 2 {
+        return;
+    }
+    let search_field: id = msg_send![subviews, objectAtIndex:1];
+    let completion_ns = NSString::alloc(nil).init_str(&completion_text);
+    let _: () = msg_send![search_field, setStringValue: completion_ns];
+}
+
+unsafe fn move_table_selection(down: bool) {
+    // Find the table view
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let content: id = msg_send![window, contentView];
+    let subviews: id = msg_send![content, subviews];
+    let sv_count: usize = msg_send![subviews, count];
+    if sv_count < 3 {
+        return;
+    }
+    let scroll: id = msg_send![subviews, objectAtIndex:2];
+    let table: id = msg_send![scroll, documentView];
+    
+    let num_rows: isize = msg_send![table, numberOfRows];
+    if num_rows == 0 {
+        return;
+    }
+    
+    let current_row: isize = msg_send![table, selectedRow];
+    let new_row = if down {
+        // Move down
+        if current_row < 0 {
+            0 // Select first if nothing selected
+        } else if current_row >= num_rows - 1 {
+            0 // Wrap to top
+        } else {
+            current_row + 1
+        }
+    } else {
+        // Move up
+        if current_row <= 0 {
+            num_rows - 1 // Wrap to bottom
+        } else {
+            current_row - 1
+        }
+    };
+    
+    // Select the new row
+    let _: () = msg_send![table, selectRowIndexes:create_index_set(new_row as usize) byExtendingSelection:NO];
+    
+    // Scroll to make it visible
+    let _: () = msg_send![table, scrollRowToVisible:new_row];
+}
+
+unsafe fn create_index_set(index: usize) -> id {
+    let index_set: id = msg_send![class!(NSIndexSet), indexSetWithIndex:index];
+    index_set
+}
+
+unsafe fn activate_selected_row_or_first() {
+    // Locate table and selected row
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let content: id = msg_send![window, contentView];
+    let subviews: id = msg_send![content, subviews];
+    let sv_count: usize = msg_send![subviews, count];
+    if sv_count < 3 {
+        return;
+    }
+    let scroll: id = msg_send![subviews, objectAtIndex:2];
+    let table: id = msg_send![scroll, documentView];
+    let mut row: isize = msg_send![table, selectedRow];
+    if row < 0 {
+        row = 0;
+    }
+    perform_result_action(row as usize);
+}
+
+unsafe fn perform_result_action(index: usize) {
+    // Get selected result and perform an appropriate action
+    let results = TABLE_RESULTS.lock().unwrap().clone();
+    if index >= results.len() {
+        return;
+    }
+    let result = results[index].clone();
+
+    match result {
+        search_engine::SearchResult::App { path, .. } => {
+            let _ = crate::app_launcher::launch(&path);
+        }
+        search_engine::SearchResult::File { path, .. } => {
+            let _ = crate::app_launcher::open_file(&path);
+        }
+        search_engine::SearchResult::Clipboard { content, .. } => {
+            // Paste clipboard content into active app
+            let content_clone = content.clone();
+            SEARCH_RT.spawn(async move {
+                let _ = crate::clipboard::paste_to_active_app(&content_clone).await;
+            });
+        }
+        search_engine::SearchResult::Command { command, .. } => {
+            SEARCH_RT.spawn(async move {
+                let _ = crate::system_commands::execute(&command).await;
+            });
+        }
+        search_engine::SearchResult::Calculator { result, .. } => {
+            let to_paste = result.clone();
+            SEARCH_RT.spawn(async move {
+                let _ = crate::clipboard::paste_to_active_app(&to_paste).await;
+            });
+        }
+        search_engine::SearchResult::Emoji { emoji, .. } => {
+            let to_paste = emoji.clone();
+            SEARCH_RT.spawn(async move {
+                let _ = crate::clipboard::paste_to_active_app(&to_paste).await;
+            });
+        }
+        search_engine::SearchResult::Dictionary { word, .. } => {
+            let _ = crate::dictionary::open_dictionary(&word);
+        }
+        search_engine::SearchResult::WebSearch { url, .. } => {
+            let _ = crate::web_search::open_web_search(&url);
+        }
+    }
+
+    // Hide the launcher window after action
+    *WINDOW_SHOWING.lock().unwrap() = false;
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count > 0 {
+        let window: id = msg_send![windows, objectAtIndex:0];
+        let _: () = msg_send![window, orderOut: nil];
+    }
+}
+
+unsafe fn register_table_delegate_class() {
+    if objc::runtime::Class::get("MKTableDelegate").is_some() {
+        return;
+    }
+    let mut decl = ClassDecl::new("MKTableDelegate", class!(NSObject)).unwrap();
+
+    extern "C" fn rows(_this: &Object, _cmd: Sel, _table: id) -> isize {
+        TABLE_DATA.lock().unwrap().len() as isize
+    }
+
+    extern "C" fn view_for_row(_this: &Object, _cmd: Sel, table: id, _col: id, row: isize) -> id {
+        unsafe {
+            let entries = TABLE_DATA.lock().unwrap();
+            let results = TABLE_RESULTS.lock().unwrap();
+            if row < 0 || row as usize >= entries.len() {
+                return nil;
+            }
+            let (title, subtitle) = &entries[row as usize];
+
+            let frame: NSRect = msg_send![table, frame];
+            let container: id = msg_send![class!(NSView), alloc];
+            let container: id = msg_send![container, initWithFrame: NSRect::new(NSPoint::new(0.0,0.0), NSSize::new(frame.size.width, 60.0))];
+            
+            // Clean row style (no background card)
+            let _: () = msg_send![container, setWantsLayer: YES];
+            let container_layer: id = msg_send![container, layer];
+            // Removed background color and corner radius for cleaner native look
+
+            // Determine icon based on result type and get type label
+            let (icon_image, type_label): (id, &str) = if (row as usize) < results.len() {
+                let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+                match &results[row as usize] {
+                    search_engine::SearchResult::App { path, .. } => {
+                        // Get actual app icon
+                        let path_str = NSString::alloc(nil).init_str(path);
+                        (msg_send![workspace, iconForFile: path_str], "App")
+                    },
+                    search_engine::SearchResult::File { path, .. } => {
+                        // Get file icon
+                        let path_str = NSString::alloc(nil).init_str(path);
+                        (msg_send![workspace, iconForFile: path_str], "File")
+                    },
+                    search_engine::SearchResult::Clipboard { .. } => {
+                        // Use SF Symbol for clipboard
+                        let symbol_name = NSString::alloc(nil).init_str("doc.on.clipboard");
+                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Clipboard")
+                    },
+                    search_engine::SearchResult::Calculator { .. } => {
+                        // Use SF Symbol for calculator
+                        let symbol_name = NSString::alloc(nil).init_str("function");
+                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Calculator")
+                    },
+                    search_engine::SearchResult::Emoji { .. } => {
+                        // Use SF Symbol for emoji
+                        let symbol_name = NSString::alloc(nil).init_str("face.smiling");
+                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Emoji")
+                    },
+                    search_engine::SearchResult::Command { .. } => {
+                        // Use SF Symbol for system commands
+                        let symbol_name = NSString::alloc(nil).init_str("terminal");
+                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Command")
+                    },
+                    search_engine::SearchResult::Dictionary { .. } => {
+                        // Use SF Symbol for dictionary
+                        let symbol_name = NSString::alloc(nil).init_str("book");
+                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Dictionary")
+                    },
+                    search_engine::SearchResult::WebSearch { .. } => {
+                        // Use SF Symbol for web search
+                        let symbol_name = NSString::alloc(nil).init_str("magnifyingglass");
+                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Search")
+                    },
+                }
+            } else {
+                // Fallback for initial default items (when TABLE_RESULTS is empty)
+                let (title, _) = &entries[row as usize];
+                let (symbol_name, label) = match title.as_str() {
+                    "Calculator" => ("function", "Calculator"),
+                    "Open Safari" => ("safari", "App"),
+                    "Clipboard" => ("doc.on.clipboard", "Clipboard"),
+                    "Settings" => ("gearshape", "Settings"),
+                    "Emoji Picker" => ("face.smiling", "Emoji"),
+                    _ => ("app", "")
+                };
+                let symbol_name_ns = NSString::alloc(nil).init_str(symbol_name);
+                (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name_ns accessibilityDescription:nil], label)
+            };
+
+            // Icon view directly without background container - larger size
+            let icon_view: id = msg_send![class!(NSImageView), alloc];
+            let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(12.0, 10.0), NSSize::new(40.0, 40.0))];
+            let _: () = msg_send![icon_view, setImage: icon_image];
+            let _: () = msg_send![icon_view, setImageScaling: 1]; // NSImageScaleProportionallyUpOrDown
+            let _: () = msg_send![container, addSubview: icon_view];
+
+            // Title with semibold weight and better styling (top position)
+            let title_field: id = msg_send![class!(NSTextField), alloc];
+            let title_field: id = msg_send![title_field, initWithFrame: NSRect::new(NSPoint::new(60.0, 31.0), NSSize::new(frame.size.width - 140.0, 20.0))];
+            let _: () = msg_send![title_field, setBezeled: NO];
+            let _: () = msg_send![title_field, setEditable: NO];
+            let _: () = msg_send![title_field, setDrawsBackground: NO];
+            let _: () = msg_send![title_field, setBordered: NO];
+            let font_title: id = msg_send![class!(NSFont), systemFontOfSize:15.0 weight:0.4]; // Semibold
+            let _: () = msg_send![title_field, setFont: font_title];
+            let _: () = msg_send![title_field, setStringValue: NSString::alloc(nil).init_str(title)];
+            let title_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.95f64];
+            let _: () = msg_send![title_field, setTextColor: title_color];
+
+            // Subtitle with improved sizing and contrast (bottom position)
+            let subtitle_field: id = msg_send![class!(NSTextField), alloc];
+            let subtitle_field: id = msg_send![subtitle_field, initWithFrame: NSRect::new(NSPoint::new(60.0, 11.0), NSSize::new(frame.size.width - 140.0, 16.0))];
+            let _: () = msg_send![subtitle_field, setBezeled: NO];
+            let _: () = msg_send![subtitle_field, setEditable: NO];
+            let _: () = msg_send![subtitle_field, setDrawsBackground: NO];
+            let _: () = msg_send![subtitle_field, setBordered: NO];
+            let font_sub: id = msg_send![class!(NSFont), systemFontOfSize:13.0];
+            let _: () = msg_send![subtitle_field, setFont: font_sub];
+            let _: () = msg_send![subtitle_field, setStringValue: NSString::alloc(nil).init_str(subtitle)];
+            let sub_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.5f64];
+            let _: () = msg_send![subtitle_field, setTextColor: sub_color];
+
+            let _: () = msg_send![container, addSubview: title_field];
+            let _: () = msg_send![container, addSubview: subtitle_field];
+
+            // Type label on the right side - like Viceroy
+            if !type_label.is_empty() {
+                let type_label_field: id = msg_send![class!(NSTextField), alloc];
+                // Position 16px from right edge, centered vertically
+                let type_label_field: id = msg_send![type_label_field, initWithFrame: NSRect::new(NSPoint::new(frame.size.width - 140.0, 22.0), NSSize::new(100.0, 16.0))];
+                let _: () = msg_send![type_label_field, setBezeled: NO];
+                let _: () = msg_send![type_label_field, setEditable: NO];
+                let _: () = msg_send![type_label_field, setDrawsBackground: NO];
+                let _: () = msg_send![type_label_field, setBordered: NO];
+                let _: () = msg_send![type_label_field, setAlignment: 1]; // Right align (1 is right in some contexts, 2 in others, let's stick to 1 or 2. Actually NSTextAlignmentRight is 1 on older, 2 on newer. Let's use 1 which is usually right for LTR)
+                // Actually, let's use setAlignment: 2 (NSTextAlignmentRight)
+                let _: () = msg_send![type_label_field, setAlignment: 2];
+                let type_font: id = msg_send![class!(NSFont), systemFontOfSize:12.0];
+                let _: () = msg_send![type_label_field, setFont: type_font];
+                let type_label_ns = NSString::alloc(nil).init_str(type_label);
+                let _: () = msg_send![type_label_field, setStringValue: type_label_ns];
+                let type_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.4f64]; // Lighter gray
+                let _: () = msg_send![type_label_field, setTextColor: type_color];
+                let _: () = msg_send![container, addSubview: type_label_field];
+            }
+            container
+        }
+    }
+
+    extern "C" fn selection_changed(_this: &Object, _cmd: Sel, _note: id) {
+        // Placeholder: could trigger preview
+    }
+
+    unsafe {
+        decl.add_method(
+            sel!(numberOfRowsInTableView:),
+            rows as extern "C" fn(&Object, Sel, id) -> isize,
+        );
+        decl.add_method(
+            sel!(tableView:viewForTableColumn:row:),
+            view_for_row as extern "C" fn(&Object, Sel, id, id, isize) -> id,
+        );
+        decl.add_method(
+            sel!(tableViewSelectionDidChange:),
+            selection_changed as extern "C" fn(&Object, Sel, id),
+        );
+        decl.register();
+    }
+}
+
+lazy_static! {
+    static ref CURRENT_SEARCH: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
+}
+
+// Search field delegate for live updates
+unsafe fn register_search_delegate_class() {
+    if objc::runtime::Class::get("MKSearchDelegate").is_some() {
+        return;
+    }
+    let mut decl = ClassDecl::new("MKSearchDelegate", class!(NSObject)).unwrap();
+
+    extern "C" fn changed(_this: &Object, _cmd: Sel, notification: id) {
+        unsafe {
+            // Get the text field from notification
+            let object: id = msg_send![notification, object];
+            if object == nil {
+                return;
+            }
+            let value: id = msg_send![object, stringValue];
+            let cstr: *const std::os::raw::c_char = msg_send![value, UTF8String];
+            if cstr.is_null() {
+                return;
+            }
+            let query = std::ffi::CStr::from_ptr(cstr).to_string_lossy().to_string();
+
+            // Cancel previous search
+            if let Ok(mut handle_guard) = CURRENT_SEARCH.lock() {
+                if let Some(handle) = handle_guard.take() {
+                    handle.abort();
+                }
+            }
+
+            if query.is_empty() {
+                TABLE_RESULTS.lock().unwrap().clear();
+                TABLE_DATA.lock().unwrap().clear();
+                reload_table();
+                return;
+            }
+
+            // Spawn async search with immediate execution
+            let query_clone = query.clone();
+            let handle = SEARCH_RT.spawn(async move {
+                // Small debounce for very fast typing
+                tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+                
+                if let Ok(results) = search_engine::search(&query_clone).await {
+                    // Map results to display pairs
+                    let mut rows: Vec<(String, String)> = Vec::new();
+                    for r in &results {
+                        match r {
+                            search_engine::SearchResult::App { name, path, .. } => {
+                                rows.push((name.clone(), path.clone()));
+                            }
+                            search_engine::SearchResult::File { name, path, .. } => {
+                                rows.push((name.clone(), path.clone()));
+                            }
+                            search_engine::SearchResult::Clipboard {
+                                content,
+                                preview,
+                                custom_name,
+                                ..
+                            } => {
+                                let title = custom_name
+                                    .clone()
+                                    .unwrap_or_else(|| content.chars().take(40).collect());
+                                rows.push((title, preview.chars().take(80).collect()));
+                            }
+                            search_engine::SearchResult::Command {
+                                name, description, ..
+                            } => {
+                                rows.push((name.clone(), description.clone()));
+                            }
+                            search_engine::SearchResult::Calculator {
+                                expression,
+                                result,
+                                formats,
+                            } => {
+                                rows.push((
+                                    format!("{} = {}", expression, result),
+                                    formats.join("  -  "),
+                                ));
+                            }
+                            search_engine::SearchResult::Emoji {
+                                emoji,
+                                name,
+                                keywords,
+                            } => {
+                                rows.push((format!("{} {}", emoji, name), keywords.join(", ")));
+                            }
+                            search_engine::SearchResult::Dictionary { word, preview } => {
+                                rows.push((format!("Define: {}", word), preview.clone()));
+                            }
+                            search_engine::SearchResult::WebSearch { query, engine, .. } => {
+                                rows.push((
+                                    format!("Search {}", query),
+                                    format!("Engine: {}", engine),
+                                ));
+                            }
+                        }
+                    }
+                    // Update shared state on main thread
+                    dispatch::Queue::main().exec_async(move || {
+                        *TABLE_RESULTS.lock().unwrap() = results;
+                        *TABLE_DATA.lock().unwrap() = rows;
+                        reload_table();
+                    });
+                }
+            });
+
+            // Store the new handle
+            if let Ok(mut handle_guard) = CURRENT_SEARCH.lock() {
+                *handle_guard = Some(handle);
+            }
+        }
+    }
+
+    unsafe {
+        decl.add_method(
+            sel!(controlTextDidChange:),
+            changed as extern "C" fn(&Object, Sel, id),
+        );
+        decl.register();
+    }
+}
+
+unsafe fn update_autocomplete_preview(current_query: &str) {
+    if current_query.is_empty() {
+        return;
+    }
+
+    // Get the first result
+    let results = TABLE_RESULTS.lock().unwrap();
+    if results.is_empty() {
+        return;
+    }
+
+    // Get completion text from first result
+    let completion = match &results[0] {
+        search_engine::SearchResult::App { name, .. } => name.clone(),
+        search_engine::SearchResult::File { name, .. } => {
+            // Just use filename without path
+            name.split('/').last().unwrap_or(name).to_string()
+        }
+        search_engine::SearchResult::Clipboard { custom_name, content, .. } => {
+            custom_name.clone().unwrap_or_else(|| content.chars().take(40).collect())
+        }
+        search_engine::SearchResult::Calculator { result, .. } => result.clone(),
+        _ => return,
+    };
+    drop(results);
+
+    // Check if completion starts with query (case insensitive)
+    let query_lower = current_query.to_lowercase();
+    let completion_lower = completion.to_lowercase();
+    
+    if !completion_lower.starts_with(&query_lower) {
+        return;
+    }
+
+    // Get the remaining part (what we want to show in gray)
+    let remaining = &completion[current_query.len()..];
+    if remaining.is_empty() {
+        return;
+    }
+
+    // Update the search field with attributed string showing completion in gray
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let content_view: id = msg_send![window, contentView];
+    let subviews: id = msg_send![content_view, subviews];
+    let sv_count: usize = msg_send![subviews, count];
+    if sv_count < 2 {
+        return;
+    }
+    let search_field: id = msg_send![subviews, objectAtIndex:1];
+    
+    // Create attributed string with typed part in white + completion in gray
+    let full_text = format!("{}{}", current_query, remaining);
+    let attributed_string: id = msg_send![class!(NSMutableAttributedString), alloc];
+    let ns_full_text = NSString::alloc(nil).init_str(&full_text);
+    let attributed_string: id = msg_send![attributed_string, initWithString:ns_full_text];
+    
+    // Make completion part gray
+    let gray_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.35f64];
+    let range = cocoa::foundation::NSRange::new(current_query.len() as u64, remaining.len() as u64);
+    let color_key = NSString::alloc(nil).init_str("NSColor");
+    let _: () = msg_send![attributed_string, addAttribute:color_key value:gray_color range:range];
+    
+    // Set the attributed string
+    let _: () = msg_send![search_field, setAttributedStringValue:attributed_string];
+    
+    // Move cursor to end of typed text (not completion)
+    let text_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
+    if text_editor != nil {
+        let typed_range = cocoa::foundation::NSRange::new(current_query.len() as u64, 0);
+        let _: () = msg_send![text_editor, setSelectedRange:typed_range];
+    }
+}
+
+unsafe fn reload_table() {
+    // Find the scroll view's document view (table) and reload
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let content: id = msg_send![window, contentView];
+    let subviews: id = msg_send![content, subviews];
+    let sv_count: usize = msg_send![subviews, count];
+    // We added effect view first, search field second, scroll view third
+    if sv_count < 3 {
+        return;
+    }
+    let scroll: id = msg_send![subviews, objectAtIndex:2];
+    let table: id = msg_send![scroll, documentView];
+    let _: () = msg_send![table, reloadData];
+    
+    // Auto-select first row if results exist
+    let num_rows: isize = msg_send![table, numberOfRows];
+    if num_rows > 0 {
+        let index_set = create_index_set(0);
+        let _: () = msg_send![table, selectRowIndexes:index_set byExtendingSelection:NO];
+    }
+    
+    // Dynamic window resizing based on results
+    let num_results = TABLE_DATA.lock().unwrap().len();
+    let base_height = 106.0; // Search bar (20px top + 60px field + 26px bottom)
+    let row_height = 60.0;
+    let max_visible_rows = 8;
+    let visible_rows = num_results.min(max_visible_rows);
+    let new_height = if visible_rows == 0 {
+        base_height
+    } else {
+        base_height + (visible_rows as f64 * row_height) + 10.0 // +10 for padding
+    };
+    
+    // Get current window frame
+    let current_frame: NSRect = msg_send![window, frame];
+    
+    // Calculate new frame (resize from bottom, keep top position)
+    let new_frame = NSRect::new(
+        NSPoint::new(current_frame.origin.x, current_frame.origin.y + (current_frame.size.height - new_height)),
+        NSSize::new(current_frame.size.width, new_height)
+    );
+    
+    // Manually reposition search bar FIRST to stay at top (20px from top edge)
+    if sv_count >= 2 {
+        let search_field: id = msg_send![subviews, objectAtIndex:1];
+        let search_frame: NSRect = msg_send![search_field, frame];
+        let new_search_y = new_height - 80.0; // Keep at 20px from top
+        let new_search_frame = NSRect::new(
+            NSPoint::new(20.0, new_search_y), // Also fix X to 20px
+            NSSize::new(current_frame.size.width - 40.0, 60.0) // Also adjust width
+        );
+        let _: () = msg_send![search_field, setFrame: new_search_frame];
+    }
+    
+    // Then resize window instantly (no animation to prevent search bar movement)
+    let _: () = msg_send![window, setFrame:new_frame display:YES animate:NO];
+}
+
+unsafe fn create_search_font() -> id {
+    // Larger, medium weight for better readability and prominence
+    msg_send![class!(NSFont), systemFontOfSize:22.0 weight:0.23] // Medium weight
+}
+
+unsafe fn center_window_with_snap(ns_window: id) {
+    // Get screen frame
+    let screen: id = msg_send![class!(NSScreen), mainScreen];
+    let screen_frame: NSRect = msg_send![screen, visibleFrame];
+    let window_frame: NSRect = msg_send![ns_window, frame];
+
+    // Center horizontally, place near top
+    let x = screen_frame.origin.x + (screen_frame.size.width - window_frame.size.width) / 2.0;
+    let y = screen_frame.origin.y + screen_frame.size.height - window_frame.size.height - 120.0;
+
+    // Position window
+    let _: () = msg_send![ns_window, setFrame: NSRect::new(NSPoint::new(x, y), window_frame.size) display: YES];
+
+    // Quick fade-in
+    let _: () = msg_send![ns_window, setAlphaValue: 0.0f64];
+    let _: () = msg_send![class!(NSAnimationContext), beginGrouping];
+    let context: id = msg_send![class!(NSAnimationContext), currentContext];
+    let _: () = msg_send![context, setDuration: 0.2f64];
+
+    let animator: id = msg_send![ns_window, animator];
+    let _: () = msg_send![animator, setAlphaValue: 1.0f64];
+
+    let _: () = msg_send![class!(NSAnimationContext), endGrouping];
+}
+
+unsafe fn create_status_bar_item() {
+    let status_bar: id = msg_send![class!(NSStatusBar), systemStatusBar];
+    let status_item: id = msg_send![status_bar, statusItemWithLength: -1.0f64]; // NSVariableStatusItemLength
+
+    // Retain the status item so it doesn't get deallocated
+    let _: id = msg_send![status_item, retain];
+
+    // Set icon (using SF Symbol or text for now)
+    let button: id = msg_send![status_item, button];
+
+    // Try to use SF Symbol (macOS 11+), fallback to text
+    let symbol_name = NSString::alloc(nil).init_str("crown.fill");
+    let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
+
+    if image != nil {
+        let _: () = msg_send![button, setImage: image];
+    } else {
+        // Fallback: use text icon
+        let _: () = msg_send![button, setTitle: NSString::alloc(nil).init_str("👑")];
+    }
+
+    // Create menu
+    let menu: id = msg_send![class!(NSMenu), alloc];
+    let menu: id = msg_send![menu, init];
+
+    // Get the app for terminate action
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+
+    // Menu item: Open ViceroyKiller with shortcut shown
+    let open_item: id = msg_send![class!(NSMenuItem), alloc];
+    let open_item: id = msg_send![open_item,
+        initWithTitle: NSString::alloc(nil).init_str("Open ViceroyKiller")
+        action: sel!(showMainWindow:)
+        keyEquivalent: NSString::alloc(nil).init_str(" ") // Space key
+    ];
+    // Show shortcut as ⇧⌘Space (Shift+Command+Space)
+    let modifiers: usize = (1 << 17) | (1 << 20); // NSEventModifierFlagShift | NSEventModifierFlagCommand
+    let _: () = msg_send![open_item, setKeyEquivalentModifierMask: modifiers];
+    let _: () = msg_send![menu, addItem: open_item];
+
+    // Separator
+    let sep1: id = msg_send![class!(NSMenuItem), separatorItem];
+    let _: () = msg_send![menu, addItem: sep1];
+
+    // Version number (grayed out, non-interactive)
+    let version_item: id = msg_send![class!(NSMenuItem), alloc];
+    let version_item: id = msg_send![version_item,
+        initWithTitle: NSString::alloc(nil).init_str("ViceroyKiller v1.0.0")
+        action: nil
+        keyEquivalent: NSString::alloc(nil).init_str("")
+    ];
+    let _: () = msg_send![version_item, setEnabled: NO];
+    let _: () = msg_send![menu, addItem: version_item];
+
+    // About
+    let about_item: id = msg_send![class!(NSMenuItem), alloc];
+    let about_item: id = msg_send![about_item,
+        initWithTitle: NSString::alloc(nil).init_str("About ViceroyKiller")
+        action: sel!(orderFrontStandardAboutPanel:)
+        keyEquivalent: NSString::alloc(nil).init_str("")
+    ];
+    let _: () = msg_send![about_item, setTarget: app];
+    let _: () = msg_send![menu, addItem: about_item];
+
+    // Separator
+    let sep2: id = msg_send![class!(NSMenuItem), separatorItem];
+    let _: () = msg_send![menu, addItem: sep2];
+
+    // Settings
+    let settings_item: id = msg_send![class!(NSMenuItem), alloc];
+    let settings_item: id = msg_send![settings_item,
+        initWithTitle: NSString::alloc(nil).init_str("Settings...")
+        action: sel!(showSettings:)
+        keyEquivalent: NSString::alloc(nil).init_str(",")
+    ];
+    let _: () = msg_send![menu, addItem: settings_item];
+
+    // Preferences toggles
+    let sep_toggle: id = msg_send![class!(NSMenuItem), separatorItem];
+    let _: () = msg_send![menu, addItem: sep_toggle];
+
+    // Dismiss on Escape
+    let esc_item: id = msg_send![class!(NSMenuItem), alloc];
+    let esc_item: id = msg_send![esc_item,
+        initWithTitle: NSString::alloc(nil).init_str("Dismiss on Escape")
+        action: sel!(toggleDismissOnEscape:)
+        keyEquivalent: NSString::alloc(nil).init_str("")
+    ];
+    // Set initial state from loaded settings
+    let esc_state: i64 = if *DISMISS_ON_ESCAPE.lock().unwrap() {
+        1
+    } else {
+        0
+    };
+    let _: () = msg_send![esc_item, setState: esc_state];
+    let _: () = msg_send![menu, addItem: esc_item];
+
+    // Dismiss on Click Away
+    let click_item: id = msg_send![class!(NSMenuItem), alloc];
+    let click_item: id = msg_send![click_item,
+        initWithTitle: NSString::alloc(nil).init_str("Dismiss on Click Away")
+        action: sel!(toggleDismissOnClickAway:)
+        keyEquivalent: NSString::alloc(nil).init_str("")
+    ];
+    let click_state: i64 = if *DISMISS_ON_CLICK_AWAY.lock().unwrap() {
+        1
+    } else {
+        0
+    };
+    let _: () = msg_send![click_item, setState: click_state];
+    let _: () = msg_send![menu, addItem: click_item];
+
+    // Separator
+    let sep3: id = msg_send![class!(NSMenuItem), separatorItem];
+    let _: () = msg_send![menu, addItem: sep3];
+
+    // Quit with shortcut
+    let quit_item: id = msg_send![class!(NSMenuItem), alloc];
+    let quit_item: id = msg_send![quit_item,
+        initWithTitle: NSString::alloc(nil).init_str("Quit ViceroyKiller")
+        action: sel!(terminate:)
+        keyEquivalent: NSString::alloc(nil).init_str("q")
+    ];
+    let _: () = msg_send![quit_item, setTarget: app];
+    let _: () = msg_send![menu, addItem: quit_item];
+
+    // Create menu action handler object
+    let actions_target = create_menu_actions_target();
+
+    // Set targets for our custom menu items
+    let _: () = msg_send![open_item, setTarget: actions_target];
+    let _: () = msg_send![settings_item, setTarget: actions_target];
+    let _: () = msg_send![esc_item, setTarget: actions_target];
+    let _: () = msg_send![click_item, setTarget: actions_target];
+
+    // Attach menu to status item
+    let _: () = msg_send![status_item, setMenu: menu];
+}
+
+unsafe fn create_menu_actions_target() -> id {
+    // Register class if needed
+    if objc::runtime::Class::get("MKMenuActions").is_none() {
+        let superclass = class!(NSObject);
+        let mut decl = ClassDecl::new("MKMenuActions", superclass).unwrap();
+
+        extern "C" fn show_main_window(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                // Update global state
+                *WINDOW_SHOWING.lock().unwrap() = true;
+
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                let windows: id = msg_send![app, windows];
+                let count: usize = msg_send![windows, count];
+
+                if count > 0 {
+                    let window: id = msg_send![windows, objectAtIndex: 0];
+                    let _: () = msg_send![app, activateIgnoringOtherApps: YES];
+                    let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+
+                    // Focus search field
+                    let content_view: id = msg_send![window, contentView];
+                    let subviews: id = msg_send![content_view, subviews];
+                    let sv_count: usize = msg_send![subviews, count];
+                    if sv_count > 1 {
+                        let search_field: id = msg_send![subviews, objectAtIndex: 1];
+                        let _: () = msg_send![window, makeFirstResponder: search_field];
+                    }
+                }
+            }
+        }
+
+        extern "C" fn show_settings(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                // Update global state
+                *WINDOW_SHOWING.lock().unwrap() = true;
+
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                let windows: id = msg_send![app, windows];
+                let count: usize = msg_send![windows, count];
+
+                if count > 0 {
+                    let window: id = msg_send![windows, objectAtIndex: 0];
+                    let _: () = msg_send![app, activateIgnoringOtherApps: YES];
+                    let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+
+                    // TODO: Switch to settings view in the window
+                }
+            }
+        }
+
+        extern "C" fn toggle_dismiss_on_escape(_this: &Object, _cmd: Sel, sender: id) {
+            unsafe {
+                // Toggle global flag
+                let mut val = DISMISS_ON_ESCAPE.lock().unwrap();
+                *val = !*val;
+                let state: i64 = if *val { 1 } else { 0 };
+                let _: () = msg_send![sender, setState: state];
+
+                // Persist to settings.json
+                if let Ok(mut s) = settings::load() {
+                    s.dismiss_on_escape = *val;
+                    let _ = settings::save(&s);
+                }
+            }
+        }
+
+        extern "C" fn toggle_dismiss_on_click(_this: &Object, _cmd: Sel, sender: id) {
+            unsafe {
+                let mut val = DISMISS_ON_CLICK_AWAY.lock().unwrap();
+                *val = !*val;
+                let state: i64 = if *val { 1 } else { 0 };
+                let _: () = msg_send![sender, setState: state];
+
+                if let Ok(mut s) = settings::load() {
+                    s.dismiss_on_click_away = *val;
+                    let _ = settings::save(&s);
+                }
+            }
+        }
+
+        decl.add_method(
+            sel!(showMainWindow:),
+            show_main_window as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(showSettings:),
+            show_settings as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(toggleDismissOnEscape:),
+            toggle_dismiss_on_escape as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(toggleDismissOnClickAway:),
+            toggle_dismiss_on_click as extern "C" fn(&Object, Sel, id),
+        );
+        decl.register();
+    }
+
+    // Create and retain an instance
+    let actions_class = class!(MKMenuActions);
+    let actions: id = msg_send![actions_class, new];
+    let _: id = msg_send![actions, retain];
+    actions
+}
+
+unsafe fn setup_app_observer(ns_window: id) {
+    // Create observer class for app deactivation (click away)
+    if objc::runtime::Class::get("MKAppObserver").is_some() {
+        return;
+    }
+
+    let superclass = class!(NSObject);
+    let mut decl = ClassDecl::new("MKAppObserver", superclass).unwrap();
+
+    extern "C" fn app_did_resign_active(_this: &Object, _cmd: Sel, _notification: id) {
+        unsafe {
+            let showing = *WINDOW_SHOWING.lock().unwrap();
+            if showing {
+                if !*DISMISS_ON_CLICK_AWAY.lock().unwrap() {
+                    return;
+                }
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                let windows: id = msg_send![app, windows];
+                let count: usize = msg_send![windows, count];
+                if count > 0 {
+                    let window: id = msg_send![windows, objectAtIndex:0];
+                    let _: () = msg_send![window, orderOut: nil];
+                    *WINDOW_SHOWING.lock().unwrap() = false;
+                } else {
+                    // No windows found
+                }
+            }
+        }
+    }
+
+    decl.add_method(
+        sel!(appDidResignActive:),
+        app_did_resign_active as extern "C" fn(&Object, Sel, id),
+    );
+
+    let observer_class = decl.register();
+    let observer: id = msg_send![observer_class, new];
+
+    // Register for deactivation notifications
+    let center: id = msg_send![class!(NSNotificationCenter), defaultCenter];
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let name: id = msg_send![class!(NSString), stringWithUTF8String: "NSApplicationDidResignActiveNotification\0".as_ptr()];
+    let _: () = msg_send![center, addObserver:observer selector:sel!(appDidResignActive:) name:name object:app];
+}
+
+unsafe fn setup_window_delegate(ns_window: id) {
+    if objc::runtime::Class::get("MKWindowDelegate").is_some() {
+        let delegate_class = class!(MKWindowDelegate);
+        let delegate: id = msg_send![delegate_class, new];
+        let _: () = msg_send![ns_window, setDelegate: delegate];
+        return;
+    }
+
+    let superclass = class!(NSObject);
+    let mut decl = ClassDecl::new("MKWindowDelegate", superclass).unwrap();
+
+    extern "C" fn window_did_become_key(_this: &Object, _cmd: Sel, _notification: id) {
+        unsafe {
+            // Ensure search field has focus when window becomes key
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let windows: id = msg_send![app, windows];
+            let count: usize = msg_send![windows, count];
+            if count > 0 {
+                let window: id = msg_send![windows, objectAtIndex:0];
+                let content_view: id = msg_send![window, contentView];
+                let subviews: id = msg_send![content_view, subviews];
+                let sv_count: usize = msg_send![subviews, count];
+                if sv_count > 1 {
+                    let search_field: id = msg_send![subviews, objectAtIndex:1];
+                    let _: () = msg_send![window, makeFirstResponder: search_field];
+                }
+            }
+        }
+    }
+
+    extern "C" fn window_did_resign_key(_this: &Object, _cmd: Sel, notification: id) {
+        // Window lost key focus - hide it after brief delay
+        unsafe {
+            // Window resignKey notification received
+
+            // Dispatch to main thread after small delay
+            dispatch::Queue::main().exec_after(std::time::Duration::from_millis(100), move || {
+                unsafe {
+                    if !*DISMISS_ON_CLICK_AWAY.lock().unwrap() {
+                        return;
+                    }
+                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let windows: id = msg_send![app, windows];
+                    let count: usize = msg_send![windows, count];
+                    if count > 0 {
+                        let window: id = msg_send![windows, objectAtIndex:0];
+                        let is_key: BOOL = msg_send![window, isKeyWindow];
+                        let is_visible: BOOL = msg_send![window, isVisible];
+
+                        // Only hide if window is visible but not key
+                        if is_visible == YES && is_key == NO {
+                            *WINDOW_SHOWING.lock().unwrap() = false;
+                            let _: () = msg_send![window, orderOut: nil];
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    // Add protocol conformance
+    decl.add_method(
+        sel!(windowDidBecomeKey:),
+        window_did_become_key as extern "C" fn(&Object, Sel, id),
+    );
+    decl.add_method(
+        sel!(windowDidResignKey:),
+        window_did_resign_key as extern "C" fn(&Object, Sel, id),
+    );
+
+    let delegate_class = decl.register();
+    let delegate: id = msg_send![delegate_class, new];
+    let _: () = msg_send![ns_window, setDelegate: delegate];
+}
+
+fn main() {
+    // Set panic hook to see errors
+    std::panic::set_hook(Box::new(|panic_info| {
+        eprintln!("!!! PANIC: {:?}", panic_info);
+    }));
+
+    // Minimal logging for production
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Error)
+        .init();
+    let app = App::new("com.viceroy.app", ViceroyApp::default());
+    app.run();
+}
+

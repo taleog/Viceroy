@@ -1,0 +1,44 @@
+[package]
+name = "monarchkiller"
+version = "0.1.0"
+edition = "2021"
+authors = ["Viceroy Team"]
+description = "Lightweight macOS productivity launcher"
+
+[dependencies]
+tauri = { version = "1.5", features = ["macos-private-api", "shell-open", "dialog-open", "fs-read-dir", "global-shortcut-all", "system-tray", "window-close", "window-hide", "window-set-focus", "window-show"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.35", features = ["full"] }
+fuzzy-matcher = "0.3"
+rusqlite = { version = "0.30", features = ["bundled"] }
+arboard = "3.3"
+png = "0.17"
+base64 = "0.21"
+blake3 = "1.5"
+cocoa = "0.25"
+objc = "0.2"
+objc-foundation = "0.1"
+meval = "0.2"
+chrono = "0.4"
+regex = "1.10"
+dirs = "5.0"
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.11"
+lazy_static = "1.4"
+urlencoding = "2.1"
+window-vibrancy = "0.4"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 0

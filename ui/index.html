@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viceroy</title>
+    <script type="module">
+      import { invoke } from 'https://unpkg.com/@tauri-apps/api@1/tauri';
+      import { appWindow } from 'https://unpkg.com/@tauri-apps/api@1/window';
+      window.__TAURI_INVOKE__ = invoke;
+      window.__TAURI_APP_WINDOW__ = appWindow;
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(5px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeInOut {
+            0% {
+                opacity: 0;
+                transform: translateX(-50%) translateY(10px);
+            }
+            10% {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+            90% {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+            100% {
+                opacity: 0;
+                transform: translateX(-50%) translateY(-10px);
+            }
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: transparent !important;
+            color: #ffffff;
+            overflow: hidden;
+            -webkit-app-region: drag;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        
+        html {
+            background: transparent !important;
+        }
+
+        #app {
+            width: 800px;
+            height: 660px;
+            display: flex;
+            flex-direction: column;
+            padding: 0;
+            background: transparent;
+            border-radius: 16px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: fadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+            overflow: hidden;
+        }
+        
+        #app::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(26, 26, 26, 0.92);
+            backdrop-filter: blur(40px) saturate(180%);
+            -webkit-backdrop-filter: blur(40px) saturate(180%);
+            border-radius: 16px;
+            z-index: -1;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        #search-container {
+            -webkit-app-region: no-drag;
+            padding: 20px 20px 0 20px;
+            margin-bottom: 8px;
+        }
+
+        /* Monarch-style layered search bar */
+        #search-bar { display:flex; align-items:center; gap:14px; padding:14px 18px; border-radius:14px; background:linear-gradient(180deg,rgba(255,255,255,0.08) 0%,rgba(255,255,255,0.03) 100%); border:1px solid rgba(255,255,255,0.08); box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04),0 4px 12px -4px rgba(0,0,0,0.55); transition:background .18s ease,border-color .18s ease,box-shadow .18s ease; }
+        #search-bar:focus-within { background:linear-gradient(180deg,rgba(255,255,255,0.12) 0%,rgba(255,255,255,0.05) 100%); border-color:rgba(255,255,255,0.14); box-shadow:inset 0 0 0 1px rgba(255,255,255,0.07),0 6px 20px -6px rgba(0,0,0,0.6); }
+        .search-icon { width:48px; height:48px; display:flex; align-items:center; justify-content:center; border-radius:12px; background:radial-gradient(circle at 30% 30%,rgba(255,255,255,0.22),rgba(255,255,255,0.06)); font-size:26px; color:rgba(255,255,255,0.85); flex-shrink:0; border:1px solid rgba(255,255,255,0.1); }
+        #search-input { width:100%; padding:4px 0; font-size:24px; font-weight:500; border:none; background:transparent; color:#ffffff; outline:none; letter-spacing:-0.015em; }
+
+        #search-input::placeholder {
+            color: rgba(255, 255, 255, 0.3);
+            font-weight: 400;
+        }
+
+        #search-input:focus {
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+        }
+
+        #results-container {
+            flex: 1;
+            overflow-y: auto;
+            -webkit-app-region: no-drag;
+            padding: 0 20px 20px 20px;
+        }
+
+        #results-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        #results-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #results-container::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        #results-container::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .result-item {
+            padding: 14px 18px;
+            margin-bottom: 6px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            animation: slideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            animation-fill-mode: both;
+        }
+
+        .result-item:nth-child(1) { animation-delay: 0.02s; }
+        .result-item:nth-child(2) { animation-delay: 0.04s; }
+        .result-item:nth-child(3) { animation-delay: 0.06s; }
+        .result-item:nth-child(4) { animation-delay: 0.08s; }
+        .result-item:nth-child(5) { animation-delay: 0.10s; }
+
+        .result-item:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.1);
+            transform: translateX(2px);
+        }
+
+        .result-item.selected {
+            background: rgba(88, 86, 214, 0.25);
+            border-color: rgba(88, 86, 214, 0.4);
+            box-shadow: 0 4px 12px rgba(88, 86, 214, 0.15);
+            transform: translateX(0);
+        }
+
+        .result-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.08);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+            transition: all 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .result-item:hover .result-icon {
+            background: rgba(255, 255, 255, 0.12);
+            transform: scale(1.05);
+        }
+
+        .result-item.selected .result-icon {
+            background: rgba(88, 86, 214, 0.3);
+        }
+
+        .result-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .result-title {
+            font-size: 15px;
+            font-weight: 500;
+            color: #ffffff;
+            margin-bottom: 3px;
+            letter-spacing: -0.01em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .result-item.selected .result-title {
+            font-weight: 600;
+        }
+
+        .result-subtitle {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.45);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            letter-spacing: -0.005em;
+        }
+
+        .result-item.selected .result-subtitle {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .result-type {
+            padding: 5px 12px;
+            background: rgba(88, 86, 214, 0.15);
+            border: 1px solid rgba(88, 86, 214, 0.25);
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: rgba(255, 255, 255, 0.7);
+            transition: all 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+            flex-shrink: 0;
+        }
+
+        .result-item:hover .result-type {
+            background: rgba(88, 86, 214, 0.2);
+            border-color: rgba(88, 86, 214, 0.35);
+        }
+
+        .result-item.selected .result-type {
+            background: rgba(88, 86, 214, 0.3);
+            border-color: rgba(88, 86, 214, 0.5);
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        #loading {
+            text-align: center;
+            padding: 40px;
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 14px;
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 0.8; }
+        }
+
+        #loading::after {
+            content: '...';
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        #empty-state {
+            text-align: center;
+            padding: 80px 40px;
+            color: rgba(255, 255, 255, 0.3);
+            animation: fadeIn 0.3s ease;
+        }
+
+        #empty-state::before {
+            content: '🔍';
+            display: block;
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        #empty-state h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: rgba(255, 255, 255, 0.5);
+            letter-spacing: -0.01em;
+        }
+
+        #empty-state p {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(100, 100, 100, 0.5);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(120, 120, 120, 0.7);
+        }
+
+        .calculator-formats {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+        }
+
+        .calculator-format {
+            color: #888;
+        }
+
+        .calculator-format strong {
+            color: #007acc;
+            margin-right: 8px;
+        }
+
+        #keyboard-hints { display:flex; justify-content:space-between; align-items:center; padding:12px 18px 14px 18px; font-size:12px; color:rgba(255,255,255,0.5); border-top:1px solid rgba(255,255,255,0.05); -webkit-app-region:no-drag; }
+        #action-hints { display:flex; gap:8px; flex-wrap:wrap; }
+        .hint { display:flex; align-items:center; gap:6px; background:rgba(255,255,255,0.06); padding:6px 10px; border-radius:8px; letter-spacing:.5px; }
+        .hint .key { background:rgba(255,255,255,0.18); padding:3px 6px; border-radius:6px; font-size:11px; color:#fff; min-width:24px; text-align:center; }
+        .hint.primary { background:linear-gradient(180deg, rgba(88,86,214,0.85), rgba(78,76,194,0.75)); color:#fff; }
+
+        #mode-selector {
+            display: flex;
+            gap: 8px;
+            padding: 12px 20px 0 20px;
+            -webkit-app-region: no-drag;
+            position: relative;
+        }
+
+        .mode-button {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            font-size: 20px;
+            position: relative;
+            user-select: none;
+        }
+        
+        .mode-button::after {
+            content: '';
+            position: absolute;
+            bottom: -4px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 4px;
+            height: 4px;
+            background: rgba(88, 86, 214, 0.5);
+            border-radius: 50%;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        
+        .mode-button:hover::after {
+            opacity: 0.8;
+        }
+        
+        .mode-button.active::after {
+            opacity: 1;
+        }
+
+        .mode-button:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: scale(1.05);
+        }
+
+        .mode-button.active {
+            background: rgba(88, 86, 214, 0.25);
+            border-color: rgba(88, 86, 214, 0.6);
+            box-shadow: 0 0 0 3px rgba(88, 86, 214, 0.15);
+        }
+
+        .mode-button.active:hover {
+            background: rgba(88, 86, 214, 0.3);
+            transform: scale(1.05);
+        }
+
+        .mode-button.disabled {
+            opacity: 0.25;
+            pointer-events: auto;
+            cursor: pointer;
+        }
+
+        .mode-button.disabled:hover {
+            opacity: 0.4;
+            transform: scale(1.05);
+        }
+
+        .mode-button {
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* Clipboard specialized view styles */
+        #clipboard-view { display:none; flex:1; min-height:0; padding:0 20px 8px 20px; }
+        #clipboard-layout { display:flex; height:100%; gap:18px; }
+        #clipboard-list-wrapper, #clipboard-preview-wrapper {
+          flex:1; display:flex; flex-direction:column; background:rgba(255,255,255,0.04); border-radius:14px; overflow:hidden;
+        }
+        #clipboard-list-wrapper { flex:0 0 46%; }
+        #clipboard-header, #clipboard-preview-header { padding:14px 18px 8px 18px; font-size:14px; font-weight:500; color:rgba(255,255,255,0.7); display:flex; justify-content:space-between; align-items:center; }
+        #clipboard-count { font-weight:600; color:rgba(255,255,255,0.6); letter-spacing:.5px; }
+        #clipboard-list { flex:1; overflow-y:auto; padding:4px 0 6px 0; }
+        .clipboard-row { display:flex; align-items:center; gap:14px; padding:12px 18px 12px 16px; cursor:default; font-size:13px; line-height:1.25; position:relative; border-radius:12px; transition:background .15s ease; }
+        .clipboard-row::before { content:''; position:absolute; left:0; top:4px; bottom:4px; width:4px; border-radius:4px; background:transparent; transition:background .2s ease, box-shadow .2s ease; }
+        .clipboard-row.selected { background:linear-gradient(90deg, rgba(90,88,220,0.25) 0%, rgba(90,88,220,0.08) 100%); }
+        .clipboard-row.selected::before { background:rgba(88,86,214,0.85); box-shadow:0 0 0 1px rgba(255,255,255,0.25),0 2px 6px -2px rgba(0,0,0,0.6); }
+        .clipboard-row:hover { background:rgba(255,255,255,0.06); }
+        .clip-index { width:26px; height:26px; border-radius:7px; background:rgba(255,255,255,0.06); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; color:rgba(255,255,255,0.65); flex-shrink:0; letter-spacing:.5px; }
+        .clipboard-row.selected .clip-index { background:linear-gradient(180deg, rgba(88,86,214,0.95), rgba(78,76,194,0.85)); color:#fff; box-shadow:0 2px 6px -2px rgba(0,0,0,0.6); }
+        .clip-meta { font-size:11px; opacity:.55; margin-top:4px; }
+        .clip-title { font-weight:500; font-size:13px; color:rgba(255,255,255,0.85); letter-spacing:.2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        #clipboard-preview { flex:1; overflow:auto; padding:22px; font-size:13px; line-height:1.5; white-space:pre-wrap; word-break:break-word; display:flex; align-items:center; justify-content:center; }
+        #clipboard-preview.empty { opacity:.4; font-size:13px; }
+        .clip-actions { position:absolute; right:12px; top:8px; display:flex; gap:6px; opacity:0; transition:opacity .15s ease; }
+        .clipboard-row:hover .clip-actions { opacity:1; }
+        .clip-btn { background:rgba(255,255,255,0.08); border:none; color:#fff; padding:6px 9px; border-radius:7px; font-size:11px; cursor:pointer; letter-spacing:.5px; }
+        .clip-btn:hover { background:rgba(255,255,255,0.16); }
+        .clip-btn.danger { background:rgba(255,64,64,0.25); }
+        .clip-btn.danger:hover { background:rgba(255,64,64,0.35); }
+        #clipboard-filter-wrapper { position:relative; }
+        #clipboard-filter-button { background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.08); padding:10px 14px; border-radius:10px; font-size:13px; display:flex; align-items:center; gap:8px; cursor:pointer; }
+        #clipboard-filter-button:hover { background:rgba(255,255,255,0.12); }
+        #clipboard-filter-menu { position:absolute; top:100%; right:0; margin-top:6px; width:220px; background:rgba(22,22,22,0.95); backdrop-filter:blur(30px) saturate(140%); -webkit-backdrop-filter:blur(30px) saturate(140%); border:1px solid rgba(255,255,255,0.08); border-radius:14px; box-shadow:0 12px 30px -10px rgba(0,0,0,0.55); padding:10px 0 12px 0; display:none; z-index:1000; }
+        .filter-item { padding:9px 16px; font-size:13px; color:rgba(255,255,255,0.75); cursor:pointer; display:flex; align-items:center; gap:10px; }
+        .filter-item:hover { background:rgba(255,255,255,0.08); }
+        .filter-item.active { background:rgba(88,86,214,0.25); color:#fff; }
+        .filter-icon { width:18px; text-align:center; }
+        #clipboard-bottom-bar { margin-top:8px; display:flex; justify-content:space-between; align-items:center; font-size:12px; color:rgba(255,255,255,0.45); letter-spacing:.5px; }
+        #clipboard-bottom-bar .action-hint { background:rgba(255,255,255,0.07); padding:8px 14px; border-radius:10px; font-size:12px; display:flex; align-items:center; gap:6px; letter-spacing:.5px; }
+        #clipboard-bottom-bar .action-hint span.key { background:rgba(255,255,255,0.12); padding:4px 6px; border-radius:6px; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="mode-selector">
+            <div class="mode-button active" data-mode="all" data-index="0" title="Search All (⌥Space)">
+                🔍
+            </div>
+            <div class="mode-button" data-mode="apps" data-index="1" title="Apps Only (double-click to disable)">
+                📱
+            </div>
+            <div class="mode-button" data-mode="files" data-index="2" title="Files Only (double-click to disable)">
+                📄
+            </div>
+            <div class="mode-button" data-mode="clipboard" data-index="3" title="Clipboard History (double-click to disable)">
+                📋
+            </div>
+            <div class="mode-button" data-mode="calculator" data-index="4" title="Calculator (double-click to disable)">
+                🧮
+            </div>
+            <div class="mode-button" data-mode="emoji" data-index="5" title="Emoji Picker (double-click to disable)">
+                😀
+            </div>
+        </div>
+        
+        <div id="search-container">
+            <div id="search-bar">
+                <div class="search-icon">🔍</div>
+                <input 
+                    type="text" 
+                    id="search-input" 
+                    placeholder="Search apps and commands" 
+                    autocomplete="off"
+                    spellcheck="false"
+                />
+            </div>
+        </div>
+        
+        <div id="results-container">
+            <div id="empty-state">
+                <h2>Start typing to search</h2>
+                <p>Apps · Files · Clipboard · Calculator · Emoji · Web Search</p>
+            </div>
+            <div id="loading">Searching...</div>
+        </div>
+        
+        <div id="keyboard-hints">
+            <div id="action-hints"></div>
+            <div id="mode-label" style="opacity:.6; font-size:12px;"></div>
+        </div>
+        <div id="clipboard-view">
+            <div id="clipboard-layout">
+                <div id="clipboard-list-wrapper">
+                    <div id="clipboard-header">
+                        <div id="clipboard-count">0 items</div>
+                        <div id="clipboard-filter-wrapper">
+                            <div id="clipboard-filter-button">All items ▾</div>
+                            <div id="clipboard-filter-menu">
+                                <div class="filter-item active" data-filter="all"><div class="filter-icon">📦</div>All Items</div>
+                                <div class="filter-item" data-filter="text"><div class="filter-icon">📝</div>Text</div>
+                                <div class="filter-item" data-filter="link"><div class="filter-icon">🔗</div>Links</div>
+                                <div class="filter-item" data-filter="image"><div class="filter-icon">🖼️</div>Images</div>
+                                <div class="filter-item" data-filter="monarch"><div class="filter-icon">🦋</div>Monarch</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="clipboard-list"></div>
+                    <div id="clipboard-bottom-bar">
+                        <div>TAB Monarch</div>
+                        <div class="action-hint"><span class="key">↵</span> Paste item</div>
+                    </div>
+                </div>
+                <div id="clipboard-preview-wrapper">
+                    <div id="clipboard-preview-header">Preview</div>
+                    <div id="clipboard-preview" class="empty">Select an item to preview</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Declare variables in outer scope
+        let invoke, appWindow;
+        let searchInput, resultsContainer, emptyState, loading;
+        let selectedIndex = 0;
+        let searchResults = [];
+        let debounceTimer = null;
+        let currentMode = 'all';
+        let draggedElement = null;
+        let modeOrder = ['all', 'apps', 'files', 'clipboard', 'calculator', 'emoji'];
+        let disabledModes = [];
+        let clipboardFilter = 'all';
+        let isClipboardView = false;
+
+        // Wait for Tauri API to load
+        function initApp() {
+            if (window.__TAURI_INVOKE__ && window.__TAURI_APP_WINDOW__) {
+                console.log('Tauri API loaded, initializing...');
+                
+                invoke = window.__TAURI_INVOKE__;
+                appWindow = window.__TAURI_APP_WINDOW__;
+                
+                // Get DOM elements
+                searchInput = document.getElementById('search-input');
+                resultsContainer = document.getElementById('results-container');
+                emptyState = document.getElementById('empty-state');
+                loading = document.getElementById('loading');
+
+                console.log('Viceroy initialized');
+
+                // Focus input on load
+                searchInput.focus();
+                
+                setupEventListeners();
+                setupModeSelector();
+            } else {
+                console.log('Waiting for Tauri API...');
+                setTimeout(initApp, 50);
+            }
+        }
+
+        // Clipboard view functions - defined early so they're available
+        function updateModeUI() {
+            const clipboardView = document.getElementById('clipboard-view');
+            const resultsArea = document.getElementById('results-container');
+            console.log('updateModeUI called, currentMode:', currentMode);
+            if (currentMode === 'clipboard') {
+                isClipboardView = true;
+                clipboardView.style.display = 'flex';
+                resultsArea.style.display = 'none';
+                console.log('Switched to clipboard view');
+                if (!searchInput.value.trim()) {
+                    invoke('get_clipboard_history', { limit: 100 }).then(raw => {
+                        console.log('Loaded clipboard history:', raw.length, 'items');
+                        searchResults = raw.map(classifyClipboardEntry);
+                        renderClipboardList();
+                    }).catch(err => console.error('Failed to load clipboard:', err));
+                } else {
+                    performSearch(searchInput.value.trim());
+                }
+            } else {
+                isClipboardView = false;
+                clipboardView.style.display = 'none';
+                resultsArea.style.display = 'flex';
+                console.log('Switched to standard results view');
+            }
+            updateActionBar();
+            updateSearchPlaceholder();
+        }
+        function updateActionBar() {
+            const container = document.getElementById('action-hints');
+            const modeLabel = document.getElementById('mode-label');
+            if (!container) return;
+            let hints = [];
+            if (currentMode === 'clipboard') {
+                hints = [ ['↵','Paste'], ['⌘C','Copy'], ['⌘P','Pin'], ['⌘R','Rename'], ['⌃⌫','Delete'], ['Tab','Switch'], ['Esc','Close'] ];
+                modeLabel.textContent = 'Clipboard History';
+            } else if (currentMode === 'apps') {
+                hints = [ ['↵','Open'], ['⌘C','Copy path'], ['Tab','Switch'], ['Esc','Close'] ];
+                modeLabel.textContent = 'Applications';
+            } else if (currentMode === 'files') {
+                hints = [ ['↵','Open'], ['⌘C','Copy path'], ['Tab','Switch'], ['Esc','Close'] ];
+                modeLabel.textContent = 'Files';
+            } else if (currentMode === 'calculator') {
+                hints = [ ['↵','Copy result'], ['Tab','Switch'], ['Esc','Close'] ];
+                modeLabel.textContent = 'Calculator';
+            } else if (currentMode === 'emoji') {
+                hints = [ ['↵','Copy emoji'], ['Tab','Switch'], ['Esc','Close'] ];
+                modeLabel.textContent = 'Emoji Picker';
+            } else {
+                hints = [ ['↵','Open'], ['⌘C','Copy'], ['Tab','Switch'], ['Esc','Close'] ];
+                modeLabel.textContent = 'All';
+            }
+            container.innerHTML = hints.map(([key,label],i)=>`<div class="hint ${i===0?'primary':''}"><span class="key">${key}</span>${label}</div>`).join('');
+        }
+        function updateSearchPlaceholder() {
+            const searchInput = document.getElementById('search-input');
+            if (!searchInput) return;
+            const placeholders = {
+                all: 'Search apps, files, clipboard…',
+                apps: 'Search applications…',
+                files: 'Search files…',
+                clipboard: 'Search clipboard history…',
+                calculator: 'Type an expression…',
+                emoji: 'Type :smile or keyword…'
+            };
+            searchInput.placeholder = placeholders[currentMode] || 'Search…';
+        }
+        function classifyClipboardEntry(entry) {
+            let derivedType = 'text';
+            if (entry.content_type === 'image') derivedType = 'image';
+            else if (entry.content && (entry.content.startsWith('http://') || entry.content.startsWith('https://'))) derivedType = 'link';
+            return { ...entry, derivedType };
+        }
+        function passesClipboardFilter(entry) {
+            if (clipboardFilter === 'all') return true;
+            if (clipboardFilter === 'monarch') return (entry.app_name || '').toLowerCase().includes('monarch');
+            return entry.derivedType === clipboardFilter;
+        }
+        function renderClipboardList() {
+            console.log('renderClipboardList called, searchResults:', searchResults.length);
+            const list = document.getElementById('clipboard-list');
+            const countEl = document.getElementById('clipboard-count');
+            let items = searchResults.filter(e => e.id !== undefined);
+            items = items.filter(passesClipboardFilter);
+            console.log('Filtered to', items.length, 'clipboard items');
+            countEl.textContent = `${items.length} item${items.length===1?'':'s'}`;
+            if (items.length === 0) {
+                list.innerHTML = '<div style="padding:18px;font-size:13px;opacity:.55;">No items</div>';
+                document.getElementById('clipboard-preview').classList.add('empty');
+                document.getElementById('clipboard-preview').textContent = 'Select an item to preview';
+                return;
+            }
+            list.innerHTML = items.map((entry, idx) => {
+                const sel = idx === selectedIndex ? 'selected' : '';
+                const title = escapeHtml(entry.custom_name || (entry.derivedType==='image' ? '[Image]' : entry.preview || entry.content.slice(0,120)));
+                const pinned = entry.is_pinned ? '<span class="pinned">📌</span>' : '';
+                let metaExtra = '';
+                if (entry.derivedType === 'image') metaExtra = 'image';
+                else metaExtra = `${entry.content.length} chars`;
+                const meta = `${timeAgo(entry.timestamp)} • ${metaExtra}`;
+                return `<div class="clipboard-row ${sel}" data-index="${idx}">
+                    <div class="clip-index">${idx+1}</div>
+                    <div style="flex:1;min-width:0;">
+                        <div class="clip-title">${pinned}${title}</div>
+                        <div class="clip-meta">${meta}</div>
+                    </div>
+                    <div class="clip-actions">
+                        <button class="clip-btn" data-action="pin">Pin</button>
+                        <button class="clip-btn" data-action="rename">Rename</button>
+                        <button class="clip-btn danger" data-action="delete">Delete</button>
+                    </div>
+                </div>`;
+            }).join('');
+            list.querySelectorAll('.clipboard-row').forEach(row => {
+                row.addEventListener('click', () => {
+                    selectedIndex = parseInt(row.getAttribute('data-index'));
+                    renderClipboardList();
+                    updateClipboardPreview();
+                });
+                row.querySelectorAll('.clip-btn').forEach(btn => {
+                    btn.addEventListener('click', async (ev) => {
+                        ev.stopPropagation();
+                        const action = btn.getAttribute('data-action');
+                        const entry = items[parseInt(row.getAttribute('data-index'))];
+                        if (action === 'pin') await handleClipboardPin(entry.id);
+                        if (action === 'rename') await handleClipboardRename(entry.id);
+                        if (action === 'delete') await handleClipboardDelete(entry.id);
+                        invoke('search_clipboard', { query: searchInput.value.trim() || '' }).then(raw => {
+                            searchResults = raw.map(classifyClipboardEntry);
+                            renderClipboardList();
+                            updateClipboardPreview();
+                        });
+                    });
+                });
+            });
+            updateClipboardPreview();
+        }
+        function updateClipboardPreview() {
+            const previewEl = document.getElementById('clipboard-preview');
+            let items = searchResults.filter(passesClipboardFilter);
+            if (items.length === 0 || selectedIndex >= items.length) {
+                previewEl.classList.add('empty');
+                previewEl.textContent = 'Select an item to preview';
+                return;
+            }
+            const entry = items[selectedIndex];
+            previewEl.classList.remove('empty');
+            if (entry.derivedType === 'image') {
+                previewEl.innerHTML = `<img src="data:image/png;base64,${entry.content}" style="max-width:100%;border-radius:12px;box-shadow:0 4px 18px -6px rgba(0,0,0,0.6);" />`;
+            } else {
+                previewEl.textContent = entry.content;
+            }
+        }
+        function timeAgo(ts) {
+            const diff = Date.now()/1000 - ts;
+            if (diff < 60) return '< 1 minute ago';
+            const mins = Math.floor(diff/60);
+            if (mins < 60) return `${mins} minute${mins===1?'':'s'} ago`;
+            const hours = Math.floor(mins/60);
+            if (hours < 24) return `${hours} hour${hours===1?'':'s'} ago`;
+            const days = Math.floor(hours/24);
+            return `${days} day${days===1?'':'s'} ago`;
+        }
+
+        function setupModeSelector() {
+            loadModePreferences();
+            const modeButtons = document.querySelectorAll('.mode-button');
+            const container = document.getElementById('mode-selector');
+            
+            modeButtons.forEach(button => {
+                // Click to switch mode
+                button.addEventListener('click', () => {
+                    if (button.classList.contains('disabled')) {
+                        // Re-enable on click if disabled
+                        button.classList.remove('disabled');
+                        const mode = button.getAttribute('data-mode');
+                        disabledModes = disabledModes.filter(m => m !== mode);
+                        saveModePreferences();
+                        return;
+                    }
+                    
+                    // Update active state
+                    modeButtons.forEach(btn => btn.classList.remove('active'));
+                    button.classList.add('active');
+                    
+                    // Update current mode
+                    currentMode = button.getAttribute('data-mode');
+                    isClipboardView = currentMode === 'clipboard';
+                    updateModeUI();
+                    
+                    // Update placeholder based on mode
+                    const placeholders = {
+                        'all': 'Search anything...',
+                        'apps': 'Search applications...',
+                        'files': 'Search files...',
+                        'clipboard': 'Search clipboard history...',
+                        'calculator': 'Enter calculation...',
+                        'emoji': 'Search emoji...'
+                    };
+                    searchInput.placeholder = placeholders[currentMode] || 'Search...';
+                    
+                    // Re-search with current query if not empty
+                    if (searchInput.value.trim()) {
+                        performSearch(searchInput.value);
+                    }
+                    
+                    // Focus input
+                    searchInput.focus();
+                });
+                
+                // Double-click to disable mode (except 'all')
+                button.addEventListener('dblclick', (e) => {
+                    e.stopPropagation();
+                    const mode = button.getAttribute('data-mode');
+                    
+                    if (mode === 'all') return; // Can't disable search all
+                    
+                    if (!button.classList.contains('disabled')) {
+                        button.classList.add('disabled');
+                        disabledModes.push(mode);
+                        
+                        // If current mode is disabled, switch to 'all'
+                        if (currentMode === mode) {
+                            document.querySelector('[data-mode="all"]').click();
+                        }
+                        
+                        saveModePreferences();
+                    }
+                });
+                
+                // Arrow key navigation for reordering
+                button.addEventListener('keydown', (e) => {
+                    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                        e.preventDefault();
+                        const currentIndex = parseInt(button.getAttribute('data-index'));
+                        const allButtons = Array.from(container.children);
+                        const newIndex = e.key === 'ArrowLeft' ? 
+                            Math.max(0, currentIndex - 1) : 
+                            Math.min(allButtons.length - 1, currentIndex + 1);
+                        
+                        if (newIndex !== currentIndex) {
+                            moveModeButton(currentIndex, newIndex);
+                        }
+                    }
+                });
+            });
+            
+            // Add left/right arrow buttons for reordering
+            modeButtons.forEach((button, index) => {
+                button.setAttribute('tabindex', '0');
+            });
+        }
+        
+        function moveModeButton(fromIndex, toIndex) {
+            const container = document.getElementById('mode-selector');
+            const buttons = Array.from(container.children);
+            const button = buttons[fromIndex];
+            
+            // Remove and reinsert
+            container.removeChild(button);
+            if (toIndex >= buttons.length - 1) {
+                container.appendChild(button);
+            } else {
+                container.insertBefore(button, buttons[toIndex]);
+            }
+            
+            // Update data-index for all buttons
+            Array.from(container.children).forEach((btn, idx) => {
+                btn.setAttribute('data-index', idx);
+            });
+            
+            // Update mode order
+            modeOrder = Array.from(container.children).map(btn => btn.getAttribute('data-mode'));
+            saveModePreferences();
+        }
+        
+        function saveModePreferences() {
+            localStorage.setItem('modeOrder', JSON.stringify(modeOrder));
+            localStorage.setItem('disabledModes', JSON.stringify(disabledModes));
+        }
+        
+        function loadModePreferences() {
+            const savedOrder = localStorage.getItem('modeOrder');
+            const savedDisabled = localStorage.getItem('disabledModes');
+            
+            if (savedOrder) {
+                modeOrder = JSON.parse(savedOrder);
+                const container = document.getElementById('mode-selector');
+                const buttons = Array.from(container.children);
+                
+                // Reorder buttons based on saved order
+                modeOrder.forEach(mode => {
+                    const button = buttons.find(btn => btn.getAttribute('data-mode') === mode);
+                    if (button) {
+                        container.appendChild(button);
+                    }
+                });
+            }
+            
+            if (savedDisabled) {
+                disabledModes = JSON.parse(savedDisabled);
+                disabledModes.forEach(mode => {
+                    const button = document.querySelector(`[data-mode="${mode}"]`);
+                    if (button) {
+                        button.classList.add('disabled');
+                    }
+                });
+            }
+        }
+        
+        // Start after DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initApp);
+        } else {
+            initApp();
+        }
+        
+        function setupEventListeners() {
+            // Search with debounce
+            searchInput.addEventListener('input', (e) => {
+            clearTimeout(debounceTimer);
+            
+            if (e.target.value.trim() === '') {
+                if (isClipboardView) {
+                    // In clipboard view, empty search shows all history
+                    invoke('get_clipboard_history', { limit: 100 }).then(raw => {
+                        searchResults = raw.map(classifyClipboardEntry);
+                        renderClipboardList();
+                    });
+                } else {
+                    showEmptyState();
+                }
+                return;
+            }
+
+            if (!isClipboardView) {
+                loading.style.display = 'block';
+                emptyState.style.display = 'none';
+            }
+
+                debounceTimer = setTimeout(async () => {
+                    await performSearch(e.target.value);
+                }, 150);
+            });
+
+            // Keyboard navigation
+            searchInput.addEventListener('keydown', async (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    try {
+                        await appWindow.hide();
+                        searchInput.value = '';
+                        showEmptyState();
+                    } catch (err) {
+                        console.error('Failed to hide window:', err);
+                    }
+                } else if (e.key === 'Tab') {
+                    e.preventDefault();
+                    cycleModes(e.shiftKey);
+                } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    selectedIndex = Math.min(selectedIndex + 1, searchResults.length - 1);
+                    updateSelection();
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    selectedIndex = Math.max(selectedIndex - 1, 0);
+                    updateSelection();
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (searchResults.length > 0) {
+                        await executeResult(searchResults[selectedIndex]);
+                    }
+                } else if (e.key === 'p' && e.metaKey && searchResults.length > 0) {
+                    // Cmd+P: Pin/unpin clipboard item
+                    e.preventDefault();
+                    const result = searchResults[selectedIndex];
+                    if (result.type === 'Clipboard' && result.id) {
+                        await handleClipboardPin(result.id);
+                    }
+                } else if (e.key === 'r' && e.metaKey && searchResults.length > 0) {
+                    // Cmd+R: Rename clipboard item
+                    e.preventDefault();
+                    const result = searchResults[selectedIndex];
+                    if (result.type === 'Clipboard' && result.id) {
+                        await handleClipboardRename(result.id);
+                    }
+                } else if (e.key === 'c' && e.metaKey && searchResults.length > 0) {
+                    // Cmd+C: Recopy without pasting
+                    e.preventDefault();
+                    const result = searchResults[selectedIndex];
+                    if (result.type === 'Clipboard' && result.content) {
+                        await invoke('copy_to_clipboard', { text: result.content });
+                        // Don't hide window, just show feedback
+                        showNotification('Copied!');
+                    }
+                } else if (e.key === 'Backspace' && e.ctrlKey && searchResults.length > 0) {
+                    // Ctrl+Backspace: Delete clipboard item
+                    e.preventDefault();
+                    const result = searchResults[selectedIndex];
+                    if (result.type === 'Clipboard' && result.id) {
+                        await handleClipboardDelete(result.id);
+                    }
+                } else if (e.key === 'P' && e.metaKey && e.shiftKey) {
+                    // Cmd+Shift+P: Pause/resume clipboard monitor
+                    e.preventDefault();
+                    await handleToggleClipboardMonitor();
+                }
+            });
+            
+        function cycleModes(reverse = false) {
+            // If clipboard view active and no query, arrows still cycle modes
+
+            const container = document.getElementById('mode-selector');
+            const buttons = Array.from(container.children).filter(btn => !btn.classList.contains('disabled'));
+            const currentButton = buttons.find(btn => btn.getAttribute('data-mode') === currentMode);
+            const currentIndex = buttons.indexOf(currentButton);
+            
+            let nextIndex;
+            if (reverse) {
+                nextIndex = currentIndex - 1;
+                if (nextIndex < 0) nextIndex = buttons.length - 1;
+            } else {
+                nextIndex = (currentIndex + 1) % buttons.length;
+            }
+            
+            buttons[nextIndex].click();
+        }
+
+        async function performSearch(query) {
+            try {
+                if (currentMode === 'clipboard') {
+                    const raw = await invoke('search_clipboard', { query });
+                    searchResults = raw.map(classifyClipboardEntry);
+                    selectedIndex = 0;
+                    renderClipboardList();
+                    return;
+                }
+                console.log('Searching for:', query, 'mode:', currentMode);
+                const results = await invoke('search', { query, mode: currentMode });
+                console.log('Search results:', results);
+                searchResults = results;
+                selectedIndex = 0;
+                displayResults(results);
+            } catch (error) {
+                console.error('Search error:', error);
+                resultsContainer.innerHTML = `<div style=\"text-align: center; padding: 40px; color: #f44;\">Error: ${error}</div>`;
+                loading.style.display = 'none';
+            }
+        }
+
+        function displayResults(results) {
+            loading.style.display = 'none';
+            
+            if (results.length === 0) {
+                resultsContainer.innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">No results found</div>';
+                return;
+            }
+
+            resultsContainer.innerHTML = results.map((result, index) => {
+                return createResultHTML(result, index);
+            }).join('');
+
+            // Add click handlers
+            const items = resultsContainer.querySelectorAll('.result-item');
+            items.forEach((item, index) => {
+                item.addEventListener('click', () => executeResult(results[index]));
+            });
+        }
+
+        function createResultHTML(result, index) {
+            const selected = index === selectedIndex ? 'selected' : '';
+            
+            if (result.type === 'App') {
+                return `
+                    <div class="result-item ${selected}" data-index="${index}">
+                        <div class="result-icon">📦</div>
+                        <div class="result-content">
+                            <div class="result-title">${escapeHtml(result.name)}</div>
+                            <div class="result-subtitle">${escapeHtml(result.path)}</div>
+                        </div>
+                        <div class="result-type">App</div>
+                    </div>
+                `;
+            } else if (result.type === 'File') {
+                return `
+                    <div class="result-item ${selected}" data-index="${index}">
+                        <div class="result-icon">📄</div>
+                        <div class="result-content">
+                            <div class="result-title">${escapeHtml(result.name)}</div>
+                            <div class="result-subtitle">${escapeHtml(result.path)}</div>
+                        </div>
+                        <div class="result-type">File</div>
+                    </div>
+                `;
+            } else if (result.type === 'Clipboard') {
+                const pinnedIcon = result.is_pinned ? '📌 ' : '';
+                const customName = result.custom_name ? escapeHtml(result.custom_name) : escapeHtml(result.preview);
+                return `
+                    <div class="result-item ${selected}" data-index="${index}">
+                        <div class="result-icon">📋</div>
+                        <div class="result-content">
+                            <div class="result-title">${pinnedIcon}${customName}</div>
+                            <div class="result-subtitle">${result.app_name ? escapeHtml(result.app_name) : 'Unknown app'}</div>
+                        </div>
+                        <div class="result-type">Clipboard</div>
+                    </div>
+                `;
+            } else if (result.type === 'Command') {
+                return `
+                    <div class="result-item ${selected}" data-index="${index}">
+                        <div class="result-icon">⚡</div>
+                        <div class="result-content">
+                            <div class="result-title">${escapeHtml(result.name)}</div>
+                            <div class="result-subtitle">${escapeHtml(result.description)}</div>
+                        </div>
+                        <div class="result-type">Command</div>
+                    </div>
+                `;
+            } else if (result.type === 'Calculator') {
+                return `
+                    <div class="result-item ${selected}" data-index="${index}">
+                        <div class="result-icon">🔢</div>
+                        <div class="result-content">
+                            <div class="result-title">${escapeHtml(result.expression)} = ${escapeHtml(result.result)}</div>
+                            <div class="calculator-formats">
+                                ${result.formats.slice(1).map(fmt => `<div class="calculator-format">${escapeHtml(fmt)}</div>`).join('')}
+                            </div>
+                        </div>
+                        <div class="result-type">Calculator</div>
+                    </div>
+                `;
+            } else if (result.type === 'Emoji') {
+                return `
+                    <div class="result-item ${selected}" data-index="${index}">
+                        <div class="result-icon" style="font-size: 24px;">${result.emoji}</div>
+                        <div class="result-content">
+                            <div class="result-title">:${escapeHtml(result.name)}:</div>
+                            <div class="result-subtitle">${result.keywords.slice(0, 3).map(k => escapeHtml(k)).join(', ')}</div>
+                        </div>
+                        <div class="result-type">Emoji</div>
+                    </div>
+                `;
+            } else if (result.type === 'Dictionary') {
+                return `
+                    <div class="result-item ${selected}" data-index="${index}">
+                        <div class="result-icon">📖</div>
+                        <div class="result-content">
+                            <div class="result-title">${escapeHtml(result.preview)}</div>
+                            <div class="result-subtitle">Open Dictionary</div>
+                        </div>
+                        <div class="result-type">Define</div>
+                    </div>
+                `;
+            } else if (result.type === 'WebSearch') {
+                return `
+                    <div class="result-item ${selected}" data-index="${index}">
+                        <div class="result-icon">🔍</div>
+                        <div class="result-content">
+                            <div class="result-title">Search "${escapeHtml(result.query)}"</div>
+                            <div class="result-subtitle">${escapeHtml(result.engine)}</div>
+                        </div>
+                        <div class="result-type">Web</div>
+                    </div>
+                `;
+            }
+            
+            return '';
+        }
+
+        function updateSelection() {
+            const items = resultsContainer.querySelectorAll('.result-item');
+            items.forEach((item, index) => {
+                if (index === selectedIndex) {
+                    item.classList.add('selected');
+                    item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                } else {
+                    item.classList.remove('selected');
+                }
+            });
+        }
+
+        async function executeResult(result) {
+            try {
+                if (result.type === 'App') {
+                    await invoke('launch_app', { bundlePath: result.path });
+                } else if (result.type === 'File') {
+                    await invoke('open_file', { path: result.path });
+                } else if (result.type === 'Clipboard') {
+                    // Autopaste: paste to active app instead of just copying
+                    await invoke('paste_clipboard_entry', { content: result.content });
+                } else if (result.type === 'Command') {
+                    await invoke('execute_system_command', { command: result.command });
+                } else if (result.type === 'Calculator') {
+                    await invoke('copy_to_clipboard', { text: result.result });
+                } else if (result.type === 'Emoji') {
+                    await invoke('copy_to_clipboard', { text: result.emoji });
+                } else if (result.type === 'Dictionary') {
+                    await invoke('open_dictionary', { word: result.word });
+                } else if (result.type === 'WebSearch') {
+                    await invoke('open_web_search', { url: result.url });
+                }
+                
+                // Hide window after execution
+                await appWindow.hide();
+                searchInput.value = '';
+                showEmptyState();
+            } catch (error) {
+                console.error('Execution error:', error);
+            }
+        }
+
+
+        // Filter menu event listeners
+        document.addEventListener('click', (e) => {
+            const menu = document.getElementById('clipboard-filter-menu');
+            const btn = document.getElementById('clipboard-filter-button');
+            if (!btn || !menu) return;
+            if (btn.contains(e.target)) {
+                if (!isClipboardView) return;
+                menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+            } else if (!menu.contains(e.target)) {
+                menu.style.display = 'none';
+            }
+        });
+        const filterMenu = document.getElementById('clipboard-filter-menu');
+        if (filterMenu) {
+            filterMenu.addEventListener('click', (e) => {
+                const item = e.target.closest('.filter-item');
+                if (!item) return;
+                clipboardFilter = item.getAttribute('data-filter');
+                document.querySelectorAll('#clipboard-filter-menu .filter-item').forEach(i => i.classList.remove('active'));
+                item.classList.add('active');
+                document.getElementById('clipboard-filter-button').textContent = item.textContent + ' ▾';
+                filterMenu.style.display = 'none';
+                renderClipboardList();
+            });
+        }
+
+        function showEmptyState() {
+            emptyState.style.display = 'block';
+            loading.style.display = 'none';
+            resultsContainer.innerHTML = '';
+            resultsContainer.appendChild(emptyState);
+            resultsContainer.appendChild(loading);
+            searchResults = [];
+            selectedIndex = 0;
+        }
+
+        async function handleClipboardPin(id) {
+            try {
+                await invoke('toggle_pin_clipboard', { id });
+                // Refresh search results
+                if (searchInput.value.trim()) {
+                    await performSearch(searchInput.value);
+                }
+                showNotification('Pin toggled');
+            } catch (error) {
+                console.error('Pin error:', error);
+                showNotification('Error: ' + error);
+            }
+        }
+
+        async function handleClipboardDelete(id) {
+            try {
+                await invoke('delete_clipboard_entry', { id });
+                // Refresh search results
+                if (searchInput.value.trim()) {
+                    await performSearch(searchInput.value);
+                } else {
+                    // If no search, just remove from current results
+                    searchResults = searchResults.filter(r => r.id !== id);
+                    displayResults(searchResults);
+                }
+                showNotification('Deleted');
+            } catch (error) {
+                console.error('Delete error:', error);
+                showNotification('Error: ' + error);
+            }
+        }
+
+        async function handleClipboardRename(id) {
+            const result = searchResults.find(r => r.id === id);
+            if (!result) return;
+            
+            const newName = prompt('Enter new name:', result.custom_name || result.preview);
+            if (newName !== null && newName.trim() !== '') {
+                try {
+                    await invoke('rename_clipboard_entry', { id, newName: newName.trim() });
+                    // Refresh search results
+                    if (searchInput.value.trim()) {
+                        await performSearch(searchInput.value);
+                    }
+                    showNotification('Renamed');
+                } catch (error) {
+                    console.error('Rename error:', error);
+                    showNotification('Error: ' + error);
+                }
+            }
+        }
+
+        async function handleToggleClipboardMonitor() {
+            try {
+                const isPaused = await invoke('toggle_clipboard_monitor');
+                showNotification(isPaused ? 'Clipboard monitoring paused' : 'Clipboard monitoring resumed');
+            } catch (error) {
+                console.error('Toggle monitor error:', error);
+                showNotification('Error: ' + error);
+            }
+        }
+
+        function showNotification(message) {
+            // Create temporary notification element
+            const notification = document.createElement('div');
+            notification.textContent = message;
+            notification.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(88, 86, 214, 0.9);
+                color: white;
+                padding: 10px 20px;
+                border-radius: 8px;
+                font-size: 14px;
+                z-index: 10000;
+                animation: fadeInOut 2s ease-in-out;
+            `;
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 2000);
+        }
+
+            // Handle window visibility
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    searchInput.value = '';
+                    showEmptyState();
+                } else {
+                    searchInput.focus();
+                }
+            });
+
+            // Hide window when it loses focus
+            let blurTimeout;
+            window.addEventListener('blur', () => {
+                // Use timeout to prevent hiding when clicking within the window
+                blurTimeout = setTimeout(async () => {
+                    try {
+                        await appWindow.hide();
+                        searchInput.value = '';
+                        showEmptyState();
+                    } catch (e) {
+                        console.log('Hide window error:', e);
+                    }
+                }, 200);
+            });
+            
+            window.addEventListener('focus', () => {
+                clearTimeout(blurTimeout);
+            });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
