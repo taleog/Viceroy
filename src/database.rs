@@ -15,6 +15,8 @@ pub fn init() -> Result<()> {
             app_name TEXT,
             timestamp INTEGER NOT NULL,
             custom_name TEXT,
+            image_width INTEGER,
+            image_height INTEGER,
             is_favorite INTEGER DEFAULT 0,
             is_pinned INTEGER DEFAULT 0
         )",
@@ -24,6 +26,18 @@ pub fn init() -> Result<()> {
     // Add is_pinned column if it doesn't exist (for existing databases)
     conn.execute(
         "ALTER TABLE clipboard_history ADD COLUMN is_pinned INTEGER DEFAULT 0",
+        [],
+    )
+    .ok(); // Ignore error if column already exists
+
+    // Add image dimension columns for clipboard images
+    conn.execute(
+        "ALTER TABLE clipboard_history ADD COLUMN image_width INTEGER",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE clipboard_history ADD COLUMN image_height INTEGER",
         [],
     )
     .ok(); // Ignore error if column already exists

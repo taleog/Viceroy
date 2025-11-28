@@ -34,6 +34,8 @@ pub struct ClipboardEntry {
     pub custom_name: Option<String>,
     pub is_favorite: bool,
     pub is_pinned: bool,
+    pub image_width: Option<i64>,
+    pub image_height: Option<i64>,
 }
 
 pub async fn start_monitor() -> Result<()> {
@@ -91,8 +93,15 @@ async fn save_clipboard_entry(content: &str, app_name: &Option<String>) -> Resul
     let conn = database::get_connection()?;
     let timestamp = Utc::now().timestamp();
     conn.execute(
-        "INSERT INTO clipboard_history (content, content_type, app_name, timestamp) VALUES (?1, ?2, ?3, ?4)",
-        params![content, "text", app_name, timestamp],
+        "INSERT INTO clipboard_history (content, content_type, app_name, timestamp, image_width, image_height) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            content,
+            "text",
+            app_name,
+            timestamp,
+            Option::<i64>::None,
+            Option::<i64>::None
+        ],
     )?;
     prune_old(&conn)?;
     Ok(())
@@ -112,8 +121,15 @@ async fn save_clipboard_image(image: &ImageData<'_>, app_name: &Option<String>) 
     }
     let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
     conn.execute(
-        "INSERT INTO clipboard_history (content, content_type, app_name, timestamp) VALUES (?1, ?2, ?3, ?4)",
-        params![b64, "image", app_name, timestamp],
+        "INSERT INTO clipboard_history (content, content_type, app_name, timestamp, image_width, image_height) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            b64,
+            "image",
+            app_name,
+            timestamp,
+            Some(image.width as i64),
+            Some(image.height as i64)
+        ],
     )?;
     prune_old(&conn)?;
     Ok(())
@@ -130,7 +146,7 @@ fn prune_old(conn: &rusqlite::Connection) -> Result<()> {
 pub async fn get_history(limit: usize) -> Result<Vec<ClipboardEntry>> {
     let conn = database::get_connection()?;
     let mut stmt = conn.prepare(
-        "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned 
+        "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned, image_width, image_height 
          FROM clipboard_history 
          ORDER BY is_pinned DESC, timestamp DESC 
          LIMIT ?1"
@@ -147,6 +163,8 @@ pub async fn get_history(limit: usize) -> Result<Vec<ClipboardEntry>> {
                 custom_name: row.get(5)?,
                 is_favorite: row.get::<_, i64>(6)? == 1,
                 is_pinned: row.get::<_, i64>(7)? == 1,
+                image_width: row.get::<_, Option<i64>>(8)?,
+                image_height: row.get::<_, Option<i64>>(9)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -159,7 +177,7 @@ pub async fn search_history(query: &str) -> Result<Vec<ClipboardEntry>> {
     let search_pattern = format!("%{}%", query);
 
     let mut stmt = conn.prepare(
-        "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned 
+        "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned, image_width, image_height 
          FROM clipboard_history 
          WHERE content LIKE ?1 OR custom_name LIKE ?1 OR app_name LIKE ?1
          ORDER BY is_pinned DESC, timestamp DESC 
@@ -177,6 +195,8 @@ pub async fn search_history(query: &str) -> Result<Vec<ClipboardEntry>> {
                 custom_name: row.get(5)?,
                 is_favorite: row.get::<_, i64>(6)? == 1,
                 is_pinned: row.get::<_, i64>(7)? == 1,
+                image_width: row.get::<_, Option<i64>>(8)?,
+                image_height: row.get::<_, Option<i64>>(9)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
