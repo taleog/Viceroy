@@ -1,6 +1,7 @@
 use crate::app_launcher;
 use crate::clipboard;
 use crate::search_engine;
+use crate::ui::helpers::run_on_main;
 use crate::ui::state::{TableMode, ICON_CACHE, SEARCH_RT, TABLE_DATA, TABLE_MODE, TABLE_RESULTS};
 use crate::ui::table::{reload_table, schedule_table_update_next_tick};
 use base64::engine::general_purpose::STANDARD;
@@ -8,7 +9,6 @@ use base64::Engine;
 use chrono::{Local, LocalResult, TimeZone, Utc};
 use cocoa::base::{id, nil};
 use cocoa::foundation::NSString;
-use dispatch::Queue;
 use objc::{class, msg_send, sel, sel_impl};
 
 pub fn format_clipboard_relative_time(timestamp: i64, now: i64) -> String {
@@ -114,7 +114,7 @@ pub fn show_clipboard_history_view() {
         match clipboard::get_history(200).await {
             Ok(entries) => {
                 let (rows, results) = build_clipboard_history_payload(entries);
-                Queue::main().exec_async(move || {
+                run_on_main(move || {
                     apply_clipboard_history_state(rows, results);
                 });
             }
@@ -163,7 +163,7 @@ fn schedule_app_icon_fetch(path: String, row: isize) {
         if img != nil {
             let img_ptr = img as usize;
             let path_clone = path.clone();
-            Queue::main().exec_async(move || unsafe {
+            run_on_main(move || unsafe {
                 let img_for_main: id = img_ptr as id;
                 let _: id = msg_send![img_for_main, retain];
                 if let Ok(mut cache) = ICON_CACHE.lock() {
