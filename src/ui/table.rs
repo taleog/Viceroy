@@ -288,6 +288,13 @@ pub unsafe fn register_table_delegate_class() {
                 return nil;
             }
             let (raw_title, raw_subtitle) = &entries[row as usize];
+            let row_view: id = msg_send![table, rowViewAtRow:row makeIfNecessary:NO];
+            if row_view != nil {
+                let _: () = msg_send![row_view, setSelectionHighlightStyle:0];
+                let clear_bg: id = msg_send![class!(NSColor), clearColor];
+                let _: () = msg_send![row_view, setBackgroundColor: clear_bg];
+                let _: () = msg_send![row_view, setEmphasized:NO];
+            }
 
             let frame: NSRect = msg_send![table, frame];
             let identifier = NSString::alloc(nil).init_str("MKRowView");

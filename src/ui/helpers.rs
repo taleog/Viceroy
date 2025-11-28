@@ -7,7 +7,7 @@ pub mod style {
     /// Horizontal inset applied to row content within the table.
     pub const ROW_HORIZONTAL_INSET: f64 = 12.0;
     /// Padding above and below each row's card to create breathing room.
-    pub const ROW_VERTICAL_PADDING: f64 = 6.0;
+    pub const ROW_VERTICAL_PADDING: f64 = 8.0;
     /// Visual spacing between rows (equals the combined vertical padding).
     pub const ROW_STACK_SPACING: f64 = ROW_VERTICAL_PADDING * 2.0;
     /// Interior padding before the icon within the row card.
