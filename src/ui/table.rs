@@ -1,6 +1,7 @@
 use crate::dictionary;
 use crate::search_engine;
 use crate::system_commands;
+use crate::ui::helpers::{run_on_main, wrapped_row};
 use crate::ui::state::{
     TableMode, ICON_CACHE, SEARCH_RT, TABLE_DATA, TABLE_MODE, TABLE_RESULTS, TABLE_UPDATE_PENDING,
     WINDOW_SHOWING,
@@ -9,7 +10,6 @@ use crate::usage;
 use crate::web_search;
 use cocoa::base::{id, nil, NO, YES};
 use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
-use dispatch::Queue;
 use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
@@ -44,19 +44,10 @@ pub unsafe fn move_table_selection(down: bool) {
     }
 
     let current_row: isize = msg_send![table, selectedRow];
-    let new_row = if down {
-        if current_row < 0 {
-            0
-        } else if current_row >= num_rows - 1 {
-            0
-        } else {
-            current_row + 1
-        }
-    } else if current_row <= 0 {
-        num_rows - 1
-    } else {
-        current_row - 1
-    };
+    let new_row = wrapped_row(current_row, num_rows, down);
+    if new_row < 0 {
+        return;
+    }
 
     let _: () = msg_send![table, selectRowIndexes:create_index_set(new_row as usize) byExtendingSelection:NO];
     let _: () = msg_send![table, scrollRowToVisible:new_row];
@@ -169,7 +160,7 @@ pub fn schedule_table_update_next_tick() {
     if TABLE_UPDATE_PENDING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    Queue::main().exec_async(move || unsafe {
+    run_on_main(move || unsafe {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
         let windows: id = msg_send![app, windows];
         let count: usize = msg_send![windows, count];
@@ -254,10 +245,8 @@ pub unsafe fn register_table_delegate_class() {
                 if (row as usize) < results.len() {
                     match &results[row as usize] {
                         search_engine::SearchResult::App { path, .. } => {
-                            subtitle = match std::panic::catch_unwind(|| format_pretty_path(path)) {
-                                Ok(s) => s,
-                                Err(_) => String::new(),
-                            };
+                            subtitle = std::panic::catch_unwind(|| format_pretty_path(path))
+                                .unwrap_or_default();
                             type_label_str = "Application".to_string();
                             if let Ok(cache) = ICON_CACHE.lock() {
                                 if let Some(cached) = cache.get(path) {
@@ -268,14 +257,14 @@ pub unsafe fn register_table_delegate_class() {
                                     icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:placeholder_name accessibilityDescription:nil];
                                     let path_clone = path.clone();
                                     let row_index = row;
-                                    SEARCH_RT.spawn_blocking(move || unsafe {
+                                    SEARCH_RT.spawn_blocking(move || {
                                         let workspace: id =
                                             msg_send![class!(NSWorkspace), sharedWorkspace];
                                         let path_str = NSString::alloc(nil).init_str(&path_clone);
                                         let img: id = msg_send![workspace, iconForFile: path_str];
                                         if img != nil {
                                             let img_ptr = img as usize;
-                                            Queue::main().exec_async(move || unsafe {
+                                            run_on_main(move || {
                                                 let img_for_main: id = img_ptr as id;
                                                 let _: id = msg_send![img_for_main, retain];
                                                 if let Ok(mut cache) = ICON_CACHE.lock() {
@@ -296,10 +285,8 @@ pub unsafe fn register_table_delegate_class() {
                             if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
                                 title = name.to_string();
                             }
-                            subtitle = match std::panic::catch_unwind(|| format_pretty_path(path)) {
-                                Ok(s) => s,
-                                Err(_) => String::new(),
-                            };
+                            subtitle = std::panic::catch_unwind(|| format_pretty_path(path))
+                                .unwrap_or_default();
                             type_label_str = "File".to_string();
                             if let Ok(cache) = ICON_CACHE.lock() {
                                 if let Some(cached) = cache.get(path) {
@@ -310,14 +297,14 @@ pub unsafe fn register_table_delegate_class() {
                                     icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:placeholder_name accessibilityDescription:nil];
                                     let path_clone = path.clone();
                                     let row_index = row;
-                                    SEARCH_RT.spawn_blocking(move || unsafe {
+                                    SEARCH_RT.spawn_blocking(move || {
                                         let workspace: id =
                                             msg_send![class!(NSWorkspace), sharedWorkspace];
                                         let path_str = NSString::alloc(nil).init_str(&path_clone);
                                         let img: id = msg_send![workspace, iconForFile: path_str];
                                         if img != nil {
                                             let img_ptr = img as usize;
-                                            Queue::main().exec_async(move || unsafe {
+                                            run_on_main(move || {
                                                 let img_for_main: id = img_ptr as id;
                                                 let _: id = msg_send![img_for_main, retain];
                                                 if let Ok(mut cache) = ICON_CACHE.lock() {
