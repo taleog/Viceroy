@@ -1,4 +1,3 @@
-use dirs;
 use rusqlite::{Connection, Result};
 use std::path::PathBuf;
 

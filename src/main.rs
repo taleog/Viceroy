@@ -1,6 +1,5 @@
 #![allow(unexpected_cfgs)] // `objc` macros gate on `cargo-clippy`; accept it to satisfy check-cfg
 
-use cacao::appkit::window::Window;
 use cacao::appkit::{App, AppDelegate};
 use cocoa::appkit::NSWindowStyleMask;
 use cocoa::base::{id, nil, BOOL, NO, YES};
@@ -12,7 +11,6 @@ use global_hotkey::{
 use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
-use std::sync::{Arc, Mutex};
 
 mod app_launcher;
 mod calculator;
@@ -32,17 +30,11 @@ use ui::clipboard_view::show_clipboard_history_view;
 use ui::state::*;
 use ui::table;
 
-struct ViceroyApp {
-    window: Arc<Mutex<Option<Window>>>,
-    is_showing: Arc<Mutex<bool>>,
-}
+struct ViceroyApp;
 
 impl Default for ViceroyApp {
     fn default() -> Self {
-        Self {
-            window: Arc::new(Mutex::new(None)),
-            is_showing: Arc::new(Mutex::new(false)), // Start hidden
-        }
+        ViceroyApp
     }
 }
 
@@ -154,8 +146,6 @@ impl AppDelegate for ViceroyApp {
 
         // Register global hotkey (Command+Shift+Space)
         std::thread::spawn(move || {
-            use core_foundation::base::TCFType;
-            use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
             use std::time::{Duration, Instant};
 
             match GlobalHotKeyManager::new() {
@@ -180,36 +170,35 @@ impl AppDelegate for ViceroyApp {
                                 if last_escape_check.elapsed() >= Duration::from_millis(50) {
                                     last_escape_check = Instant::now();
 
-                                    unsafe {
-                                        let showing = match WINDOW_SHOWING.lock() {
-                                            Ok(g) => *g,
-                                            Err(_) => false,
-                                        };
-                                        if showing {
-                                            if let Ok(dismiss_flag) = DISMISS_ON_ESCAPE.lock() {
-                                                if *dismiss_flag && CGEventSourceKeyState(1, 53) {
-                                                    // 53 = Escape
-                                                    // Use exec_sync to hide immediately
-                                                    dispatch::Queue::main().exec_sync(|| unsafe {
-                                                        if let Ok(mut w) = WINDOW_SHOWING.lock() {
-                                                            *w = false;
-                                                        }
-                                                        let app: id = msg_send![
-                                                            class!(NSApplication),
-                                                            sharedApplication
-                                                        ];
-                                                        let windows: id = msg_send![app, windows];
-                                                        let count: usize =
-                                                            msg_send![windows, count];
-                                                        if count > 0 {
-                                                            let window: id =
-                                                                msg_send![windows, objectAtIndex:0];
-                                                            let _: () =
-                                                                msg_send![window, orderOut: nil];
-                                                        }
-                                                    });
-                                                    std::thread::sleep(Duration::from_millis(300));
-                                                }
+                                    let showing = match WINDOW_SHOWING.lock() {
+                                        Ok(g) => *g,
+                                        Err(_) => false,
+                                    };
+                                    if showing {
+                                        if let Ok(dismiss_flag) = DISMISS_ON_ESCAPE.lock() {
+                                            if *dismiss_flag
+                                                && unsafe { CGEventSourceKeyState(1, 53) }
+                                            {
+                                                // 53 = Escape
+                                                // Use exec_sync to hide immediately
+                                                dispatch::Queue::main().exec_sync(|| unsafe {
+                                                    if let Ok(mut w) = WINDOW_SHOWING.lock() {
+                                                        *w = false;
+                                                    }
+                                                    let app: id = msg_send![
+                                                        class!(NSApplication),
+                                                        sharedApplication
+                                                    ];
+                                                    let windows: id = msg_send![app, windows];
+                                                    let count: usize = msg_send![windows, count];
+                                                    if count > 0 {
+                                                        let window: id =
+                                                            msg_send![windows, objectAtIndex:0];
+                                                        let _: () =
+                                                            msg_send![window, orderOut: nil];
+                                                    }
+                                                });
+                                                std::thread::sleep(Duration::from_millis(300));
                                             }
                                         }
                                     }
@@ -729,11 +718,6 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     let bg_color: id = msg_send![class!(NSColor), clearColor];
     let _: () = msg_send![table, setBackgroundColor: bg_color];
     let _: () = msg_send![table, setGridStyleMask: 0]; // No grid
-
-    // Vibrant blue selection color like Viceroy
-    let selection_color: id =
-        msg_send![class!(NSColor), colorWithCalibratedRed:0.04 green:0.52 blue:1.0 alpha:1.0]; // #0A84FF
-                                                                                               // Note: NSTableView uses system selection colors, but we can customize via delegate
     let _: () = msg_send![table, setBackgroundColor: bg_color];
 
     // Enable alternating row colors set to clear for consistent look
@@ -827,82 +811,6 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
 
     // Initial load
     let _: () = msg_send![table, reloadData];
-}
-
-unsafe fn is_cursor_at_end(text_field: &Object) -> bool {
-    // Check if cursor is at the end of the text
-    let app: id = msg_send![class!(NSApplication), sharedApplication];
-    let windows: id = msg_send![app, windows];
-    let count: usize = msg_send![windows, count];
-    if count == 0 {
-        return false;
-    }
-    let window: id = msg_send![windows, objectAtIndex:0];
-    let text_editor: id =
-        msg_send![window, fieldEditor:YES forObject:text_field as *const Object as id];
-    if text_editor == nil {
-        return false;
-    }
-
-    let selected_range: cocoa::foundation::NSRange = msg_send![text_editor, selectedRange];
-    let string_value: id = msg_send![text_field as *const Object as id, stringValue];
-    let text_length: usize = msg_send![string_value, length];
-
-    // Cursor is at end if selection starts at text length
-    selected_range.location == text_length as u64
-}
-
-unsafe fn complete_from_selection() {
-    // Get the first result's title and autocomplete the search field
-    let results = match TABLE_RESULTS.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-    if results.is_empty() {
-        return;
-    }
-
-    // Get the title of the first result
-    let completion_text = match &results[0] {
-        search_engine::SearchResult::App { name, .. } => name.clone(),
-        search_engine::SearchResult::File { name, .. } => name.clone(),
-        search_engine::SearchResult::Clipboard {
-            custom_name,
-            content,
-            ..
-        } => custom_name
-            .clone()
-            .unwrap_or_else(|| content.chars().take(40).collect()),
-        _ => return,
-    };
-
-    drop(results);
-
-    // Update the search field
-    let app: id = msg_send![class!(NSApplication), sharedApplication];
-    let windows: id = msg_send![app, windows];
-    let count: usize = msg_send![windows, count];
-    if count == 0 {
-        return;
-    }
-    let window: id = msg_send![windows, objectAtIndex:0];
-    let content: id = msg_send![window, contentView];
-    let subviews: id = msg_send![content, subviews];
-    let sv_count: usize = msg_send![subviews, count];
-    if sv_count < 2 {
-        return;
-    }
-    // Container is at index 1
-    let container: id = msg_send![subviews, objectAtIndex:1];
-    let container_subviews: id = msg_send![container, subviews];
-    let csv_count: usize = msg_send![container_subviews, count];
-    if csv_count == 0 {
-        return;
-    }
-    let search_field: id = msg_send![container_subviews, objectAtIndex:csv_count-1];
-
-    let completion_ns = NSString::alloc(nil).init_str(&completion_text);
-    let _: () = msg_send![search_field, setStringValue: completion_ns];
 }
 
 // Search field delegate for live updates
@@ -1137,99 +1045,6 @@ unsafe fn get_current_search_query() -> Option<String> {
         }
     } else {
         None
-    }
-}
-
-unsafe fn update_autocomplete_preview(current_query: &str) {
-    if current_query.is_empty() {
-        return;
-    }
-
-    // Get the first result
-    let results = match TABLE_RESULTS.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-    if results.is_empty() {
-        return;
-    }
-
-    // Get completion text from first result
-    let completion = match &results[0] {
-        search_engine::SearchResult::App { name, .. } => name.clone(),
-        search_engine::SearchResult::File { name, .. } => {
-            // Just use filename without path
-            name.split('/').last().unwrap_or(name).to_string()
-        }
-        search_engine::SearchResult::Clipboard {
-            custom_name,
-            content,
-            ..
-        } => custom_name
-            .clone()
-            .unwrap_or_else(|| content.chars().take(40).collect()),
-        search_engine::SearchResult::Calculator { result, .. } => result.clone(),
-        _ => return,
-    };
-    drop(results);
-
-    // Check if completion starts with query (case insensitive)
-    let query_lower = current_query.to_lowercase();
-    let completion_lower = completion.to_lowercase();
-
-    if !completion_lower.starts_with(&query_lower) {
-        return;
-    }
-
-    // Get the remaining part (what we want to show in gray)
-    let remaining = &completion[current_query.len()..];
-    if remaining.is_empty() {
-        return;
-    }
-
-    // Update the search field with attributed string showing completion in gray
-    let app: id = msg_send![class!(NSApplication), sharedApplication];
-    let windows: id = msg_send![app, windows];
-    let count: usize = msg_send![windows, count];
-    if count == 0 {
-        return;
-    }
-    let window: id = msg_send![windows, objectAtIndex:0];
-    let content_view: id = msg_send![window, contentView];
-    let subviews: id = msg_send![content_view, subviews];
-    let sv_count: usize = msg_send![subviews, count];
-    if sv_count < 2 {
-        return;
-    }
-    // Container is at index 1
-    let container: id = msg_send![subviews, objectAtIndex:1];
-    let container_subviews: id = msg_send![container, subviews];
-    let csv_count: usize = msg_send![container_subviews, count];
-    if csv_count == 0 {
-        return;
-    }
-    let search_field: id = msg_send![container_subviews, objectAtIndex:csv_count-1];
-
-    // Create attributed string with typed part in white + completion in gray
-    let full_text = format!("{}{}", current_query, remaining);
-    let attributed_string: id = msg_send![class!(NSMutableAttributedString), alloc];
-    let ns_full_text = NSString::alloc(nil).init_str(&full_text);
-    let attributed_string: id = msg_send![attributed_string, initWithString:ns_full_text];
-
-    // Make completion part gray
-    let gray_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.35f64];
-    let range = cocoa::foundation::NSRange::new(current_query.len() as u64, remaining.len() as u64);
-    let color_key = NSString::alloc(nil).init_str("NSColor");
-    let _: () = msg_send![attributed_string, addAttribute:color_key value:gray_color range:range];
-
-    // Set the attributed string
-    let _: () = msg_send![search_field, setAttributedStringValue:attributed_string];
-
-    // Move cursor to end of typed text (not completion)
-    let text_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
-    if text_editor != nil {
-        let typed_range = cocoa::foundation::NSRange::new(current_query.len() as u64, 0);
-        let _: () = msg_send![text_editor, setSelectedRange:typed_range];
     }
 }
 
@@ -1610,7 +1425,7 @@ unsafe fn bring_window_to_front_with_search_reset(window: id) {
     }
 }
 
-unsafe fn setup_app_observer(ns_window: id) {
+unsafe fn setup_app_observer(_ns_window: id) {
     // Create observer class for app deactivation (click away)
     if objc::runtime::Class::get("MKAppObserver").is_some() {
         return;
@@ -1662,7 +1477,8 @@ unsafe fn setup_app_observer(ns_window: id) {
     // Register for deactivation notifications
     let center: id = msg_send![class!(NSNotificationCenter), defaultCenter];
     let app: id = msg_send![class!(NSApplication), sharedApplication];
-    let name: id = msg_send![class!(NSString), stringWithUTF8String: "NSApplicationDidResignActiveNotification\0".as_ptr()];
+    let name_cstr = c"NSApplicationDidResignActiveNotification";
+    let name: id = msg_send![class!(NSString), stringWithUTF8String: name_cstr.as_ptr()];
     let _: () = msg_send![center, addObserver:observer selector:sel!(appDidResignActive:) name:name object:app];
 }
 
@@ -1704,41 +1520,37 @@ unsafe fn setup_window_delegate(ns_window: id) {
         }
     }
 
-    extern "C" fn window_did_resign_key(_this: &Object, _cmd: Sel, notification: id) {
+    extern "C" fn window_did_resign_key(_this: &Object, _cmd: Sel, _notification: id) {
         // Window lost key focus - hide it after brief delay
-        unsafe {
-            // Window resignKey notification received
+        // Dispatch to main thread after small delay
+        dispatch::Queue::main().exec_after(std::time::Duration::from_millis(100), move || {
+            unsafe {
+                // Check preference (best-effort)
+                let dismiss_click = match DISMISS_ON_CLICK_AWAY.lock() {
+                    Ok(g) => *g,
+                    Err(poisoned) => *poisoned.into_inner(),
+                };
+                if !dismiss_click {
+                    return;
+                }
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                let windows: id = msg_send![app, windows];
+                let count: usize = msg_send![windows, count];
+                if count > 0 {
+                    let window: id = msg_send![windows, objectAtIndex:0];
+                    let is_key: BOOL = msg_send![window, isKeyWindow];
+                    let is_visible: BOOL = msg_send![window, isVisible];
 
-            // Dispatch to main thread after small delay
-            dispatch::Queue::main().exec_after(std::time::Duration::from_millis(100), move || {
-                unsafe {
-                    // Check preference (best-effort)
-                    let dismiss_click = match DISMISS_ON_CLICK_AWAY.lock() {
-                        Ok(g) => *g,
-                        Err(poisoned) => *poisoned.into_inner(),
-                    };
-                    if !dismiss_click {
-                        return;
-                    }
-                    let app: id = msg_send![class!(NSApplication), sharedApplication];
-                    let windows: id = msg_send![app, windows];
-                    let count: usize = msg_send![windows, count];
-                    if count > 0 {
-                        let window: id = msg_send![windows, objectAtIndex:0];
-                        let is_key: BOOL = msg_send![window, isKeyWindow];
-                        let is_visible: BOOL = msg_send![window, isVisible];
-
-                        // Only hide if window is visible but not key
-                        if is_visible == YES && is_key == NO {
-                            if let Ok(mut w) = WINDOW_SHOWING.lock() {
-                                *w = false;
-                            }
-                            let _: () = msg_send![window, orderOut: nil];
+                    // Only hide if window is visible but not key
+                    if is_visible == YES && is_key == NO {
+                        if let Ok(mut w) = WINDOW_SHOWING.lock() {
+                            *w = false;
                         }
+                        let _: () = msg_send![window, orderOut: nil];
                     }
                 }
-            });
-        }
+            }
+        });
     }
 
     // Add protocol conformance
@@ -1769,6 +1581,6 @@ fn main() {
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Error)
         .init();
-    let app = App::new("com.viceroy.app", ViceroyApp::default());
+    let app = App::new("com.viceroy.app", ViceroyApp);
     app.run();
 }

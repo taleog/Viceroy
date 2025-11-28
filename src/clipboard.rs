@@ -204,67 +204,6 @@ pub async fn search_history(query: &str) -> Result<Vec<ClipboardEntry>> {
     Ok(entries)
 }
 
-pub async fn rename_entry(id: i64, new_name: &str) -> Result<()> {
-    let conn = database::get_connection()?;
-
-    conn.execute(
-        "UPDATE clipboard_history SET custom_name = ?1 WHERE id = ?2",
-        params![new_name, id],
-    )?;
-
-    Ok(())
-}
-
-pub async fn toggle_favorite(id: i64) -> Result<()> {
-    let conn = database::get_connection()?;
-
-    conn.execute(
-        "UPDATE clipboard_history SET is_favorite = NOT is_favorite WHERE id = ?1",
-        params![id],
-    )?;
-
-    Ok(())
-}
-
-pub async fn toggle_pin(id: i64) -> Result<()> {
-    let conn = database::get_connection()?;
-
-    conn.execute(
-        "UPDATE clipboard_history SET is_pinned = NOT is_pinned WHERE id = ?1",
-        params![id],
-    )?;
-
-    Ok(())
-}
-
-pub async fn delete_entry(id: i64) -> Result<()> {
-    let conn = database::get_connection()?;
-
-    // Check if entry is pinned
-    let mut stmt = conn.prepare("SELECT is_pinned FROM clipboard_history WHERE id = ?1")?;
-    let is_pinned: i64 = stmt.query_row([id], |row| row.get(0))?;
-
-    if is_pinned == 1 {
-        return Err(anyhow::anyhow!(
-            "Cannot delete pinned item. Unpin it first."
-        ));
-    }
-
-    conn.execute("DELETE FROM clipboard_history WHERE id = ?1", params![id])?;
-
-    Ok(())
-}
-
-pub async fn toggle_monitor() -> Result<bool> {
-    let mut paused = MONITOR_PAUSED.lock().unwrap();
-    *paused = !*paused;
-    Ok(*paused)
-}
-
-pub async fn is_monitor_paused() -> Result<bool> {
-    Ok(*MONITOR_PAUSED.lock().unwrap())
-}
-
 pub async fn paste_to_active_app(content: &str) -> Result<()> {
     // First, copy to clipboard
     let mut clipboard = Clipboard::new()?;

@@ -245,10 +245,8 @@ pub unsafe fn register_table_delegate_class() {
                 if (row as usize) < results.len() {
                     match &results[row as usize] {
                         search_engine::SearchResult::App { path, .. } => {
-                            subtitle = match std::panic::catch_unwind(|| format_pretty_path(path)) {
-                                Ok(s) => s,
-                                Err(_) => String::new(),
-                            };
+                            subtitle = std::panic::catch_unwind(|| format_pretty_path(path))
+                                .unwrap_or_default();
                             type_label_str = "Application".to_string();
                             if let Ok(cache) = ICON_CACHE.lock() {
                                 if let Some(cached) = cache.get(path) {
@@ -259,14 +257,14 @@ pub unsafe fn register_table_delegate_class() {
                                     icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:placeholder_name accessibilityDescription:nil];
                                     let path_clone = path.clone();
                                     let row_index = row;
-                                    SEARCH_RT.spawn_blocking(move || unsafe {
+                                    SEARCH_RT.spawn_blocking(move || {
                                         let workspace: id =
                                             msg_send![class!(NSWorkspace), sharedWorkspace];
                                         let path_str = NSString::alloc(nil).init_str(&path_clone);
                                         let img: id = msg_send![workspace, iconForFile: path_str];
                                         if img != nil {
                                             let img_ptr = img as usize;
-                                            run_on_main(move || unsafe {
+                                            run_on_main(move || {
                                                 let img_for_main: id = img_ptr as id;
                                                 let _: id = msg_send![img_for_main, retain];
                                                 if let Ok(mut cache) = ICON_CACHE.lock() {
@@ -287,10 +285,8 @@ pub unsafe fn register_table_delegate_class() {
                             if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
                                 title = name.to_string();
                             }
-                            subtitle = match std::panic::catch_unwind(|| format_pretty_path(path)) {
-                                Ok(s) => s,
-                                Err(_) => String::new(),
-                            };
+                            subtitle = std::panic::catch_unwind(|| format_pretty_path(path))
+                                .unwrap_or_default();
                             type_label_str = "File".to_string();
                             if let Ok(cache) = ICON_CACHE.lock() {
                                 if let Some(cached) = cache.get(path) {
@@ -301,14 +297,14 @@ pub unsafe fn register_table_delegate_class() {
                                     icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:placeholder_name accessibilityDescription:nil];
                                     let path_clone = path.clone();
                                     let row_index = row;
-                                    SEARCH_RT.spawn_blocking(move || unsafe {
+                                    SEARCH_RT.spawn_blocking(move || {
                                         let workspace: id =
                                             msg_send![class!(NSWorkspace), sharedWorkspace];
                                         let path_str = NSString::alloc(nil).init_str(&path_clone);
                                         let img: id = msg_send![workspace, iconForFile: path_str];
                                         if img != nil {
                                             let img_ptr = img as usize;
-                                            run_on_main(move || unsafe {
+                                            run_on_main(move || {
                                                 let img_for_main: id = img_ptr as id;
                                                 let _: id = msg_send![img_for_main, retain];
                                                 if let Ok(mut cache) = ICON_CACHE.lock() {

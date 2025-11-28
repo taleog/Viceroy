@@ -141,7 +141,7 @@ pub async fn execute(command: &str) -> Result<String> {
         }
         "toggle_hidden_files" => {
             Command::new("defaults")
-                .args(&[
+                .args([
                     "write",
                     "com.apple.finder",
                     "AppleShowAllFiles",

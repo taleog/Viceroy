@@ -163,7 +163,7 @@ fn schedule_app_icon_fetch(path: String, row: isize) {
         if img != nil {
             let img_ptr = img as usize;
             let path_clone = path.clone();
-            run_on_main(move || unsafe {
+            run_on_main(move || {
                 let img_for_main: id = img_ptr as id;
                 let _: id = msg_send![img_for_main, retain];
                 if let Ok(mut cache) = ICON_CACHE.lock() {
