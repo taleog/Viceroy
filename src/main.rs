@@ -12,6 +12,8 @@ use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 lazy_static! {
     static ref TABLE_DATA: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // Start empty like Viceroy
     static ref TABLE_RESULTS: Mutex<Vec<search_engine::SearchResult>> = Mutex::new(Vec::new());
@@ -19,6 +21,14 @@ lazy_static! {
     static ref WINDOW_SHOWING: Mutex<bool> = Mutex::new(false);
     static ref DISMISS_ON_ESCAPE: Mutex<bool> = Mutex::new(true);
     static ref DISMISS_ON_CLICK_AWAY: Mutex<bool> = Mutex::new(true);
+}
+
+lazy_static! {
+    static ref ICON_CACHE: Mutex<HashMap<String, usize>> = Mutex::new(HashMap::new());
+}
+
+lazy_static! {
+    static ref TABLE_UPDATE_PENDING: AtomicBool = AtomicBool::new(false);
 }
 
 mod app_launcher;
@@ -52,8 +62,12 @@ impl AppDelegate for ViceroyApp {
     fn did_finish_launching(&self) {
         // Load settings early so UI reflects preferences
         if let Ok(s) = settings::load() {
-            *DISMISS_ON_ESCAPE.lock().unwrap() = s.dismiss_on_escape;
-            *DISMISS_ON_CLICK_AWAY.lock().unwrap() = s.dismiss_on_click_away;
+            if let Ok(mut d) = DISMISS_ON_ESCAPE.lock() {
+                *d = s.dismiss_on_escape;
+            }
+            if let Ok(mut d2) = DISMISS_ON_CLICK_AWAY.lock() {
+                *d2 = s.dismiss_on_click_away;
+            }
         }
         unsafe {
             // Create a custom window class that can become key even when borderless
@@ -179,33 +193,34 @@ impl AppDelegate for ViceroyApp {
                                     last_escape_check = Instant::now();
 
                                     unsafe {
-                                        let showing = *WINDOW_SHOWING.lock().unwrap();
+                                        let showing = match WINDOW_SHOWING.lock() {
+                                            Ok(g) => *g,
+                                            Err(_) => false,
+                                        };
                                         if showing {
-                                            if *DISMISS_ON_ESCAPE.lock().unwrap()
-                                                && CGEventSourceKeyState(1, 53)
-                                            {
-                                                // 53 = Escape
-                                                drop(showing); // Release lock before dispatch
-
-                                                // Use exec_sync to hide immediately
-                                                dispatch::Queue::main().exec_sync(|| unsafe {
-                                                    *WINDOW_SHOWING.lock().unwrap() = false;
-                                                    let app: id = msg_send![
-                                                        class!(NSApplication),
-                                                        sharedApplication
-                                                    ];
-                                                    let windows: id = msg_send![app, windows];
-                                                    let count: usize = msg_send![windows, count];
-                                                    if count > 0 {
-                                                        let window: id =
-                                                            msg_send![windows, objectAtIndex:0];
-                                                        let _: () =
-                                                            msg_send![window, orderOut: nil];
-                                                    } else {
-                                                        // No windows found
-                                                    }
-                                                });
-                                                std::thread::sleep(Duration::from_millis(300));
+                                            if let Ok(dismiss_flag) = DISMISS_ON_ESCAPE.lock() {
+                                                if *dismiss_flag && CGEventSourceKeyState(1, 53) {
+                                                    // 53 = Escape
+                                                    // Use exec_sync to hide immediately
+                                                    dispatch::Queue::main().exec_sync(|| unsafe {
+                                                        if let Ok(mut w) = WINDOW_SHOWING.lock() {
+                                                            *w = false;
+                                                        }
+                                                        let app: id = msg_send![
+                                                            class!(NSApplication),
+                                                            sharedApplication
+                                                        ];
+                                                        let windows: id = msg_send![app, windows];
+                                                        let count: usize = msg_send![windows, count];
+                                                        if count > 0 {
+                                                            let window: id =
+                                                                msg_send![windows, objectAtIndex:0];
+                                                            let _: () =
+                                                                msg_send![window, orderOut: nil];
+                                                        }
+                                                    });
+                                                    std::thread::sleep(Duration::from_millis(300));
+                                                }
                                             }
                                         }
                                     }
@@ -219,14 +234,20 @@ impl AppDelegate for ViceroyApp {
                                         continue;
                                     }
                                     last_toggle = Instant::now();
-                                    let mut showing = WINDOW_SHOWING.lock().unwrap();
-                                    let should_show = !*showing;
-                                    *showing = should_show;
+                                    let should_show = match WINDOW_SHOWING.lock() {
+                                        Ok(mut guard) => {
+                                            let new = !*guard;
+                                            *guard = new;
+                                            new
+                                        }
+                                        Err(_) => {
+                                            // Failed to lock - default to showing
+                                            true
+                                        }
+                                    };
 
                                     // Dispatch to main queue
                                     unsafe {
-                                        let queue = dispatch::ffi::dispatch_get_main_queue();
-
                                         if should_show {
                                             dispatch::Queue::main().exec_async(move || {
                                                 let app: id = msg_send![class!(NSApplication), sharedApplication];
@@ -254,9 +275,13 @@ impl AppDelegate for ViceroyApp {
                                                             let empty: id = NSString::alloc(nil).init_str("");
                                                             let _: () = msg_send![search_field, setStringValue: empty];
 
-                                                            TABLE_RESULTS.lock().unwrap().clear();
-                                                            TABLE_DATA.lock().unwrap().clear();
-                                                            reload_table();
+                                                            if let Ok(mut tr) = TABLE_RESULTS.lock() {
+                                                                tr.clear();
+                                                            }
+                                                            if let Ok(mut td) = TABLE_DATA.lock() {
+                                                                td.clear();
+                                                            }
+                                                            schedule_table_update_next_tick();
 
                                                             // Ensure white insertion point before typing
                                                             let field_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
@@ -420,16 +445,20 @@ unsafe fn register_escape_textfield_class() {
     extern "C" fn cancel_operation(_this: &Object, _cmd: Sel, _sender: id) {
         // cancelOperation: is called when Escape is pressed
         unsafe {
-            if *DISMISS_ON_ESCAPE.lock().unwrap() {
-                // Update global state
-                *WINDOW_SHOWING.lock().unwrap() = false;
-                // Hide the window
-                let app: id = msg_send![class!(NSApplication), sharedApplication];
-                let windows: id = msg_send![app, windows];
-                let count: usize = msg_send![windows, count];
-                if count > 0 {
-                    let window: id = msg_send![windows, objectAtIndex:0];
-                    let _: () = msg_send![window, orderOut: nil];
+            if let Ok(dismiss) = DISMISS_ON_ESCAPE.lock() {
+                if *dismiss {
+                    // Update global state
+                    if let Ok(mut w) = WINDOW_SHOWING.lock() {
+                        *w = false;
+                    }
+                    // Hide the window
+                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let windows: id = msg_send![app, windows];
+                    let count: usize = msg_send![windows, count];
+                    if count > 0 {
+                        let window: id = msg_send![windows, objectAtIndex:0];
+                        let _: () = msg_send![window, orderOut: nil];
+                    }
                 }
             }
         }
@@ -653,7 +682,7 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
 
     // Scroll view container with padding
     let scroll: id = msg_send![class!(NSScrollView), alloc];
-    let table_height = bounds.size.height - 116.0; // below search field with proper spacing
+    let table_height = bounds.size.height - 116.0 - 22.0; // below search field and above footer
     let frame = NSRect::new(
         NSPoint::new(0.0, 10.0), // Reduced bottom margin
         NSSize::new(bounds.size.width, table_height),
@@ -727,6 +756,53 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     let _: () = msg_send![scroll, setDocumentView: table];
     let _: () = msg_send![content_view, addSubview: scroll];
 
+    // Footer hint bar
+    let footer_height = 22.0;
+    let footer_frame = NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(bounds.size.width, footer_height),
+    );
+    let footer: id = msg_send![class!(NSView), alloc];
+    let footer: id = msg_send![footer, initWithFrame: footer_frame];
+    let _: () = msg_send![footer, setWantsLayer: YES];
+    let footer_layer: id = msg_send![footer, layer];
+    let footer_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.1f64 alpha:0.6f64];
+    let footer_bg_cg: id = msg_send![footer_bg, CGColor];
+    let _: () = msg_send![footer_layer, setBackgroundColor: footer_bg_cg];
+
+    // Left label (static hint)
+    let left_label: id = msg_send![class!(NSTextField), alloc];
+    let left_label: id = msg_send![left_label, initWithFrame: NSRect::new(NSPoint::new(12.0, 3.0), NSSize::new(200.0, 16.0))];
+    let _: () = msg_send![left_label, setBezeled: NO];
+    let _: () = msg_send![left_label, setEditable: NO];
+    let _: () = msg_send![left_label, setDrawsBackground: NO];
+    let _: () = msg_send![left_label, setBordered: NO];
+    let left_font: id = msg_send![class!(NSFont), systemFontOfSize:11.0];
+    let _: () = msg_send![left_label, setFont: left_font];
+    let left_text = NSString::alloc(nil).init_str("TAB  Next result");
+    let _: () = msg_send![left_label, setStringValue: left_text];
+    let left_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
+    let _: () = msg_send![left_label, setTextColor: left_color];
+    let _: () = msg_send![footer, addSubview: left_label];
+
+    // Right label (static for now)
+    let right_label: id = msg_send![class!(NSTextField), alloc];
+    let right_label: id = msg_send![right_label, initWithFrame: NSRect::new(NSPoint::new(bounds.size.width - 180.0, 3.0), NSSize::new(160.0, 16.0))];
+    let _: () = msg_send![right_label, setBezeled: NO];
+    let _: () = msg_send![right_label, setEditable: NO];
+    let _: () = msg_send![right_label, setDrawsBackground: NO];
+    let _: () = msg_send![right_label, setBordered: NO];
+    let _: () = msg_send![right_label, setAlignment: 2];
+    let right_font: id = msg_send![class!(NSFont), systemFontOfSize:11.0];
+    let _: () = msg_send![right_label, setFont: right_font];
+    let right_text = NSString::alloc(nil).init_str("↩  Open selected");
+    let _: () = msg_send![right_label, setStringValue: right_text];
+    let right_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
+    let _: () = msg_send![right_label, setTextColor: right_color];
+    let _: () = msg_send![footer, addSubview: right_label];
+
+    let _: () = msg_send![content_view, addSubview: footer];
+
     // Initial load
     let _: () = msg_send![table, reloadData];
 }
@@ -755,7 +831,10 @@ unsafe fn is_cursor_at_end(text_field: &Object) -> bool {
 
 unsafe fn complete_from_selection() {
     // Get the first result's title and autocomplete the search field
-    let results = TABLE_RESULTS.lock().unwrap();
+    let results = match TABLE_RESULTS.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
     if results.is_empty() {
         return;
     }
@@ -877,7 +956,10 @@ unsafe fn activate_selected_row_or_first() {
 
 unsafe fn perform_result_action(index: usize) {
     // Get selected result and perform an appropriate action
-    let results = TABLE_RESULTS.lock().unwrap().clone();
+    let results = match TABLE_RESULTS.lock() {
+        Ok(g) => g.clone(),
+        Err(_) => return,
+    };
     if index >= results.len() {
         return;
     }
@@ -924,7 +1006,10 @@ unsafe fn perform_result_action(index: usize) {
     }
 
     // Hide the launcher window after action
-    *WINDOW_SHOWING.lock().unwrap() = false;
+    match WINDOW_SHOWING.lock() {
+        Ok(mut g) => { *g = false; }
+        Err(_) => { /* poisoned - best-effort continue */ }
+    }
     let app: id = msg_send![class!(NSApplication), sharedApplication];
     let windows: id = msg_send![app, windows];
     let count: usize = msg_send![windows, count];
@@ -941,76 +1026,167 @@ unsafe fn register_table_delegate_class() {
     let mut decl = ClassDecl::new("MKTableDelegate", class!(NSObject)).unwrap();
 
     extern "C" fn rows(_this: &Object, _cmd: Sel, _table: id) -> isize {
-        TABLE_DATA.lock().unwrap().len() as isize
+        match TABLE_DATA.lock() {
+            Ok(g) => g.len() as isize,
+            Err(_) => 0,
+        }
     }
 
     extern "C" fn view_for_row(_this: &Object, _cmd: Sel, table: id, _col: id, row: isize) -> id {
         unsafe {
-            let entries = TABLE_DATA.lock().unwrap();
-            let results = TABLE_RESULTS.lock().unwrap();
+            eprintln!("[viceroy] tableView:viewForTableColumn:row: called for row={}", row);
+            let entries = match TABLE_DATA.lock() {
+                Ok(g) => g,
+                Err(_) => return nil,
+            };
+            let results = match TABLE_RESULTS.lock() {
+                Ok(g) => g,
+                Err(_) => return nil,
+            };
             if row < 0 || row as usize >= entries.len() {
                 return nil;
             }
-            let (title, subtitle) = &entries[row as usize];
+            let (raw_title, raw_subtitle) = &entries[row as usize];
 
             let frame: NSRect = msg_send![table, frame];
-            let container: id = msg_send![class!(NSView), alloc];
-            let container: id = msg_send![container, initWithFrame: NSRect::new(NSPoint::new(0.0,0.0), NSSize::new(frame.size.width, 60.0))];
-            
-            // Clean row style (no background card)
-            let _: () = msg_send![container, setWantsLayer: YES];
-            let container_layer: id = msg_send![container, layer];
-            // Removed background color and corner radius for cleaner native look
+            let identifier = NSString::alloc(nil).init_str("MKRowView");
+            let mut container: id = msg_send![table, makeViewWithIdentifier:identifier owner:nil];
 
-            // Determine icon based on result type and get type label
-            let (icon_image, type_label): (id, &str) = if (row as usize) < results.len() {
-                let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+            // Determine display title/subtitle and icon/type without performing heavy UI work
+            let mut title = raw_title.clone();
+            let mut subtitle = raw_subtitle.clone();
+            let mut type_label_str = String::new();
+            let mut icon_image: id = nil;
+
+            if (row as usize) < results.len() {
                 match &results[row as usize] {
                     search_engine::SearchResult::App { path, .. } => {
-                        // Get actual app icon
-                        let path_str = NSString::alloc(nil).init_str(path);
-                        (msg_send![workspace, iconForFile: path_str], "App")
-                    },
+                        subtitle = match std::panic::catch_unwind(|| format_pretty_path(path)) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                eprintln!("[viceroy] format_pretty_path panicked for path: {}", path);
+                                String::new()
+                            }
+                        };
+                        type_label_str = "Application".to_string();
+                        // Try cache first (stored as usize pointer)
+                        if let Ok(cache) = ICON_CACHE.lock() {
+                            if let Some(cached) = cache.get(path) {
+                                icon_image = *cached as id;
+                            } else {
+                                drop(cache);
+                            // Use a lightweight placeholder synchronously and fetch real icon asynchronously
+                            let placeholder_name = NSString::alloc(nil).init_str("app");
+                            icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:placeholder_name accessibilityDescription:nil];
+                            // Spawn background task to fetch and cache the real icon
+                            let path_clone = path.clone();
+                            let row_index = row;
+                            SEARCH_RT.spawn_blocking(move || {
+                                unsafe {
+                                    let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+                                    let path_str = NSString::alloc(nil).init_str(&path_clone);
+                                    let img: id = msg_send![workspace, iconForFile: path_str];
+                                    if img != nil {
+                                        // Convert pointer to usize (Send) and dispatch to main thread
+                                        let img_ptr = img as usize;
+                                        dispatch::Queue::main().exec_async(move || {
+                                            unsafe {
+                                                let img_for_main: id = img_ptr as id;
+                                                let _: id = msg_send![img_for_main, retain];
+                                                if let Ok(mut cache) = ICON_CACHE.lock() {
+                                                    cache.insert(path_clone.clone(), img_for_main as usize);
+                                                }
+                                                set_icon_for_row_from_cache(&path_clone, row_index);
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                                }
+                            }
+                    }
                     search_engine::SearchResult::File { path, .. } => {
-                        // Get file icon
-                        let path_str = NSString::alloc(nil).init_str(path);
-                        (msg_send![workspace, iconForFile: path_str], "File")
-                    },
+                        let p = std::path::Path::new(path);
+                        if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                            title = name.to_string();
+                        }
+                        subtitle = match std::panic::catch_unwind(|| format_pretty_path(path)) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                eprintln!("[viceroy] format_pretty_path panicked for path: {}", path);
+                                String::new()
+                            }
+                        };
+                        type_label_str = "File".to_string();
+                        if let Ok(cache) = ICON_CACHE.lock() {
+                            if let Some(cached) = cache.get(path) {
+                                icon_image = *cached as id;
+                            } else {
+                                drop(cache);
+                            // Placeholder
+                            let placeholder_name = NSString::alloc(nil).init_str("doc");
+                            icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:placeholder_name accessibilityDescription:nil];
+                            // Fetch in background
+                            let path_clone = path.clone();
+                            let row_index = row;
+                            SEARCH_RT.spawn_blocking(move || {
+                                unsafe {
+                                    let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+                                    let path_str = NSString::alloc(nil).init_str(&path_clone);
+                                    let img: id = msg_send![workspace, iconForFile: path_str];
+                                    if img != nil {
+                                        let img_ptr = img as usize;
+                                        dispatch::Queue::main().exec_async(move || {
+                                            unsafe {
+                                                let img_for_main: id = img_ptr as id;
+                                                let _: id = msg_send![img_for_main, retain];
+                                                if let Ok(mut cache) = ICON_CACHE.lock() {
+                                                    cache.insert(path_clone.clone(), img_for_main as usize);
+                                                }
+                                                set_icon_for_row_from_cache(&path_clone, row_index);
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                            }
+                        }
+                    }
                     search_engine::SearchResult::Clipboard { .. } => {
-                        // Use SF Symbol for clipboard
                         let symbol_name = NSString::alloc(nil).init_str("doc.on.clipboard");
-                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Clipboard")
-                    },
+                        icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
+                        type_label_str = "Clipboard".to_string();
+                    }
                     search_engine::SearchResult::Calculator { .. } => {
-                        // Use SF Symbol for calculator
                         let symbol_name = NSString::alloc(nil).init_str("function");
-                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Calculator")
-                    },
+                        icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
+                        type_label_str = "Calculator".to_string();
+                    }
                     search_engine::SearchResult::Emoji { .. } => {
-                        // Use SF Symbol for emoji
                         let symbol_name = NSString::alloc(nil).init_str("face.smiling");
-                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Emoji")
-                    },
+                        icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
+                        type_label_str = "Emoji".to_string();
+                    }
                     search_engine::SearchResult::Command { .. } => {
-                        // Use SF Symbol for system commands
                         let symbol_name = NSString::alloc(nil).init_str("terminal");
-                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Command")
-                    },
+                        icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
+                        type_label_str = "Command".to_string();
+                    }
                     search_engine::SearchResult::Dictionary { .. } => {
-                        // Use SF Symbol for dictionary
                         let symbol_name = NSString::alloc(nil).init_str("book");
-                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Dictionary")
-                    },
+                        icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
+                        type_label_str = "Dictionary".to_string();
+                    }
                     search_engine::SearchResult::WebSearch { .. } => {
-                        // Use SF Symbol for web search
                         let symbol_name = NSString::alloc(nil).init_str("magnifyingglass");
-                        (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil], "Search")
-                    },
+                        icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
+                        type_label_str = "Search".to_string();
+                    }
                 }
             } else {
-                // Fallback for initial default items (when TABLE_RESULTS is empty)
-                let (title, _) = &entries[row as usize];
-                let (symbol_name, label) = match title.as_str() {
+                // Fallback for initial default items
+                let (t, _) = &entries[row as usize];
+                let (symbol_name, label) = match t.as_str() {
                     "Calculator" => ("function", "Calculator"),
                     "Open Safari" => ("safari", "App"),
                     "Clipboard" => ("doc.on.clipboard", "Clipboard"),
@@ -1019,65 +1195,88 @@ unsafe fn register_table_delegate_class() {
                     _ => ("app", "")
                 };
                 let symbol_name_ns = NSString::alloc(nil).init_str(symbol_name);
-                (msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name_ns accessibilityDescription:nil], label)
-            };
+                icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name_ns accessibilityDescription:nil];
+                type_label_str = label.to_string();
+            }
 
-            // Icon view directly without background container - larger size
-            let icon_view: id = msg_send![class!(NSImageView), alloc];
-            let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(12.0, 10.0), NSSize::new(40.0, 40.0))];
-            let _: () = msg_send![icon_view, setImage: icon_image];
-            let _: () = msg_send![icon_view, setImageScaling: 1]; // NSImageScaleProportionallyUpOrDown
-            let _: () = msg_send![container, addSubview: icon_view];
+            // If no reusable view, create one and set a stable subview order
+            eprintln!("[viceroy] view_for_row: container nil? {}", container == nil);
+            if container == nil {
+                let new_container: id = msg_send![class!(NSView), alloc];
+                let new_container: id = msg_send![new_container, initWithFrame: NSRect::new(NSPoint::new(0.0,0.0), NSSize::new(frame.size.width, 60.0))];
+                let _: () = msg_send![new_container, setWantsLayer: YES];
 
-            // Title with semibold weight and better styling (top position)
-            let title_field: id = msg_send![class!(NSTextField), alloc];
-            let title_field: id = msg_send![title_field, initWithFrame: NSRect::new(NSPoint::new(60.0, 31.0), NSSize::new(frame.size.width - 140.0, 20.0))];
-            let _: () = msg_send![title_field, setBezeled: NO];
-            let _: () = msg_send![title_field, setEditable: NO];
-            let _: () = msg_send![title_field, setDrawsBackground: NO];
-            let _: () = msg_send![title_field, setBordered: NO];
-            let font_title: id = msg_send![class!(NSFont), systemFontOfSize:15.0 weight:0.4]; // Semibold
-            let _: () = msg_send![title_field, setFont: font_title];
-            let _: () = msg_send![title_field, setStringValue: NSString::alloc(nil).init_str(title)];
-            let title_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.95f64];
-            let _: () = msg_send![title_field, setTextColor: title_color];
+                // Icon
+                let icon_view: id = msg_send![class!(NSImageView), alloc];
+                let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(12.0, 10.0), NSSize::new(40.0, 40.0))];
+                let _: () = msg_send![icon_view, setImageScaling: 1];
+                let _: () = msg_send![new_container, addSubview: icon_view];
 
-            // Subtitle with improved sizing and contrast (bottom position)
-            let subtitle_field: id = msg_send![class!(NSTextField), alloc];
-            let subtitle_field: id = msg_send![subtitle_field, initWithFrame: NSRect::new(NSPoint::new(60.0, 11.0), NSSize::new(frame.size.width - 140.0, 16.0))];
-            let _: () = msg_send![subtitle_field, setBezeled: NO];
-            let _: () = msg_send![subtitle_field, setEditable: NO];
-            let _: () = msg_send![subtitle_field, setDrawsBackground: NO];
-            let _: () = msg_send![subtitle_field, setBordered: NO];
-            let font_sub: id = msg_send![class!(NSFont), systemFontOfSize:13.0];
-            let _: () = msg_send![subtitle_field, setFont: font_sub];
-            let _: () = msg_send![subtitle_field, setStringValue: NSString::alloc(nil).init_str(subtitle)];
-            let sub_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.5f64];
-            let _: () = msg_send![subtitle_field, setTextColor: sub_color];
+                // Title
+                let title_field: id = msg_send![class!(NSTextField), alloc];
+                let title_field: id = msg_send![title_field, initWithFrame: NSRect::new(NSPoint::new(60.0, 31.0), NSSize::new(frame.size.width - 140.0, 20.0))];
+                let _: () = msg_send![title_field, setBezeled: NO];
+                let _: () = msg_send![title_field, setEditable: NO];
+                let _: () = msg_send![title_field, setDrawsBackground: NO];
+                let _: () = msg_send![title_field, setBordered: NO];
+                let font_title: id = msg_send![class!(NSFont), systemFontOfSize:15.0 weight:0.4];
+                let _: () = msg_send![title_field, setFont: font_title];
+                let _: () = msg_send![new_container, addSubview: title_field];
 
-            let _: () = msg_send![container, addSubview: title_field];
-            let _: () = msg_send![container, addSubview: subtitle_field];
+                // Subtitle
+                let subtitle_field: id = msg_send![class!(NSTextField), alloc];
+                let subtitle_field: id = msg_send![subtitle_field, initWithFrame: NSRect::new(NSPoint::new(60.0, 11.0), NSSize::new(frame.size.width - 140.0, 16.0))];
+                let _: () = msg_send![subtitle_field, setBezeled: NO];
+                let _: () = msg_send![subtitle_field, setEditable: NO];
+                let _: () = msg_send![subtitle_field, setDrawsBackground: NO];
+                let _: () = msg_send![subtitle_field, setBordered: NO];
+                let font_sub: id = msg_send![class!(NSFont), systemFontOfSize:13.0];
+                let _: () = msg_send![subtitle_field, setFont: font_sub];
+                let _: () = msg_send![new_container, addSubview: subtitle_field];
 
-            // Type label on the right side - like Viceroy
-            if !type_label.is_empty() {
+                // Type label (always present, but may be empty)
                 let type_label_field: id = msg_send![class!(NSTextField), alloc];
-                // Position 16px from right edge, centered vertically
                 let type_label_field: id = msg_send![type_label_field, initWithFrame: NSRect::new(NSPoint::new(frame.size.width - 140.0, 22.0), NSSize::new(100.0, 16.0))];
                 let _: () = msg_send![type_label_field, setBezeled: NO];
                 let _: () = msg_send![type_label_field, setEditable: NO];
                 let _: () = msg_send![type_label_field, setDrawsBackground: NO];
                 let _: () = msg_send![type_label_field, setBordered: NO];
-                let _: () = msg_send![type_label_field, setAlignment: 1]; // Right align (1 is right in some contexts, 2 in others, let's stick to 1 or 2. Actually NSTextAlignmentRight is 1 on older, 2 on newer. Let's use 1 which is usually right for LTR)
-                // Actually, let's use setAlignment: 2 (NSTextAlignmentRight)
                 let _: () = msg_send![type_label_field, setAlignment: 2];
                 let type_font: id = msg_send![class!(NSFont), systemFontOfSize:12.0];
                 let _: () = msg_send![type_label_field, setFont: type_font];
-                let type_label_ns = NSString::alloc(nil).init_str(type_label);
-                let _: () = msg_send![type_label_field, setStringValue: type_label_ns];
-                let type_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.4f64]; // Lighter gray
-                let _: () = msg_send![type_label_field, setTextColor: type_color];
-                let _: () = msg_send![container, addSubview: type_label_field];
+                let _: () = msg_send![new_container, addSubview: type_label_field];
+
+                // Mark it reusable
+                let _: () = msg_send![new_container, setIdentifier: identifier];
+                container = new_container;
+                eprintln!("[viceroy] view_for_row: created new container for row {}", row);
             }
+
+            // Update subviews (assume stable order: icon, title, subtitle, type)
+            eprintln!("[viceroy] view_for_row: updating subviews for row {}", row);
+            let subviews: id = msg_send![container, subviews];
+            eprintln!("[viceroy] view_for_row: subviews=nil? {}", subviews == nil);
+            let icon_view: id = msg_send![subviews, objectAtIndex:0];
+            eprintln!("[viceroy] view_for_row: icon_view=nil? {}", icon_view == nil);
+            if icon_image != nil {
+                eprintln!("[viceroy] view_for_row: setting icon for row {}", row);
+                let _: () = msg_send![icon_view, setImage: icon_image];
+            } else {
+                // Fallback to a neutral empty image or leave as-is
+            }
+
+            let title_field: id = msg_send![subviews, objectAtIndex:1];
+            eprintln!("[viceroy] view_for_row: title_field=nil? {}", title_field == nil);
+            let _: () = msg_send![title_field, setStringValue: NSString::alloc(nil).init_str(&title)];
+
+            let subtitle_field: id = msg_send![subviews, objectAtIndex:2];
+            eprintln!("[viceroy] view_for_row: subtitle_field=nil? {}", subtitle_field == nil);
+            let _: () = msg_send![subtitle_field, setStringValue: NSString::alloc(nil).init_str(&subtitle)];
+
+            let type_field: id = msg_send![subviews, objectAtIndex:3];
+            eprintln!("[viceroy] view_for_row: type_field=nil? {}", type_field == nil);
+            let _: () = msg_send![type_field, setStringValue: NSString::alloc(nil).init_str(&type_label_str)];
+
             container
         }
     }
@@ -1153,6 +1352,7 @@ unsafe fn register_search_delegate_class() {
                 return;
             }
             let query = std::ffi::CStr::from_ptr(cstr).to_string_lossy().to_string();
+            eprintln!("[viceroy] search changed: '{}'", query);
 
             // Cancel previous search
             if let Ok(mut handle_guard) = CURRENT_SEARCH.lock() {
@@ -1161,12 +1361,16 @@ unsafe fn register_search_delegate_class() {
                 }
             }
 
-            if query.is_empty() {
-                TABLE_RESULTS.lock().unwrap().clear();
-                TABLE_DATA.lock().unwrap().clear();
-                reload_table();
-                return;
-            }
+                if query.is_empty() {
+                    if let Ok(mut tr) = TABLE_RESULTS.lock() {
+                        tr.clear();
+                    }
+                    if let Ok(mut td) = TABLE_DATA.lock() {
+                        td.clear();
+                    }
+                    schedule_table_update_next_tick();
+                    return;
+                }
 
             // Spawn async search with immediate execution
             let query_clone = query.clone();
@@ -1230,10 +1434,22 @@ unsafe fn register_search_delegate_class() {
                         }
                     }
                     // Update shared state on main thread
-                    dispatch::Queue::main().exec_async(move || {
-                        *TABLE_RESULTS.lock().unwrap() = results;
-                        *TABLE_DATA.lock().unwrap() = rows;
+                        eprintln!("[viceroy] search finished - dispatching UI update ({} results)", results.len());
+                        dispatch::Queue::main().exec_async(move || {
+                            eprintln!("[viceroy] running dispatched UI update");
+                        if let Ok(mut tr) = TABLE_RESULTS.lock() {
+                            *tr = results;
+                        } else {
+                            eprintln!("WARNING: TABLE_RESULTS lock poisoned; UI update skipped");
+                        }
+                        if let Ok(mut td) = TABLE_DATA.lock() {
+                            *td = rows;
+                        } else {
+                            eprintln!("WARNING: TABLE_DATA lock poisoned; UI update skipped");
+                        }
                         reload_table();
+                        // Perform reload+resize on next runloop tick to avoid layout recursion
+                        schedule_table_update_next_tick();
                         // Auto-complete disabled per user request
                         // unsafe {
                         //    update_autocomplete_preview(&query_clone);
@@ -1268,7 +1484,10 @@ unsafe fn update_autocomplete_preview(current_query: &str) {
     }
 
     // Get the first result
-    let results = TABLE_RESULTS.lock().unwrap();
+    let results = match TABLE_RESULTS.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
     if results.is_empty() {
         return;
     }
@@ -1358,8 +1577,8 @@ unsafe fn reload_table() {
     let content: id = msg_send![window, contentView];
     let subviews: id = msg_send![content, subviews];
     let sv_count: usize = msg_send![subviews, count];
-    // We added effect view first, search field second, scroll view third
-    if sv_count < 3 {
+    // We added effect view first, search field second, scroll view third, footer fourth
+    if sv_count < 4 {
         return;
     }
     let scroll: id = msg_send![subviews, objectAtIndex:2];
@@ -1372,41 +1591,199 @@ unsafe fn reload_table() {
         let index_set = create_index_set(0);
         let _: () = msg_send![table, selectRowIndexes:index_set byExtendingSelection:NO];
     }
-    
-    // Dynamic window resizing based on results
-    let num_results = TABLE_DATA.lock().unwrap().len();
-    let base_height = 106.0; // Search bar (20px top + 60px field + 26px bottom)
+}
+
+unsafe fn resize_window_for_results() {
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let content: id = msg_send![window, contentView];
+    let subviews: id = msg_send![content, subviews];
+    let sv_count: usize = msg_send![subviews, count];
+    if sv_count < 2 {
+        return;
+    }
+
+    let num_results = match TABLE_DATA.lock() {
+        Ok(g) => g.len(),
+        Err(_) => 0,
+    };
+    let base_height = 106.0 + 22.0; // Search bar + footer
     let row_height = 60.0;
     let max_visible_rows = 8;
     let visible_rows = num_results.min(max_visible_rows);
     let new_height = if visible_rows == 0 {
         base_height
     } else {
-        base_height + (visible_rows as f64 * row_height) + 10.0 // +10 for padding
+        base_height + (visible_rows as f64 * row_height) + 10.0
     };
-    
-    // Get current window frame
+
     let current_frame: NSRect = msg_send![window, frame];
-    
-    // Calculate new frame (resize from bottom, keep top position)
+    if (current_frame.size.height - new_height).abs() < 0.5 {
+        return;
+    }
+
     let new_frame = NSRect::new(
-        NSPoint::new(current_frame.origin.x, current_frame.origin.y + (current_frame.size.height - new_height)),
-        NSSize::new(current_frame.size.width, new_height)
+        NSPoint::new(
+            current_frame.origin.x,
+            current_frame.origin.y + (current_frame.size.height - new_height),
+        ),
+        NSSize::new(current_frame.size.width, new_height),
     );
-    
-    // Manually reposition search bar FIRST to stay at top (20px from top edge)
+
     if sv_count >= 2 {
         let container: id = msg_send![subviews, objectAtIndex:1];
-        let new_search_y = new_height - 80.0; // Keep at 20px from top
+        let new_search_y = new_height - 80.0;
         let new_search_frame = NSRect::new(
-            NSPoint::new(20.0, new_search_y), // Also fix X to 20px
-            NSSize::new(current_frame.size.width - 40.0, 60.0) // Also adjust width
+            NSPoint::new(20.0, new_search_y),
+            NSSize::new(current_frame.size.width - 40.0, 60.0),
         );
-        let _: () = msg_send![container, setFrame: new_search_frame];
+        let _: () = msg_send![container, setFrame:new_search_frame];
     }
-    
-    // Then resize window instantly (no animation to prevent search bar movement)
+
     let _: () = msg_send![window, setFrame:new_frame display:YES animate:NO];
+}
+
+fn schedule_table_update_next_tick() {
+    // Coalesce rapid table updates and perform reload+resize on next runloop tick.
+    if TABLE_UPDATE_PENDING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    dispatch::Queue::main().exec_async(move || {
+        unsafe {
+            // Perform the reload and immediate resize on the next main-queue tick.
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let windows: id = msg_send![app, windows];
+            let count: usize = msg_send![windows, count];
+            if count == 0 {
+                TABLE_UPDATE_PENDING.store(false, Ordering::SeqCst);
+                return;
+            }
+            let window: id = msg_send![windows, objectAtIndex:0];
+            let content: id = msg_send![window, contentView];
+            let subviews: id = msg_send![content, subviews];
+            let sv_count: usize = msg_send![subviews, count];
+            if sv_count >= 3 {
+                let scroll: id = msg_send![subviews, objectAtIndex:2];
+                let table: id = msg_send![scroll, documentView];
+                let _: () = msg_send![table, reloadData];
+                // Auto-select first row if results exist
+                let num_rows: isize = msg_send![table, numberOfRows];
+                if num_rows > 0 {
+                    let index_set: id = msg_send![class!(NSIndexSet), indexSetWithIndex:0];
+                    let _: () = msg_send![table, selectRowIndexes:index_set byExtendingSelection:NO];
+                }
+            }
+            // Now resize window to match data
+            resize_window_for_results();
+            TABLE_UPDATE_PENDING.store(false, Ordering::SeqCst);
+        }
+    });
+}
+
+unsafe fn set_icon_for_row_from_cache(path: &str, row: isize) {
+    // Called on main thread to set the icon for a visible row using the ICON_CACHE
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let content: id = msg_send![window, contentView];
+    let subviews: id = msg_send![content, subviews];
+    let sv_count: usize = msg_send![subviews, count];
+    if sv_count < 3 {
+        return;
+    }
+    let scroll: id = msg_send![subviews, objectAtIndex:2];
+    let table: id = msg_send![scroll, documentView];
+
+    // NSTableView - check bounds then call viewAtColumn:row:makeIfNecessary:
+    if row < 0 {
+        return;
+    }
+    let num_rows: usize = msg_send![table, numberOfRows];
+    if (row as usize) >= num_rows {
+        // requested row is not in range (table may have updated backing model); skip
+        return;
+    }
+    // NSTableView - viewAtColumn:row:makeIfNecessary:
+    let row_view: id = msg_send![table, viewAtColumn:0 row:row makeIfNecessary:NO];
+    if row_view == nil {
+        return;
+    }
+
+    if let Ok(cache) = ICON_CACHE.lock() {
+        if let Some(&cached) = cache.get(path) {
+            let img: id = cached as id;
+            if img != nil {
+                let subviews: id = msg_send![row_view, subviews];
+                if subviews != nil {
+                    let icon_view: id = msg_send![subviews, objectAtIndex:0];
+                    if icon_view != nil {
+                        let _: () = msg_send![icon_view, setImage: img];
+                    }
+                }
+            }
+        }
+    } else {
+        // Lock poisoned or unavailable; skip setting icon to avoid panics
+        return;
+    }
+}
+
+fn format_pretty_path(path: &str) -> String {
+    let mut display = path.to_string();
+
+    // Home-directory shortening
+    if let Some(home) = std::env::var_os("HOME") {
+        if let Ok(home_str) = home.into_string() {
+            if display.starts_with(&home_str) {
+                display = display.replacen(&home_str, "~", 1);
+            }
+        }
+    }
+
+    // Convert slashes to " ▸ " for nicer breadcrumb look
+    let parts: Vec<&str> = display
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return display;
+    }
+
+    let mut breadcrumb = parts.join(" ▸ ");
+
+    // Middle ellipsis for long paths — use char-aware slicing to avoid panics
+    let max_len = 60;
+    let char_count = breadcrumb.chars().count();
+    if char_count > max_len {
+        let take = 25.min(char_count);
+        // Take the first `take` chars for the start
+        let start: String = breadcrumb.chars().take(take).collect();
+        // Take the last `take` chars for the end (via reverse-then-reverse)
+        let end: String = breadcrumb
+            .chars()
+            .rev()
+            .take(take)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        breadcrumb = format!(
+            "{} … {}",
+            start.trim_end_matches(' '),
+            end.trim_start_matches(' ')
+        );
+    }
+
+    breadcrumb
 }
 
 unsafe fn create_search_font() -> id {
@@ -1528,10 +1905,9 @@ unsafe fn create_status_bar_item() {
         keyEquivalent: NSString::alloc(nil).init_str("")
     ];
     // Set initial state from loaded settings
-    let esc_state: i64 = if *DISMISS_ON_ESCAPE.lock().unwrap() {
-        1
-    } else {
-        0
+    let esc_state: i64 = match DISMISS_ON_ESCAPE.lock() {
+        Ok(g) => if *g { 1 } else { 0 },
+        Err(_) => 0,
     };
     let _: () = msg_send![esc_item, setState: esc_state];
     let _: () = msg_send![menu, addItem: esc_item];
@@ -1543,10 +1919,9 @@ unsafe fn create_status_bar_item() {
         action: sel!(toggleDismissOnClickAway:)
         keyEquivalent: NSString::alloc(nil).init_str("")
     ];
-    let click_state: i64 = if *DISMISS_ON_CLICK_AWAY.lock().unwrap() {
-        1
-    } else {
-        0
+    let click_state: i64 = match DISMISS_ON_CLICK_AWAY.lock() {
+        Ok(g) => if *g { 1 } else { 0 },
+        Err(_) => 0,
     };
     let _: () = msg_send![click_item, setState: click_state];
     let _: () = msg_send![menu, addItem: click_item];
@@ -1587,7 +1962,9 @@ unsafe fn create_menu_actions_target() -> id {
         extern "C" fn show_main_window(_this: &Object, _cmd: Sel, _sender: id) {
             unsafe {
                 // Update global state
-                *WINDOW_SHOWING.lock().unwrap() = true;
+                if let Ok(mut w) = WINDOW_SHOWING.lock() {
+                    *w = true;
+                }
 
                 let app: id = msg_send![class!(NSApplication), sharedApplication];
                 let windows: id = msg_send![app, windows];
@@ -1614,9 +1991,17 @@ unsafe fn create_menu_actions_target() -> id {
                                 let empty: id = NSString::alloc(nil).init_str("");
                                 let _: () = msg_send![search_field, setStringValue: empty];
 
-                                // Clear results backing state and table
-                                TABLE_RESULTS.lock().unwrap().clear();
-                                TABLE_DATA.lock().unwrap().clear();
+                                // Clear results backing state and table (best-effort)
+                                if let Ok(mut tr) = TABLE_RESULTS.lock() {
+                                    tr.clear();
+                                } else {
+                                    eprintln!("WARNING: TABLE_RESULTS lock poisoned in menu action");
+                                }
+                                if let Ok(mut td) = TABLE_DATA.lock() {
+                                    td.clear();
+                                } else {
+                                    eprintln!("WARNING: TABLE_DATA lock poisoned in menu action");
+                                }
                                 reload_table();
 
                                 // Ensure cursor is white even on first edit session
@@ -1636,7 +2021,9 @@ unsafe fn create_menu_actions_target() -> id {
         extern "C" fn show_settings(_this: &Object, _cmd: Sel, _sender: id) {
             unsafe {
                 // Update global state
-                *WINDOW_SHOWING.lock().unwrap() = true;
+                if let Ok(mut w) = WINDOW_SHOWING.lock() {
+                    *w = true;
+                }
 
                 let app: id = msg_send![class!(NSApplication), sharedApplication];
                 let windows: id = msg_send![app, windows];
@@ -1654,15 +2041,24 @@ unsafe fn create_menu_actions_target() -> id {
 
         extern "C" fn toggle_dismiss_on_escape(_this: &Object, _cmd: Sel, sender: id) {
             unsafe {
-                // Toggle global flag
-                let mut val = DISMISS_ON_ESCAPE.lock().unwrap();
-                *val = !*val;
-                let state: i64 = if *val { 1 } else { 0 };
+                // Toggle global flag (best-effort)
+                let new_state = match DISMISS_ON_ESCAPE.lock() {
+                    Ok(mut val) => {
+                        *val = !*val;
+                        *val
+                    }
+                    Err(poisoned) => {
+                        let mut guard = poisoned.into_inner();
+                        *guard = !*guard;
+                        *guard
+                    }
+                };
+                let state: i64 = if new_state { 1 } else { 0 };
                 let _: () = msg_send![sender, setState: state];
 
-                // Persist to settings.json
+                // Persist to settings.json (best-effort)
                 if let Ok(mut s) = settings::load() {
-                    s.dismiss_on_escape = *val;
+                    s.dismiss_on_escape = new_state;
                     let _ = settings::save(&s);
                 }
             }
@@ -1670,13 +2066,15 @@ unsafe fn create_menu_actions_target() -> id {
 
         extern "C" fn toggle_dismiss_on_click(_this: &Object, _cmd: Sel, sender: id) {
             unsafe {
-                let mut val = DISMISS_ON_CLICK_AWAY.lock().unwrap();
-                *val = !*val;
-                let state: i64 = if *val { 1 } else { 0 };
+                let new_state = match DISMISS_ON_CLICK_AWAY.lock() {
+                    Ok(mut v) => { *v = !*v; *v }
+                    Err(poisoned) => { let mut g = poisoned.into_inner(); *g = !*g; *g }
+                };
+                let state: i64 = if new_state { 1 } else { 0 };
                 let _: () = msg_send![sender, setState: state];
 
                 if let Ok(mut s) = settings::load() {
-                    s.dismiss_on_click_away = *val;
+                    s.dismiss_on_click_away = new_state;
                     let _ = settings::save(&s);
                 }
             }
@@ -1719,9 +2117,18 @@ unsafe fn setup_app_observer(ns_window: id) {
 
     extern "C" fn app_did_resign_active(_this: &Object, _cmd: Sel, _notification: id) {
         unsafe {
-            let showing = *WINDOW_SHOWING.lock().unwrap();
+            // Best-effort: check showing flag without panicking on poisoned mutex
+            let showing = match WINDOW_SHOWING.lock() {
+                Ok(g) => *g,
+                Err(poisoned) => *poisoned.into_inner(),
+            };
             if showing {
-                if !*DISMISS_ON_CLICK_AWAY.lock().unwrap() {
+                // Check click-away preference
+                let dismiss_click = match DISMISS_ON_CLICK_AWAY.lock() {
+                    Ok(g) => *g,
+                    Err(poisoned) => *poisoned.into_inner(),
+                };
+                if !dismiss_click {
                     return;
                 }
                 let app: id = msg_send![class!(NSApplication), sharedApplication];
@@ -1730,7 +2137,9 @@ unsafe fn setup_app_observer(ns_window: id) {
                 if count > 0 {
                     let window: id = msg_send![windows, objectAtIndex:0];
                     let _: () = msg_send![window, orderOut: nil];
-                    *WINDOW_SHOWING.lock().unwrap() = false;
+                    if let Ok(mut w) = WINDOW_SHOWING.lock() {
+                        *w = false;
+                    }
                 } else {
                     // No windows found
                 }
@@ -1798,7 +2207,12 @@ unsafe fn setup_window_delegate(ns_window: id) {
             // Dispatch to main thread after small delay
             dispatch::Queue::main().exec_after(std::time::Duration::from_millis(100), move || {
                 unsafe {
-                    if !*DISMISS_ON_CLICK_AWAY.lock().unwrap() {
+                    // Check preference (best-effort)
+                    let dismiss_click = match DISMISS_ON_CLICK_AWAY.lock() {
+                        Ok(g) => *g,
+                        Err(poisoned) => *poisoned.into_inner(),
+                    };
+                    if !dismiss_click {
                         return;
                     }
                     let app: id = msg_send![class!(NSApplication), sharedApplication];
@@ -1811,7 +2225,9 @@ unsafe fn setup_window_delegate(ns_window: id) {
 
                         // Only hide if window is visible but not key
                         if is_visible == YES && is_key == NO {
-                            *WINDOW_SHOWING.lock().unwrap() = false;
+                            if let Ok(mut w) = WINDOW_SHOWING.lock() {
+                                *w = false;
+                            }
                             let _: () = msg_send![window, orderOut: nil];
                         }
                     }
@@ -1839,6 +2255,9 @@ fn main() {
     // Set panic hook to see errors
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("!!! PANIC: {:?}", panic_info);
+        // Capture and print a backtrace to help locate source of panic
+        let bt = std::backtrace::Backtrace::force_capture();
+        eprintln!("Backtrace:\n{:?}", bt);
     }));
 
     // Minimal logging for production

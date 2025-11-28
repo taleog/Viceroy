@@ -292,10 +292,37 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
     file_results.truncate(max_per_category.1);
     clip_results.truncate(max_per_category.2);
 
-    // Combine results
+    // Combine results, de-duplicating .app bundles that already exist as apps
     let mut results = Vec::new();
+
+    // Index app bundle paths for quick lookup
+    use std::collections::HashSet;
+    let app_paths: HashSet<String> = app_results
+        .iter()
+        .filter_map(|r| {
+            if let SearchResult::App { path, .. } = r {
+                Some(path.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Keep all app results first
     results.append(&mut app_results);
-    results.append(&mut file_results);
+
+    // Filter file results: drop .app bundles that correspond to an App result
+    let mut filtered_files = Vec::new();
+    for f in file_results.into_iter() {
+        if let SearchResult::File { ref path, .. } = f {
+            if path.ends_with(".app") && app_paths.contains(path) {
+                // Skip duplicate .app file entry
+                continue;
+            }
+        }
+        filtered_files.push(f);
+    }
+    results.append(&mut filtered_files);
     results.append(&mut clip_results);
     results.append(&mut cmd_results);
     results.append(&mut calc_results);
@@ -433,7 +460,7 @@ fn get_smart_score(result: &SearchResult, query: &str, _matcher: &SkimMatcherV2,
 
             boost
         }
-        SearchResult::File { name, score, .. } => {
+        SearchResult::File { name, path, score, .. } => {
             let name_lower = name.to_lowercase();
             let mut boost = *score;
 
@@ -446,8 +473,12 @@ fn get_smart_score(result: &SearchResult, query: &str, _matcher: &SkimMatcherV2,
                 boost -= 15000; // Reduce files for very short queries (favor apps)
             }
 
-            // Exact filename match (without extension)
-            let name_without_ext = name_lower.rsplit('.').nth(1).unwrap_or(&name_lower);
+            // Exact filename match (without extension). Use rsplit_once to avoid
+            // relying on positional indices that can be brittle.
+            let name_without_ext = match name_lower.rsplit_once('.') {
+                Some((stem, _)) => stem,
+                None => name_lower.as_str(),
+            };
             if name_without_ext == query_lower || name_lower == query_lower {
                 boost += 80000;
             }
@@ -485,12 +516,19 @@ fn get_smart_score(result: &SearchResult, query: &str, _matcher: &SkimMatcherV2,
                 boost += 2500;
             }
 
-            // Recently modified files get boost (if in home directory or common dev folders)
-            if name_lower.contains("/documents/")
-                || name_lower.contains("/downloads/")
-                || name_lower.contains("/desktop/")
+            // Path-based boosts/penalties
+            let path_lower = path.to_lowercase();
+            // Strongly downweight noisy system/framework files
+            if path_lower.starts_with("/system/library/") || path_lower.contains(".framework/") {
+                boost -= 30000;
+            }
+
+            // Boost common user locations
+            if path_lower.contains("/users/") && (path_lower.contains("/documents/")
+                || path_lower.contains("/downloads/")
+                || path_lower.contains("/desktop/"))
             {
-                boost += 2000;
+                boost += 8000;
             }
 
             boost - 5000 // Files slightly lower priority than apps by default
