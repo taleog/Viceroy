@@ -368,6 +368,81 @@ struct QueryContext {
     length: usize,
 }
 
+#[derive(Clone, Copy)]
+struct MatchWeights {
+    exact: i64,
+    starts_base: i64,
+    starts_per_char: i64,
+    word_base: i64,
+    word_per_char: i64,
+    contains: i64,
+}
+
+impl MatchWeights {
+    const fn new(
+        exact: i64,
+        starts_base: i64,
+        starts_per_char: i64,
+        word_base: i64,
+        word_per_char: i64,
+        contains: i64,
+    ) -> Self {
+        Self {
+            exact,
+            starts_base,
+            starts_per_char,
+            word_base,
+            word_per_char,
+            contains,
+        }
+    }
+}
+
+const APP_MATCH_WEIGHTS: MatchWeights =
+    MatchWeights::new(100_000, 50_000, 1_000, 25_000, 500, 10_000);
+const FILE_MATCH_WEIGHTS: MatchWeights = MatchWeights::new(80_000, 40_000, 800, 0, 0, 15_000);
+const CLIPBOARD_MATCH_WEIGHTS: MatchWeights =
+    MatchWeights::new(60_000, 30_000, 0, 20_000, 0, 10_000);
+const COMMAND_MATCH_WEIGHTS: MatchWeights = MatchWeights::new(90_000, 45_000, 1_000, 30_000, 0, 0);
+
+fn match_score(
+    primary: &str,
+    alternate: Option<&str>,
+    query_lower: &str,
+    query_len: usize,
+    weights: &MatchWeights,
+) -> i64 {
+    if primary == query_lower || alternate.map(|alt| alt == query_lower).unwrap_or(false) {
+        return weights.exact;
+    }
+
+    if primary.starts_with(query_lower)
+        || alternate
+            .map(|alt| alt.starts_with(query_lower))
+            .unwrap_or(false)
+    {
+        return weights.starts_base + (query_len as i64 * weights.starts_per_char);
+    }
+
+    if weights.word_base > 0
+        && primary
+            .split_whitespace()
+            .any(|w| w.starts_with(query_lower))
+    {
+        return weights.word_base + (query_len as i64 * weights.word_per_char);
+    }
+
+    if weights.contains > 0 && primary.contains(query_lower) {
+        return weights.contains;
+    }
+
+    0
+}
+
+/// Compute a context-aware score that keeps better-matching and more relevant
+/// results higher in the table without changing the relative ordering inside
+/// each category. The heuristics favor short app queries, file-like queries,
+/// URLs in clipboard, and explicit calculator/emoji/dictionary/web matches.
 fn get_smart_score(
     result: &SearchResult,
     query: &str,
@@ -383,6 +458,13 @@ fn get_smart_score(
         } => {
             let name_lower = name.to_lowercase();
             let mut boost = *score;
+            boost += match_score(
+                &name_lower,
+                None,
+                &query_lower,
+                query_len,
+                &APP_MATCH_WEIGHTS,
+            );
 
             // Context-aware boost: short queries heavily favor apps
             if context.is_short_query {
@@ -489,6 +571,18 @@ fn get_smart_score(
             let name_lower = name.to_lowercase();
             let mut boost = *score;
 
+            let name_without_ext = match name_lower.rsplit_once('.') {
+                Some((stem, _)) => stem,
+                None => name_lower.as_str(),
+            };
+            boost += match_score(
+                &name_lower,
+                Some(name_without_ext),
+                &query_lower,
+                query_len,
+                &FILE_MATCH_WEIGHTS,
+            );
+
             // Context-aware boost: file queries heavily favor files
             if context.is_file_query {
                 boost += 40000; // Massive boost when query looks like a file
@@ -496,26 +590,6 @@ fn get_smart_score(
                 boost -= 25000; // Reduce files for URL queries
             } else if context.is_short_query {
                 boost -= 15000; // Reduce files for very short queries (favor apps)
-            }
-
-            // Exact filename match (without extension). Use rsplit_once to avoid
-            // relying on positional indices that can be brittle.
-            let name_without_ext = match name_lower.rsplit_once('.') {
-                Some((stem, _)) => stem,
-                None => name_lower.as_str(),
-            };
-            if name_without_ext == query_lower || name_lower == query_lower {
-                boost += 80000;
-            }
-            // Starts with query
-            else if name_lower.starts_with(&query_lower)
-                || name_without_ext.starts_with(&query_lower)
-            {
-                boost += 40000 + (query_len as i64 * 800);
-            }
-            // Contains query
-            else if name_lower.contains(&query_lower) {
-                boost += 15000;
             }
 
             // Prioritize source code files
@@ -568,6 +642,13 @@ fn get_smart_score(
         } => {
             let content_lower = content.to_lowercase();
             let mut boost = *score;
+            boost += match_score(
+                &content_lower,
+                None,
+                &query_lower,
+                query_len,
+                &CLIPBOARD_MATCH_WEIGHTS,
+            );
 
             // Context-aware boost: URLs and longer queries favor clipboard
             if context.is_url {
@@ -576,26 +657,6 @@ fn get_smart_score(
                 boost -= 30000; // Heavy penalty for short queries (favor apps)
             } else if context.length > 10 {
                 boost += 15000; // Longer queries likely searching clipboard
-            }
-
-            // Exact content match
-            if content_lower == query_lower {
-                boost += 60000;
-            }
-            // Starts with query
-            else if content_lower.starts_with(&query_lower) {
-                boost += 30000;
-            }
-            // Contains query (word boundary)
-            else if content_lower
-                .split_whitespace()
-                .any(|w| w.starts_with(&query_lower))
-            {
-                boost += 20000;
-            }
-            // General contains
-            else if content_lower.contains(&query_lower) {
-                boost += 10000;
             }
 
             // Boost URLs and file paths in clipboard
@@ -613,36 +674,27 @@ fn get_smart_score(
             // Custom name match boosts more than raw content match
             if let Some(name) = custom_name {
                 let name_lower = name.to_lowercase();
-                if name_lower == query_lower {
-                    boost += 50000;
-                } else if name_lower.starts_with(&query_lower) {
-                    boost += 25000;
-                } else if name_lower.contains(&query_lower) {
-                    boost += 12000;
-                }
+                let name_boost = match_score(
+                    &name_lower,
+                    None,
+                    &query_lower,
+                    query_len,
+                    &MatchWeights::new(50_000, 25_000, 0, 0, 0, 12_000),
+                );
+                boost += name_boost;
             }
             boost - 15000 // Clipboard lower priority unless very relevant
         }
         SearchResult::Command { name, score, .. } => {
             let name_lower = name.to_lowercase();
             let mut boost = *score;
-
-            // Exact command match
-            if name_lower == query_lower {
-                boost += 90000;
-            }
-            // Starts with query
-            else if name_lower.starts_with(&query_lower) {
-                boost += 45000 + (query_len as i64 * 1000);
-            }
-            // Word match
-            else if name_lower
-                .split_whitespace()
-                .any(|w| w.starts_with(&query_lower))
-            {
-                boost += 30000;
-            }
-
+            boost += match_score(
+                &name_lower,
+                None,
+                &query_lower,
+                query_len,
+                &COMMAND_MATCH_WEIGHTS,
+            );
             boost
         }
         SearchResult::Calculator { .. } => {
@@ -671,4 +723,95 @@ fn is_calculator_expression(query: &str) -> bool {
     let has_number = query.chars().any(|c| c.is_numeric());
     let has_operator = query.chars().any(|c| "+-*/^()".contains(c));
     has_number && has_operator
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context_for(
+        query: &str,
+        is_file_query: bool,
+        is_url: bool,
+        is_short_query: bool,
+    ) -> QueryContext {
+        QueryContext {
+            is_file_query,
+            is_url,
+            is_short_query,
+            length: query.len(),
+        }
+    }
+
+    #[test]
+    fn short_queries_prefer_apps() {
+        let matcher = SkimMatcherV2::default();
+        let query = "sa";
+        let ctx = context_for(query, false, false, true);
+        let app = SearchResult::App {
+            name: "Safari".to_string(),
+            path: "/Applications/Safari.app".to_string(),
+            score: 10,
+            icon: None,
+        };
+        let file = SearchResult::File {
+            name: "safari.txt".to_string(),
+            path: "/tmp/safari.txt".to_string(),
+            score: 5,
+        };
+
+        let app_score = get_smart_score(&app, query, &matcher, &ctx);
+        let file_score = get_smart_score(&file, query, &matcher, &ctx);
+        assert!(app_score > file_score);
+    }
+
+    #[test]
+    fn file_queries_prefer_files() {
+        let matcher = SkimMatcherV2::default();
+        let query = "report.pdf";
+        let ctx = context_for(query, true, false, false);
+        let app = SearchResult::App {
+            name: "Report Viewer".to_string(),
+            path: "/Applications/Report.app".to_string(),
+            score: 100,
+            icon: None,
+        };
+        let file = SearchResult::File {
+            name: "report.pdf".to_string(),
+            path: "/Users/test/Documents/report.pdf".to_string(),
+            score: 50,
+        };
+
+        let app_score = get_smart_score(&app, query, &matcher, &ctx);
+        let file_score = get_smart_score(&file, query, &matcher, &ctx);
+        assert!(file_score > app_score);
+    }
+
+    #[test]
+    fn url_queries_favor_clipboard_entries() {
+        let matcher = SkimMatcherV2::default();
+        let query = "https://example.com";
+        let ctx = context_for(query, false, true, false);
+        let clipboard = SearchResult::Clipboard {
+            id: 1,
+            content: "https://example.com/page".to_string(),
+            preview: "Example".to_string(),
+            content_type: "text".to_string(),
+            app_name: Some("Safari".to_string()),
+            timestamp: 0,
+            custom_name: None,
+            is_pinned: false,
+            score: 0,
+        };
+        let command = SearchResult::Command {
+            name: "open".to_string(),
+            description: "Open URL".to_string(),
+            command: "open".to_string(),
+            score: 0,
+        };
+
+        let clip_score = get_smart_score(&clipboard, query, &matcher, &ctx);
+        let cmd_score = get_smart_score(&command, query, &matcher, &ctx);
+        assert!(clip_score > cmd_score);
+    }
 }
