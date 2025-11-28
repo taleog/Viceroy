@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 struct UsageEntry {
@@ -63,8 +63,5 @@ pub fn record_app_launch(path: &str) {
 
 pub fn get_app_usage(path: &str) -> Option<(i64, u32)> {
     let usage = USAGE.lock().unwrap();
-    usage
-        .apps
-        .get(path)
-        .map(|e| (e.last_used, e.launch_count))
+    usage.apps.get(path).map(|e| (e.last_used, e.launch_count))
 }

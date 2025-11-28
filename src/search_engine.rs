@@ -1,6 +1,6 @@
 use crate::{
-    app_launcher, calculator, clipboard, dictionary, emoji, file_search, system_commands,
-    usage, web_search,
+    app_launcher, calculator, clipboard, dictionary, emoji, file_search, system_commands, usage,
+    web_search,
 };
 use anyhow::Result;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -39,6 +39,7 @@ pub enum SearchResult {
         id: i64,
         content: String,
         preview: String,
+        content_type: String,
         app_name: Option<String>,
         timestamp: i64,
         custom_name: Option<String>,
@@ -136,7 +137,7 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
     // Prepare futures for parallel execution
     let query_clone = query.to_string();
     let mode_clone = mode;
-    
+
     // App search future
     let app_future = async {
         let mut results = Vec::new();
@@ -164,12 +165,17 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
         if mode_clone == SearchMode::All || mode_clone == SearchMode::Files {
             // Skip file search for very short queries to improve responsiveness
             if query_clone.len() >= 3 {
-                let file_limit = if mode_clone == SearchMode::Files { 50 } else { 20 };
+                let file_limit = if mode_clone == SearchMode::Files {
+                    50
+                } else {
+                    20
+                };
                 // Use spawn_blocking for mdfind as it's a blocking IO operation
                 let query_inner = query_clone.clone();
                 let files_result = tokio::task::spawn_blocking(move || {
                     file_search::search_files(&query_inner, file_limit)
-                }).await;
+                })
+                .await;
 
                 if let Ok(Ok(files)) = files_result {
                     let matcher = SkimMatcherV2::default();
@@ -192,7 +198,11 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
     let clipboard_future = async {
         let mut results = Vec::new();
         if mode_clone == SearchMode::All || mode_clone == SearchMode::Clipboard {
-            let clip_limit = if mode_clone == SearchMode::Clipboard { 50 } else { 10 };
+            let clip_limit = if mode_clone == SearchMode::Clipboard {
+                50
+            } else {
+                10
+            };
             if let Ok(clipboard_results) = clipboard::search_history(&query_clone).await {
                 let matcher = SkimMatcherV2::default();
                 for entry in clipboard_results.iter().take(clip_limit) {
@@ -202,6 +212,7 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
                             id: entry.id,
                             content: entry.content.clone(),
                             preview,
+                            content_type: entry.content_type.clone(),
                             app_name: entry.app_name.clone(),
                             timestamp: entry.timestamp,
                             custom_name: entry.custom_name.clone(),
@@ -256,26 +267,31 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
     };
 
     // Execute all searches in parallel
-    let (mut app_results, mut file_results, mut clip_results, mut cmd_results, mut calc_results) = 
-        tokio::join!(app_future, file_future, clipboard_future, command_future, calc_future);
+    let (mut app_results, mut file_results, mut clip_results, mut cmd_results, mut calc_results) = tokio::join!(
+        app_future,
+        file_future,
+        clipboard_future,
+        command_future,
+        calc_future
+    );
 
     // Detect query intent
     let query_lower = query.to_lowercase();
-    let is_file_query = query.contains('.') && (
-        query.contains('/') || 
-        query_lower.ends_with(".txt") || 
-        query_lower.ends_with(".md") ||
-        query_lower.ends_with(".pdf") ||
-        query_lower.ends_with(".rs") ||
-        query_lower.ends_with(".js") ||
-        query_lower.ends_with(".py")
-    );
-    let is_url = query.starts_with("http://") || query.starts_with("https://") || query.contains("://");
+    let is_file_query = query.contains('.')
+        && (query.contains('/')
+            || query_lower.ends_with(".txt")
+            || query_lower.ends_with(".md")
+            || query_lower.ends_with(".pdf")
+            || query_lower.ends_with(".rs")
+            || query_lower.ends_with(".js")
+            || query_lower.ends_with(".py"));
+    let is_url =
+        query.starts_with("http://") || query.starts_with("https://") || query.contains("://");
     let is_short_query = query.len() <= 3;
 
     // Cap results per category to ensure diversity
     let max_per_category = if mode == SearchMode::All {
-        if is_short_query { 
+        if is_short_query {
             (10, 3, 2) // (apps, files, clipboard) - apps dominate for short queries
         } else if is_file_query {
             (5, 15, 3) // files dominate for file queries
@@ -334,7 +350,7 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
         is_short_query,
         length: query.len(),
     };
-    
+
     results.sort_by(|a, b| {
         let score_a = get_smart_score(a, query, &matcher, &query_context);
         let score_b = get_smart_score(b, query, &matcher, &query_context);
@@ -352,12 +368,19 @@ struct QueryContext {
     length: usize,
 }
 
-fn get_smart_score(result: &SearchResult, query: &str, _matcher: &SkimMatcherV2, context: &QueryContext) -> i64 {
+fn get_smart_score(
+    result: &SearchResult,
+    query: &str,
+    _matcher: &SkimMatcherV2,
+    context: &QueryContext,
+) -> i64 {
     let query_lower = query.to_lowercase();
     let query_len = query.len();
 
     let base_score = match result {
-        SearchResult::App { name, path, score, .. } => {
+        SearchResult::App {
+            name, path, score, ..
+        } => {
             let name_lower = name.to_lowercase();
             let mut boost = *score;
 
@@ -460,7 +483,9 @@ fn get_smart_score(result: &SearchResult, query: &str, _matcher: &SkimMatcherV2,
 
             boost
         }
-        SearchResult::File { name, path, score, .. } => {
+        SearchResult::File {
+            name, path, score, ..
+        } => {
             let name_lower = name.to_lowercase();
             let mut boost = *score;
 
@@ -524,9 +549,10 @@ fn get_smart_score(result: &SearchResult, query: &str, _matcher: &SkimMatcherV2,
             }
 
             // Boost common user locations
-            if path_lower.contains("/users/") && (path_lower.contains("/documents/")
-                || path_lower.contains("/downloads/")
-                || path_lower.contains("/desktop/"))
+            if path_lower.contains("/users/")
+                && (path_lower.contains("/documents/")
+                    || path_lower.contains("/downloads/")
+                    || path_lower.contains("/desktop/"))
             {
                 boost += 8000;
             }

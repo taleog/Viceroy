@@ -79,6 +79,25 @@ fn discover_apps() -> Result<Vec<AppInfo>> {
     Ok(apps)
 }
 
+pub fn find_app_path_by_name(name: &str) -> Option<String> {
+    if name.trim().is_empty() {
+        return None;
+    }
+    if let Ok(apps) = get_all_apps() {
+        let lower_name = name.to_lowercase();
+        if let Some(app) = apps.iter().find(|app| app.name.eq_ignore_ascii_case(name)) {
+            return Some(app.path.clone());
+        }
+        if let Some(app) = apps
+            .iter()
+            .find(|app| app.name.to_lowercase().contains(&lower_name))
+        {
+            return Some(app.path.clone());
+        }
+    }
+    None
+}
+
 pub fn launch(bundle_path: &str) -> Result<()> {
     unsafe {
         let _pool = NSAutoreleasePool::new(nil);
