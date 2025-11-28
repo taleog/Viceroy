@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)] // `objc` macros gate on `cargo-clippy`; accept it to satisfy check-cfg
+
 use cacao::appkit::window::Window;
 use cacao::appkit::{App, AppDelegate};
 use cocoa::appkit::NSWindowStyleMask;
