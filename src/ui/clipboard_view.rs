@@ -168,7 +168,7 @@ unsafe fn set_string(view: id, value: &str) {
 fn placeholder_text_for_mode(mode: TableMode) -> &'static str {
     match mode {
         TableMode::ClipboardHistory => "Select a clipboard entry to preview",
-        TableMode::Search => "Open clipboard history (Tab) to see previews",
+        TableMode::Search | TableMode::Settings => "Open clipboard history (Tab) to see previews",
     }
 }
 

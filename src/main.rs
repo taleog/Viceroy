@@ -26,11 +26,13 @@ mod ui;
 mod usage;
 mod web_search;
 
+use std::sync::atomic::Ordering;
 use ui::clipboard_view::{
     apply_clipboard_history_state, build_clipboard_history_payload, create_clipboard_preview_view,
     show_clipboard_history_view, update_clipboard_preview_selection,
 };
 use ui::helpers::{run_on_main, style};
+use ui::settings_view;
 use ui::state::*;
 use ui::table;
 
@@ -889,6 +891,7 @@ unsafe fn register_search_delegate_class() {
             }
             let query = std::ffi::CStr::from_ptr(cstr).to_string_lossy().to_string();
             eprintln!("[viceroy] search changed: '{}'", query);
+            let search_version = SEARCH_VERSION.fetch_add(1, Ordering::SeqCst) + 1;
             let mut is_clipboard_mode = match TABLE_MODE.lock() {
                 Ok(mode) => *mode == TableMode::ClipboardHistory,
                 Err(_) => false,
@@ -929,6 +932,9 @@ unsafe fn register_search_delegate_class() {
                 let handle = SEARCH_RT.spawn(async move {
                     if let Ok(entries) = clipboard::search_history(&query_clone).await {
                         let (rows, results) = build_clipboard_history_payload(entries);
+                        if SEARCH_VERSION.load(Ordering::SeqCst) != search_version {
+                            return;
+                        }
                         run_on_main(move || {
                             apply_clipboard_history_state(rows, results);
                         });
@@ -940,98 +946,35 @@ unsafe fn register_search_delegate_class() {
                 return;
             }
 
-            // Spawn async search with immediate execution
+            // Spawn fast search + final file-enhanced search sequentially
             let query_clone = query.clone();
             let handle = SEARCH_RT.spawn(async move {
-                // Small debounce for very fast typing
-                tokio::time::sleep(std::time::Duration::from_millis(15)).await;
-
-                if let Ok(results) = search_engine::search(&query_clone).await {
-                    // Map results to display pairs
-                    let mut rows: Vec<(String, String)> = Vec::new();
-                    for r in &results {
-                        match r {
-                            search_engine::SearchResult::App { name, path, .. } => {
-                                rows.push((name.clone(), path.clone()));
-                            }
-                            search_engine::SearchResult::File { name, path, .. } => {
-                                rows.push((name.clone(), path.clone()));
-                            }
-                            search_engine::SearchResult::Clipboard {
-                                content,
-                                preview,
-                                custom_name,
-                                ..
-                            } => {
-                                let title = custom_name
-                                    .clone()
-                                    .unwrap_or_else(|| content.chars().take(40).collect());
-                                rows.push((title, preview.chars().take(80).collect()));
-                            }
-                            search_engine::SearchResult::Command {
-                                name, description, ..
-                            } => {
-                                rows.push((name.clone(), description.clone()));
-                            }
-                            search_engine::SearchResult::Calculator {
-                                expression,
-                                result,
-                                formats,
-                            } => {
-                                rows.push((
-                                    format!("{} = {}", expression, result),
-                                    formats.join("  -  "),
-                                ));
-                            }
-                            search_engine::SearchResult::Emoji {
-                                emoji,
-                                name,
-                                keywords,
-                            } => {
-                                rows.push((format!("{} {}", emoji, name), keywords.join(", ")));
-                            }
-                            search_engine::SearchResult::Dictionary { word, preview } => {
-                                rows.push((format!("Define: {}", word), preview.clone()));
-                            }
-                            search_engine::SearchResult::WebSearch { query, engine, .. } => {
-                                rows.push((
-                                    format!("Search {}", query),
-                                    format!("Engine: {}", engine),
-                                ));
-                            }
-                        }
+                if let Ok(results) = search_engine::search_fast(&query_clone).await {
+                    if SEARCH_VERSION.load(Ordering::SeqCst) != search_version {
+                        return;
                     }
-                    // Update shared state on main thread
-                    eprintln!(
-                        "[viceroy] search finished - dispatching UI update ({} results)",
-                        results.len()
-                    );
-                    dispatch::Queue::main().exec_async(move || {
-                        // Skip updating while history mode is active
-                        if let Ok(mode) = TABLE_MODE.lock() {
-                            if *mode == TableMode::ClipboardHistory {
+                    let rows = build_search_rows(&results);
+                    run_on_main(move || {
+                        if SEARCH_VERSION.load(Ordering::SeqCst) != search_version {
+                            return;
+                        }
+                        dispatch_search_results(results, rows);
+                    });
+                }
+
+                if should_fetch_file_results(&query_clone) {
+                    if let Ok(results) = search_engine::search(&query_clone).await {
+                        if SEARCH_VERSION.load(Ordering::SeqCst) != search_version {
+                            return;
+                        }
+                        let rows = build_search_rows(&results);
+                        run_on_main(move || {
+                            if SEARCH_VERSION.load(Ordering::SeqCst) != search_version {
                                 return;
                             }
-                        }
-                        eprintln!("[viceroy] running dispatched UI update");
-                        if let Ok(mut tr) = TABLE_RESULTS.lock() {
-                            *tr = results;
-                        } else {
-                            eprintln!("WARNING: TABLE_RESULTS lock poisoned; UI update skipped");
-                        }
-                        if let Ok(mut td) = TABLE_DATA.lock() {
-                            *td = rows;
-                        } else {
-                            eprintln!("WARNING: TABLE_DATA lock poisoned; UI update skipped");
-                        }
-                        table::reload_table();
-                        // Perform reload+resize on next runloop tick to avoid layout recursion
-                        table::schedule_table_update_next_tick();
-                        // Auto-complete disabled per user request
-                        // unsafe {
-                        //    update_autocomplete_preview(&query_clone);
-                        // }
-                    });
+                            dispatch_search_results(results, rows);
+                        });
+                    }
                 }
             });
 
@@ -1053,6 +996,90 @@ unsafe fn register_search_delegate_class() {
         );
         decl.register();
     }
+}
+
+fn build_search_rows(results: &[search_engine::SearchResult]) -> Vec<(String, String)> {
+    let mut rows: Vec<(String, String)> = Vec::new();
+    for r in results {
+        match r {
+            search_engine::SearchResult::App { name, path, .. } => {
+                rows.push((name.clone(), path.clone()));
+            }
+            search_engine::SearchResult::File { name, path, .. } => {
+                rows.push((name.clone(), path.clone()));
+            }
+            search_engine::SearchResult::Clipboard {
+                content,
+                preview,
+                custom_name,
+                ..
+            } => {
+                let title = custom_name
+                    .clone()
+                    .unwrap_or_else(|| content.chars().take(40).collect());
+                rows.push((title, preview.chars().take(80).collect()));
+            }
+            search_engine::SearchResult::Command {
+                name, description, ..
+            } => {
+                rows.push((name.clone(), description.clone()));
+            }
+            search_engine::SearchResult::Calculator {
+                expression,
+                result,
+                formats,
+            } => {
+                rows.push((
+                    format!("{} = {}", expression, result),
+                    formats.join("  -  "),
+                ));
+            }
+            search_engine::SearchResult::Emoji {
+                emoji,
+                name,
+                keywords,
+            } => {
+                rows.push((format!("{} {}", emoji, name), keywords.join(", ")));
+            }
+            search_engine::SearchResult::Dictionary { word, preview } => {
+                rows.push((format!("Define: {}", word), preview.clone()));
+            }
+            search_engine::SearchResult::WebSearch { query, engine, .. } => {
+                rows.push((format!("Search {}", query), format!("Engine: {}", engine)));
+            }
+        }
+    }
+    rows
+}
+
+fn dispatch_search_results(results: Vec<search_engine::SearchResult>, rows: Vec<(String, String)>) {
+    eprintln!(
+        "[viceroy] search finished - dispatching UI update ({} results)",
+        results.len()
+    );
+    if let Ok(mode) = TABLE_MODE.lock() {
+        if *mode == TableMode::ClipboardHistory {
+            return;
+        }
+    }
+    if let Ok(mut tr) = TABLE_RESULTS.lock() {
+        *tr = results;
+    } else {
+        eprintln!("WARNING: TABLE_RESULTS lock poisoned; UI update skipped");
+    }
+    if let Ok(mut td) = TABLE_DATA.lock() {
+        *td = rows;
+    } else {
+        eprintln!("WARNING: TABLE_DATA lock poisoned; UI update skipped");
+    }
+    unsafe {
+        table::reload_table();
+    }
+    table::schedule_table_update_next_tick();
+}
+
+fn should_fetch_file_results(query: &str) -> bool {
+    query.len() >= 3 && !query.starts_with(':')
 }
 
 fn abort_current_search() {
@@ -1301,6 +1328,7 @@ unsafe fn create_menu_actions_target() -> id {
 
         extern "C" fn show_main_window(_this: &Object, _cmd: Sel, _sender: id) {
             unsafe {
+                settings_view::hide_settings_panel();
                 // Update global state
                 if let Ok(mut w) = WINDOW_SHOWING.lock() {
                     *w = true;
@@ -1333,13 +1361,14 @@ unsafe fn create_menu_actions_target() -> id {
                     let _: () = msg_send![app, activateIgnoringOtherApps: YES];
                     let _: () = msg_send![window, makeKeyAndOrderFront: nil];
 
-                    // TODO: Switch to settings view in the window
+                    settings_view::show_settings_panel();
                 }
             }
         }
 
         extern "C" fn show_clipboard_history(_this: &Object, _cmd: Sel, _sender: id) {
             unsafe {
+                settings_view::hide_settings_panel();
                 if let Ok(mut w) = WINDOW_SHOWING.lock() {
                     *w = true;
                 }

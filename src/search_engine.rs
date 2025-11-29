@@ -80,6 +80,19 @@ pub async fn search(query: &str) -> Result<Vec<SearchResult>> {
 }
 
 pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<SearchResult>> {
+    run_search(query, mode, true, true).await
+}
+
+pub async fn search_fast(query: &str) -> Result<Vec<SearchResult>> {
+    run_search(query, SearchMode::All, false, false).await
+}
+
+async fn run_search(
+    query: &str,
+    mode: SearchMode,
+    include_files: bool,
+    include_clipboard: bool,
+) -> Result<Vec<SearchResult>> {
     if query.is_empty() {
         return Ok(Vec::new());
     }
@@ -164,7 +177,7 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
     // File search future
     let file_future = async {
         let mut results = Vec::new();
-        if mode_clone == SearchMode::All || mode_clone == SearchMode::Files {
+        if include_files && (mode_clone == SearchMode::All || mode_clone == SearchMode::Files) {
             // Skip file search for very short queries to improve responsiveness
             if query_clone.len() >= 3 {
                 let file_limit = if mode_clone == SearchMode::Files {
@@ -199,7 +212,9 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
     // Clipboard search future
     let clipboard_future = async {
         let mut results = Vec::new();
-        if mode_clone == SearchMode::All || mode_clone == SearchMode::Clipboard {
+        if include_clipboard
+            && (mode_clone == SearchMode::All || mode_clone == SearchMode::Clipboard)
+        {
             let clip_limit = if mode_clone == SearchMode::Clipboard {
                 50
             } else {

@@ -5,7 +5,7 @@ use crate::ui::helpers::style;
 use crate::ui::helpers::{run_on_main, wrapped_row};
 use crate::ui::state::{
     TableMode, CLIPBOARD_PREVIEW, ICON_CACHE, SEARCH_RT, TABLE_DATA, TABLE_MODE, TABLE_RESULTS,
-    TABLE_SCROLL_VIEW, TABLE_UPDATE_PENDING, WINDOW_SHOWING,
+    TABLE_SCROLL_VIEW, TABLE_UPDATE_PENDING, WINDOW_IS_OPEN, WINDOW_SHOWING,
 };
 use crate::usage;
 use crate::web_search;
@@ -14,11 +14,19 @@ use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
+use std::sync::atomic::Ordering;
 
 use crate::app_launcher;
 use crate::ui::clipboard_view::{icon_for_history_entry, update_clipboard_preview_selection};
 
 pub use crate::ui::helpers::style::ROW_HEIGHT;
+
+const COLLAPSED_RESULT_AREA_HEIGHT: f64 = 0.0;
+const OPEN_RESULT_AREA_HEIGHT: f64 = 360.0;
+const WINDOW_HEIGHT_OPEN: f64 =
+    style::TABLE_TOP_OFFSET + style::TABLE_FOOTER_HEIGHT + OPEN_RESULT_AREA_HEIGHT;
+const WINDOW_HEIGHT_COLLAPSED: f64 =
+    style::TABLE_TOP_OFFSET + style::TABLE_FOOTER_HEIGHT + COLLAPSED_RESULT_AREA_HEIGHT;
 
 pub unsafe fn create_index_set(index: usize) -> id {
     msg_send![class!(NSIndexSet), indexSetWithIndex:index]
@@ -104,7 +112,35 @@ pub unsafe fn reload_table() {
     }
 }
 
-pub unsafe fn resize_window_for_results() {
+fn should_window_open_for_mode(mode: TableMode) -> bool {
+    match mode {
+        TableMode::ClipboardHistory | TableMode::Settings => true,
+        TableMode::Search => match TABLE_DATA.lock() {
+            Ok(data) => !data.is_empty(),
+            Err(_) => true,
+        },
+    }
+}
+
+pub unsafe fn sync_window_height_with_state() {
+    let mode = match TABLE_MODE.lock() {
+        Ok(m) => *m,
+        Err(_) => TableMode::Search,
+    };
+    let open = should_window_open_for_mode(mode);
+    let target_height = if open {
+        WINDOW_HEIGHT_OPEN
+    } else {
+        WINDOW_HEIGHT_COLLAPSED
+    };
+    let preview_visible = mode == TableMode::ClipboardHistory;
+    let previously_open = WINDOW_IS_OPEN.load(Ordering::SeqCst);
+    if previously_open == open {
+        update_preview_layout(preview_visible);
+        return;
+    }
+    WINDOW_IS_OPEN.store(open, Ordering::SeqCst);
+
     let app: id = msg_send![class!(NSApplication), sharedApplication];
     let windows: id = msg_send![app, windows];
     let count: usize = msg_send![windows, count];
@@ -112,53 +148,29 @@ pub unsafe fn resize_window_for_results() {
         return;
     }
     let window: id = msg_send![windows, objectAtIndex:0];
+    let current_frame: NSRect = msg_send![window, frame];
+    let new_origin_y = current_frame.origin.y + (current_frame.size.height - target_height);
+    let new_frame = NSRect::new(
+        NSPoint::new(current_frame.origin.x, new_origin_y),
+        NSSize::new(current_frame.size.width, target_height),
+    );
+
     let content: id = msg_send![window, contentView];
     let subviews: id = msg_send![content, subviews];
     let sv_count: usize = msg_send![subviews, count];
-    if sv_count < 2 {
-        return;
-    }
-
-    let num_results = match TABLE_DATA.lock() {
-        Ok(g) => g.len(),
-        Err(_) => 0,
-    };
-    let base_height = style::TABLE_TOP_OFFSET + style::TABLE_FOOTER_HEIGHT;
-    let row_height = ROW_HEIGHT;
-    let max_visible_rows = 8;
-    let visible_rows = num_results.min(max_visible_rows);
-    let spacing_total = style::ROW_STACK_SPACING * visible_rows.saturating_sub(1) as f64;
-    let rows_height = visible_rows as f64 * row_height + spacing_total;
-    let new_height = if visible_rows == 0 {
-        base_height
-    } else {
-        base_height + rows_height + 10.0
-    };
-
-    let current_frame: NSRect = msg_send![window, frame];
-    if (current_frame.size.height - new_height).abs() < 0.5 {
-        return;
-    }
-
-    let new_frame = NSRect::new(
-        NSPoint::new(
-            current_frame.origin.x,
-            current_frame.origin.y + (current_frame.size.height - new_height),
-        ),
-        NSSize::new(current_frame.size.width, new_height),
-    );
 
     if sv_count >= 2 {
         let container: id = msg_send![subviews, objectAtIndex:1];
-        let new_search_y = new_height - style::TABLE_TOP_OFFSET;
+        let new_search_y = target_height - style::TABLE_TOP_OFFSET;
         let new_search_frame = NSRect::new(
             NSPoint::new(20.0, new_search_y),
-            NSSize::new(current_frame.size.width - 40.0, 60.0),
+            NSSize::new(current_frame.size.width - 40.0, style::SEARCH_BAR_HEIGHT),
         );
         let _: () = msg_send![container, setFrame:new_search_frame];
     }
 
     let _: () = msg_send![window, setFrame:new_frame display:YES animate:NO];
+    update_preview_layout(preview_visible);
 }
 
 pub fn update_preview_layout(preview_visible: bool) {
@@ -257,7 +269,7 @@ pub fn schedule_table_update_next_tick() {
                 update_clipboard_preview_selection(None);
             }
         }
-        resize_window_for_results();
+        sync_window_height_with_state();
         TABLE_UPDATE_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 }
@@ -536,7 +548,8 @@ pub unsafe fn register_table_delegate_class() {
             let subviews: id = msg_send![container, subviews];
             let icon_view: id = msg_send![subviews, objectAtIndex:0];
             let icon_size = style::ROW_ICON_SIZE;
-            let icon_y = (container_height - icon_size) / 2.0;
+            let icon_y = (container_height - icon_size - style::ROW_CONTENT_TOP_INSET)
+                .max(style::ROW_VERTICAL_PADDING);
             let _: () = msg_send![icon_view, setFrame: NSRect::new(NSPoint::new(style::ROW_INTERNAL_PADDING, icon_y), NSSize::new(icon_size, icon_size))];
             if icon_image != nil {
                 let _: () = msg_send![icon_view, setImage: icon_image];
@@ -551,7 +564,9 @@ pub unsafe fn register_table_delegate_class() {
                     .max(120.0);
             let text_block_height =
                 style::ROW_TITLE_HEIGHT + style::ROW_SUBTITLE_HEIGHT + style::ROW_TEXT_SPACING;
-            let text_block_origin_y = ((container_height - text_block_height) / 2.0).max(0.0);
+            let text_block_origin_y =
+                (container_height - text_block_height - style::ROW_CONTENT_TOP_INSET)
+                    .max(style::ROW_VERTICAL_PADDING);
             let title_y =
                 text_block_origin_y + style::ROW_SUBTITLE_HEIGHT + style::ROW_TEXT_SPACING;
             let _: () = msg_send![title_field, setFrame: NSRect::new(NSPoint::new(text_x, title_y), NSSize::new(text_width, style::ROW_TITLE_HEIGHT))];
@@ -567,7 +582,8 @@ pub unsafe fn register_table_delegate_class() {
             let type_field: id = msg_send![subviews, objectAtIndex:3];
             let type_x = container_width - type_label_width - style::ROW_TRAILING_PADDING;
             let type_height = style::ROW_SUBTITLE_HEIGHT;
-            let type_y = (container_height - type_height) / 2.0;
+            let type_y = (container_height - type_height - style::ROW_CONTENT_TOP_INSET)
+                .max(style::ROW_VERTICAL_PADDING);
             let _: () = msg_send![type_field, setFrame: NSRect::new(NSPoint::new(type_x, type_y), NSSize::new(type_label_width, type_height))];
             let _: () = msg_send![type_field, setStringValue: NSString::alloc(nil).init_str(&type_label_str)];
             let _: () = msg_send![type_field, setWantsLayer: NO];
