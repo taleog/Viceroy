@@ -26,7 +26,11 @@ mod ui;
 mod usage;
 mod web_search;
 
-use ui::clipboard_view::show_clipboard_history_view;
+use ui::clipboard_view::{
+    apply_clipboard_history_state, build_clipboard_history_payload, create_clipboard_preview_view,
+    show_clipboard_history_view, update_clipboard_preview_selection,
+};
+use ui::helpers::{run_on_main, style};
 use ui::state::*;
 use ui::table;
 
@@ -252,6 +256,12 @@ impl AppDelegate for ViceroyApp {
                                                             // Clear previous query text and any existing results
                                                             let empty: id = NSString::alloc(nil).init_str("");
                                                             let _: () = msg_send![search_field, setStringValue: empty];
+
+                                                            if let Ok(mut mode) = TABLE_MODE.lock() {
+                                                                *mode = TableMode::Search;
+                                                            }
+                                                            update_clipboard_preview_selection(None);
+                                                            table::update_preview_layout(false);
 
                                                             if let Ok(mut tr) = TABLE_RESULTS.lock() {
                                                                 tr.clear();
@@ -595,8 +605,8 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     // 1. Create Container View (The "Search Bar" visual)
     let container: id = msg_send![class!(NSView), alloc];
     let container_frame = NSRect::new(
-        NSPoint::new(20.0, bounds.size.height - 80.0), // 20px from top
-        NSSize::new(bounds.size.width - 40.0, 60.0),
+        NSPoint::new(20.0, bounds.size.height - style::TABLE_TOP_OFFSET),
+        NSSize::new(bounds.size.width - 40.0, style::SEARCH_BAR_HEIGHT),
     );
     let container: id = msg_send![container, initWithFrame: container_frame];
     let _: () = msg_send![container, setWantsLayer: YES];
@@ -690,31 +700,40 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
 unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     table::register_table_delegate_class();
 
-    // Scroll view container with padding
+    // Layout constants for list + preview split
+    let table_height =
+        (bounds.size.height - style::TABLE_TOP_OFFSET - style::TABLE_FOOTER_HEIGHT).max(0.0);
+    let list_width = bounds.size.width * 0.52;
+    let preview_spacing = 12.0;
+    let preview_origin_x = list_width + preview_spacing;
+    let preview_width = bounds.size.width - preview_origin_x - 12.0;
+
+    // Scroll view container with padding on the left
     let scroll: id = msg_send![class!(NSScrollView), alloc];
-    let table_height = bounds.size.height - 116.0 - 22.0; // below search field and above footer
     let frame = NSRect::new(
-        NSPoint::new(0.0, 10.0), // Reduced bottom margin
-        NSSize::new(bounds.size.width, table_height),
+        NSPoint::new(0.0, style::TABLE_FOOTER_HEIGHT),
+        NSSize::new(list_width, table_height),
     );
     let scroll: id = msg_send![scroll, initWithFrame: frame];
     let _: () = msg_send![scroll, setBorderType: 0];
     let _: () = msg_send![scroll, setDrawsBackground: NO];
     let _: () = msg_send![scroll, setWantsLayer: YES];
     let scroll_layer: id = msg_send![scroll, layer];
-    let _: () = msg_send![scroll_layer, setCornerRadius: 8.0f64];
+    let _: () = msg_send![scroll_layer, setCornerRadius: 10.0f64];
     let _: () = msg_send![scroll_layer, setMasksToBounds: YES];
     let _: () = msg_send![scroll, setHasVerticalScroller: YES];
     let _: () = msg_send![scroll, setHasHorizontalScroller: NO];
-    let _: () = msg_send![scroll, setAutoresizingMask: 18]; // width+height
+    let _: () = msg_send![scroll, setAutoresizingMask: 16]; // height only
+    let _ = TABLE_SCROLL_VIEW.set(scroll as usize);
 
     // Table view with modern spacing
     let table: id = msg_send![class!(NSTableView), alloc];
     let table: id = msg_send![table, initWithFrame: NSRect::new(NSPoint::new(0.0,0.0), NSSize::new(bounds.size.width, table_height))];
     let _: () = msg_send![table, setHeaderView: nil];
-    let _: () = msg_send![table, setRowHeight: 60.0f64];
-    let _: () = msg_send![table, setIntercellSpacing: NSSize::new(0.0, 8.0)]; // More spacing like Viceroy
-    let _: () = msg_send![table, setSelectionHighlightStyle: 1]; // Regular
+    let _: () = msg_send![table, setRowHeight: table::ROW_HEIGHT];
+    let _: () = msg_send![table, setIntercellSpacing: NSSize::new(0.0, 6.0)];
+    let _: () = msg_send![table, setSelectionHighlightStyle: -1]; // Custom selection drawing
+    let _: () = msg_send![table, setFocusRingType: 0];
     let bg_color: id = msg_send![class!(NSColor), clearColor];
     let _: () = msg_send![table, setBackgroundColor: bg_color];
     let _: () = msg_send![table, setGridStyleMask: 0]; // No grid
@@ -726,7 +745,7 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     // Single column
     let column: id = msg_send![class!(NSTableColumn), alloc];
     let column: id = msg_send![column, initWithIdentifier: NSString::alloc(nil).init_str("main")];
-    let _: () = msg_send![column, setWidth: bounds.size.width];
+    let _: () = msg_send![column, setWidth: list_width];
     let _: () = msg_send![table, addTableColumn: column];
 
     // Data source & delegate
@@ -762,6 +781,14 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     let _: () = msg_send![scroll, setDocumentView: table];
     let _: () = msg_send![content_view, addSubview: scroll];
 
+    // Clipboard preview panel to the right of the list
+    let preview_frame = NSRect::new(
+        NSPoint::new(preview_origin_x, 10.0),
+        NSSize::new(preview_width, table_height),
+    );
+    create_clipboard_preview_view(content_view, preview_frame);
+    table::update_preview_layout(false);
+
     // Footer hint bar
     let footer_height = 22.0;
     let footer_frame = NSRect::new(
@@ -772,7 +799,7 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     let footer: id = msg_send![footer, initWithFrame: footer_frame];
     let _: () = msg_send![footer, setWantsLayer: YES];
     let footer_layer: id = msg_send![footer, layer];
-    let footer_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.1f64 alpha:0.6f64];
+    let footer_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.08f64 alpha:0.95f64];
     let footer_bg_cg: id = msg_send![footer_bg, CGColor];
     let _: () = msg_send![footer_layer, setBackgroundColor: footer_bg_cg];
 
@@ -862,8 +889,17 @@ unsafe fn register_search_delegate_class() {
             }
             let query = std::ffi::CStr::from_ptr(cstr).to_string_lossy().to_string();
             eprintln!("[viceroy] search changed: '{}'", query);
-            if let Ok(mut mode) = TABLE_MODE.lock() {
-                *mode = TableMode::Search;
+            let mut is_clipboard_mode = match TABLE_MODE.lock() {
+                Ok(mode) => *mode == TableMode::ClipboardHistory,
+                Err(_) => false,
+            };
+            if !is_clipboard_mode {
+                if let Ok(mut mode) = TABLE_MODE.lock() {
+                    *mode = TableMode::Search;
+                }
+                update_clipboard_preview_selection(None);
+                table::update_preview_layout(false);
+                is_clipboard_mode = false;
             }
 
             // Cancel previous search
@@ -874,13 +910,33 @@ unsafe fn register_search_delegate_class() {
             }
 
             if query.is_empty() {
-                if let Ok(mut tr) = TABLE_RESULTS.lock() {
-                    tr.clear();
+                if is_clipboard_mode {
+                    show_clipboard_history_view();
+                } else {
+                    if let Ok(mut tr) = TABLE_RESULTS.lock() {
+                        tr.clear();
+                    }
+                    if let Ok(mut td) = TABLE_DATA.lock() {
+                        td.clear();
+                    }
+                    table::schedule_table_update_next_tick();
                 }
-                if let Ok(mut td) = TABLE_DATA.lock() {
-                    td.clear();
+                return;
+            }
+
+            if is_clipboard_mode {
+                let query_clone = query.clone();
+                let handle = SEARCH_RT.spawn(async move {
+                    if let Ok(entries) = clipboard::search_history(&query_clone).await {
+                        let (rows, results) = build_clipboard_history_payload(entries);
+                        run_on_main(move || {
+                            apply_clipboard_history_state(rows, results);
+                        });
+                    }
+                });
+                if let Ok(mut handle_guard) = CURRENT_SEARCH.lock() {
+                    *handle_guard = Some(handle);
                 }
-                table::schedule_table_update_next_tick();
                 return;
             }
 
@@ -1388,6 +1444,8 @@ unsafe fn bring_window_to_front_with_search_reset(window: id) {
     if let Ok(mut mode) = TABLE_MODE.lock() {
         *mode = TableMode::Search;
     }
+    update_clipboard_preview_selection(None);
+    table::update_preview_layout(false);
 
     let content_view: id = msg_send![window, contentView];
     let subviews: id = msg_send![content_view, subviews];
@@ -1477,7 +1535,7 @@ unsafe fn setup_app_observer(_ns_window: id) {
     // Register for deactivation notifications
     let center: id = msg_send![class!(NSNotificationCenter), defaultCenter];
     let app: id = msg_send![class!(NSApplication), sharedApplication];
-    let name_cstr = c"NSApplicationDidResignActiveNotification";
+    let name_cstr = std::ffi::CString::new("NSApplicationDidResignActiveNotification").unwrap();
     let name: id = msg_send![class!(NSString), stringWithUTF8String: name_cstr.as_ptr()];
     let _: () = msg_send![center, addObserver:observer selector:sel!(appDidResignActive:) name:name object:app];
 }

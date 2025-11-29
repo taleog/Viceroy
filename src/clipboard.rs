@@ -1,12 +1,15 @@
 use crate::app_launcher;
 use crate::database;
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use arboard::{Clipboard, ImageData};
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::Utc;
 use lazy_static::lazy_static;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
 
@@ -119,7 +122,7 @@ async fn save_clipboard_image(image: &ImageData<'_>, app_name: &Option<String>) 
         let mut writer = encoder.write_header()?;
         writer.write_image_data(&image.bytes)?;
     }
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+    let b64 = STANDARD.encode(&png_bytes);
     conn.execute(
         "INSERT INTO clipboard_history (content, content_type, app_name, timestamp, image_width, image_height) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
@@ -205,18 +208,65 @@ pub async fn search_history(query: &str) -> Result<Vec<ClipboardEntry>> {
 }
 
 pub async fn paste_to_active_app(content: &str) -> Result<()> {
-    // First, copy to clipboard
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(content)?;
-
-    // Small delay to ensure clipboard is updated
     sleep(Duration::from_millis(50)).await;
+    send_paste_keystroke()?;
+    Ok(())
+}
 
-    // Use AppleScript to simulate Cmd+V in frontmost app
-    std::process::Command::new("osascript")
+pub async fn paste_history_entry(
+    content: &str,
+    content_type: &str,
+    _image_width: Option<i64>,
+    _image_height: Option<i64>,
+) -> Result<()> {
+    if content_type == "image" {
+        paste_image_to_active_app(content).await
+    } else {
+        paste_to_active_app(content).await
+    }
+}
+
+async fn paste_image_to_active_app(content: &str) -> Result<()> {
+    let image = decode_history_image(content)?;
+    let mut clipboard = Clipboard::new()?;
+    clipboard.set_image(image)?;
+    sleep(Duration::from_millis(60)).await;
+    send_paste_keystroke()?;
+    Ok(())
+}
+
+fn decode_history_image(content: &str) -> Result<ImageData<'static>> {
+    let png_bytes = STANDARD
+        .decode(content)
+        .context("failed to decode base64 clipboard image")?;
+    let cursor = Cursor::new(&png_bytes);
+    let decoder = png::Decoder::new(cursor);
+    let mut reader = decoder
+        .read_info()
+        .context("failed to read clipboard image header")?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buf)
+        .context("failed to decode clipboard image data")?;
+    buf.truncate(info.buffer_size());
+    Ok(ImageData {
+        width: info.width as usize,
+        height: info.height as usize,
+        bytes: Cow::Owned(buf),
+    })
+}
+
+fn send_paste_keystroke() -> Result<()> {
+    let status = std::process::Command::new("osascript")
         .arg("-e")
         .arg(r#"tell application "System Events" to keystroke "v" using command down"#)
-        .output()?;
-
-    Ok(())
+        .status()
+        .context("failed to trigger paste keystroke")?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("paste keystroke command failed"))
+    }
 }

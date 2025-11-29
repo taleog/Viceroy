@@ -44,6 +44,8 @@ pub enum SearchResult {
         timestamp: i64,
         custom_name: Option<String>,
         is_pinned: bool,
+        image_width: Option<i64>,
+        image_height: Option<i64>,
         score: i64,
     },
     Command {
@@ -217,6 +219,8 @@ pub async fn search_with_mode(query: &str, mode: SearchMode) -> Result<Vec<Searc
                             timestamp: entry.timestamp,
                             custom_name: entry.custom_name.clone(),
                             is_pinned: entry.is_pinned,
+                            image_width: entry.image_width,
+                            image_height: entry.image_height,
                             score,
                         });
                     }
@@ -801,6 +805,8 @@ mod tests {
             timestamp: 0,
             custom_name: None,
             is_pinned: false,
+            image_width: None,
+            image_height: None,
             score: 0,
         };
         let command = SearchResult::Command {
