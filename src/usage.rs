@@ -54,14 +54,19 @@ fn now_ts() -> i64 {
 }
 
 pub fn record_app_launch(path: &str) {
-    let mut usage = USAGE.lock().unwrap();
-    let entry = usage.apps.entry(path.to_string()).or_default();
-    entry.last_used = now_ts();
-    entry.launch_count = entry.launch_count.saturating_add(1);
-    let _ = save_usage(&usage);
+    if let Ok(mut usage) = USAGE.lock() {
+        let entry = usage.apps.entry(path.to_string()).or_default();
+        entry.last_used = now_ts();
+        entry.launch_count = entry.launch_count.saturating_add(1);
+        if let Err(err) = save_usage(&usage) {
+            eprintln!("Failed to persist usage metrics: {err}");
+        }
+    }
 }
 
 pub fn get_app_usage(path: &str) -> Option<(i64, u32)> {
-    let usage = USAGE.lock().unwrap();
-    usage.apps.get(path).map(|e| (e.last_used, e.launch_count))
+    USAGE
+        .lock()
+        .ok()
+        .and_then(|usage| usage.apps.get(path).map(|e| (e.last_used, e.launch_count)))
 }
