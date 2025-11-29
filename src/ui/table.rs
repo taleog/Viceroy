@@ -261,29 +261,10 @@ pub fn schedule_table_update_next_tick() {
     });
 }
 
-fn register_row_highlight_view_class() {
-    unsafe {
-        if objc::runtime::Class::get("MKRowHighlightView").is_some() {
-            return;
-        }
-        let superclass = class!(NSTableRowView);
-        let mut decl = ClassDecl::new("MKRowHighlightView", superclass).unwrap();
-
-        extern "C" fn draw_selection(_this: &Object, _cmd: Sel, _rect: NSRect) {}
-        decl.add_method(
-            sel!(drawSelectionInRect:),
-            draw_selection as extern "C" fn(&Object, Sel, NSRect),
-        );
-
-        decl.register();
-    }
-}
-
 pub unsafe fn register_table_delegate_class() {
     if objc::runtime::Class::get("MKTableDelegate").is_some() {
         return;
     }
-    register_row_highlight_view_class();
     let mut decl = ClassDecl::new("MKTableDelegate", class!(NSObject)).unwrap();
 
     extern "C" fn rows(_this: &Object, _cmd: Sel, _table: id) -> isize {
@@ -468,6 +449,8 @@ pub unsafe fn register_table_delegate_class() {
                 NSSize::new(row_width - inset * 2.0, container_height),
             );
             let container_width = container_frame.size.width;
+            let selected_flag: BOOL = msg_send![table, isRowSelected:row];
+            let is_selected = selected_flag == YES;
 
             if container == nil {
                 let new_container: id = msg_send![class!(NSView), alloc];
@@ -524,78 +507,14 @@ pub unsafe fn register_table_delegate_class() {
             }
 
             let _: () = msg_send![container, setFrame: container_frame];
-            let _: () = msg_send![container, setWantsLayer: YES];
-            let container_layer: id = msg_send![container, layer];
-            let selected_flag: BOOL = msg_send![table, isRowSelected:row];
-            let is_selected = selected_flag == YES;
-            let _: () = msg_send![container_layer, setCornerRadius: style::ROW_CORNER_RADIUS];
-            let _: () = msg_send![container_layer, setBorderWidth: style::ROW_BORDER_WIDTH];
-            if is_selected {
-                let accent_color: id = msg_send![class!(NSColor), controlAccentColor];
-                let accent_bg: id = msg_send![
-                    accent_color,
-                    colorWithAlphaComponent: style::ROW_SELECTION_BG_ALPHA
-                ];
-                let accent_bg_cg: id = msg_send![accent_bg, CGColor];
-                let _: () = msg_send![container_layer, setBackgroundColor: accent_bg_cg];
-                let accent_border: id = msg_send![
-                    accent_color,
-                    colorWithAlphaComponent: style::ROW_SELECTION_BORDER_ALPHA
-                ];
-                let accent_border_cg: id = msg_send![accent_border, CGColor];
-                let _: () = msg_send![container_layer, setBorderColor: accent_border_cg];
-            } else if clipboard_mode {
-                let card_bg: id =
-                    msg_send![class!(NSColor), colorWithCalibratedWhite:0.18f64 alpha:0.35f64];
-                let card_bg_cg: id = msg_send![card_bg, CGColor];
-                let _: () = msg_send![container_layer, setBackgroundColor: card_bg_cg];
-                let border_clear: id =
-                    msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
-                let border_clear_cg: id = msg_send![border_clear, CGColor];
-                let _: () = msg_send![container_layer, setBorderColor: border_clear_cg];
-            } else {
-                let clear: id = msg_send![class!(NSColor), clearColor];
-                let clear_cg: id = msg_send![clear, CGColor];
-                let _: () = msg_send![container_layer, setBackgroundColor: clear_cg];
-                let invisible: id =
-                    msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.05f64];
-                let invisible_cg: id = msg_send![invisible, CGColor];
-                let _: () = msg_send![container_layer, setBorderColor: invisible_cg];
-            }
-            let _: () = msg_send![container_layer, setMasksToBounds: NO];
-
             let subviews: id = msg_send![container, subviews];
             let icon_view: id = msg_send![subviews, objectAtIndex:0];
             let icon_size = style::ROW_ICON_SIZE;
             let icon_y = (container_height - icon_size) / 2.0;
             let _: () = msg_send![icon_view, setFrame: NSRect::new(NSPoint::new(style::ROW_INTERNAL_PADDING, icon_y), NSSize::new(icon_size, icon_size))];
-            let _: () = msg_send![icon_view, setWantsLayer: YES];
-            let icon_layer: id = msg_send![icon_view, layer];
-            if clipboard_mode || is_selected {
-                let icon_bg: id =
-                    msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
-                let icon_bg_cg: id = msg_send![icon_bg, CGColor];
-                let _: () = msg_send![icon_layer, setCornerRadius: 10.0f64];
-                let _: () = msg_send![icon_layer, setMasksToBounds: YES];
-                let _: () = msg_send![icon_layer, setBackgroundColor: icon_bg_cg];
-            } else {
-                let clear: id = msg_send![class!(NSColor), clearColor];
-                let clear_cg: id = msg_send![clear, CGColor];
-                let _: () = msg_send![icon_layer, setCornerRadius: 8.0f64];
-                let _: () = msg_send![icon_layer, setMasksToBounds: YES];
-                let _: () = msg_send![icon_layer, setBackgroundColor: clear_cg];
-            }
             if icon_image != nil {
                 let _: () = msg_send![icon_view, setImage: icon_image];
             }
-            let icon_tint: id = if is_selected {
-                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.95f64]
-            } else if clipboard_mode {
-                msg_send![class!(NSColor), colorWithCalibratedRed:0.9f64 green:0.95f64 blue:1.0f64 alpha:0.85f64]
-            } else {
-                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.85f64]
-            };
-            let _: () = msg_send![icon_view, setContentTintColor: icon_tint];
 
             let title_field: id = msg_send![subviews, objectAtIndex:1];
             let text_x =
@@ -612,18 +531,12 @@ pub unsafe fn register_table_delegate_class() {
             let _: () = msg_send![title_field, setFrame: NSRect::new(NSPoint::new(text_x, title_y), NSSize::new(text_width, style::ROW_TITLE_HEIGHT))];
             let _: () =
                 msg_send![title_field, setStringValue: NSString::alloc(nil).init_str(&title)];
-            let primary_color: id =
-                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.96f64];
-            let _: () = msg_send![title_field, setTextColor: primary_color];
 
             let subtitle_field: id = msg_send![subviews, objectAtIndex:2];
             let subtitle_y = text_block_origin_y;
             let _: () = msg_send![subtitle_field, setFrame: NSRect::new(NSPoint::new(text_x, subtitle_y), NSSize::new(text_width, style::ROW_SUBTITLE_HEIGHT))];
             let _: () =
                 msg_send![subtitle_field, setStringValue: NSString::alloc(nil).init_str(&subtitle)];
-            let secondary_color: id =
-                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.66f64];
-            let _: () = msg_send![subtitle_field, setTextColor: secondary_color];
 
             let type_field: id = msg_send![subviews, objectAtIndex:3];
             let type_x = container_width - type_label_width - style::ROW_TRAILING_PADDING;
@@ -633,28 +546,122 @@ pub unsafe fn register_table_delegate_class() {
             let _: () = msg_send![type_field, setStringValue: NSString::alloc(nil).init_str(&type_label_str)];
             let _: () = msg_send![type_field, setWantsLayer: NO];
             let _: () = msg_send![type_field, setDrawsBackground: NO];
+
+            let _: () = msg_send![container, setWantsLayer: YES];
+            apply_selection_visuals(container, clipboard_mode, is_selected);
+            container
+        }
+    }
+
+    unsafe fn apply_selection_visuals(container: id, clipboard_mode: bool, is_selected: bool) {
+        if container == nil {
+            return;
+        }
+        let container_layer: id = msg_send![container, layer];
+        let _: () = msg_send![container_layer, setCornerRadius: style::ROW_CORNER_RADIUS];
+        let _: () = msg_send![container_layer, setBorderWidth: style::ROW_BORDER_WIDTH];
+        if is_selected {
+            let accent_color: id = msg_send![class!(NSColor), controlAccentColor];
+            let accent_bg: id = msg_send![
+                accent_color,
+                colorWithAlphaComponent: style::ROW_SELECTION_BG_ALPHA
+            ];
+            let accent_bg_cg: id = msg_send![accent_bg, CGColor];
+            let _: () = msg_send![container_layer, setBackgroundColor: accent_bg_cg];
+            let accent_border: id = msg_send![
+                accent_color,
+                colorWithAlphaComponent: style::ROW_SELECTION_BORDER_ALPHA
+            ];
+            let accent_border_cg: id = msg_send![accent_border, CGColor];
+            let _: () = msg_send![container_layer, setBorderColor: accent_border_cg];
+        } else if clipboard_mode {
+            let card_bg: id =
+                msg_send![class!(NSColor), colorWithCalibratedWhite:0.18f64 alpha:0.35f64];
+            let card_bg_cg: id = msg_send![card_bg, CGColor];
+            let _: () = msg_send![container_layer, setBackgroundColor: card_bg_cg];
+            let border_clear: id =
+                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+            let border_clear_cg: id = msg_send![border_clear, CGColor];
+            let _: () = msg_send![container_layer, setBorderColor: border_clear_cg];
+        } else {
+            let clear: id = msg_send![class!(NSColor), clearColor];
+            let clear_cg: id = msg_send![clear, CGColor];
+            let _: () = msg_send![container_layer, setBackgroundColor: clear_cg];
+            let invisible: id =
+                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.05f64];
+            let invisible_cg: id = msg_send![invisible, CGColor];
+            let _: () = msg_send![container_layer, setBorderColor: invisible_cg];
+        }
+        let _: () = msg_send![container_layer, setMasksToBounds: NO];
+
+        let subviews: id = msg_send![container, subviews];
+        if subviews == nil {
+            return;
+        }
+        let icon_view: id = msg_send![subviews, objectAtIndex:0];
+        if icon_view != nil {
+            let _: () = msg_send![icon_view, setWantsLayer: YES];
+            let icon_layer: id = msg_send![icon_view, layer];
+            if clipboard_mode || is_selected {
+                let icon_bg: id =
+                    msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+                let icon_bg_cg: id = msg_send![icon_bg, CGColor];
+                let _: () = msg_send![icon_layer, setCornerRadius: 10.0f64];
+                let _: () = msg_send![icon_layer, setMasksToBounds: YES];
+                let _: () = msg_send![icon_layer, setBackgroundColor: icon_bg_cg];
+            } else {
+                let clear: id = msg_send![class!(NSColor), clearColor];
+                let clear_cg: id = msg_send![clear, CGColor];
+                let _: () = msg_send![icon_layer, setCornerRadius: 8.0f64];
+                let _: () = msg_send![icon_layer, setMasksToBounds: YES];
+                let _: () = msg_send![icon_layer, setBackgroundColor: clear_cg];
+            }
+            let icon_tint: id = if is_selected {
+                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.95f64]
+            } else if clipboard_mode {
+                msg_send![class!(NSColor), colorWithCalibratedRed:0.9f64 green:0.95f64 blue:1.0f64 alpha:0.85f64]
+            } else {
+                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.85f64]
+            };
+            let _: () = msg_send![icon_view, setContentTintColor: icon_tint];
+        }
+
+        let title_field: id = msg_send![subviews, objectAtIndex:1];
+        if title_field != nil {
+            let primary_color: id =
+                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.96f64];
+            let _: () = msg_send![title_field, setTextColor: primary_color];
+        }
+        let subtitle_field: id = msg_send![subviews, objectAtIndex:2];
+        if subtitle_field != nil {
+            let secondary_color: id =
+                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.66f64];
+            let _: () = msg_send![subtitle_field, setTextColor: secondary_color];
+        }
+        let type_field: id = msg_send![subviews, objectAtIndex:3];
+        if type_field != nil {
             let pill_text: id = if is_selected {
                 msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.9f64]
             } else {
                 msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.6f64]
             };
             let _: () = msg_send![type_field, setTextColor: pill_text];
-
-            container
         }
     }
 
-    extern "C" fn row_view_for_row(_this: &Object, _cmd: Sel, _table: id, _row: isize) -> id {
-        unsafe {
-            let highlight_cls = class!(MKRowHighlightView);
-            let row_view: id = msg_send![highlight_cls, alloc];
-            let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
-            let row_view: id = msg_send![row_view, initWithFrame: frame];
-            let _: () = msg_send![row_view, setSelectionHighlightStyle:0];
-            let _: () = msg_send![row_view, setEmphasized:NO];
-            let clear_bg: id = msg_send![class!(NSColor), clearColor];
-            let _: () = msg_send![row_view, setBackgroundColor: clear_bg];
-            row_view
+    unsafe fn refresh_selection_visuals(
+        table: id,
+        clipboard_mode: bool,
+        selected_row: Option<usize>,
+    ) {
+        let num_rows: isize = msg_send![table, numberOfRows];
+        for row in 0..num_rows {
+            let row_view: id = msg_send![table, viewAtColumn:0 row:row makeIfNecessary:NO];
+            if row_view == nil {
+                continue;
+            }
+            let is_selected = selected_row.map(|sel| sel as isize == row).unwrap_or(false);
+            apply_selection_visuals(row_view, clipboard_mode, is_selected);
         }
     }
 
@@ -675,11 +682,13 @@ pub unsafe fn register_table_delegate_class() {
                 Ok(m) => *m,
                 Err(_) => TableMode::Search,
             };
+            let clipboard_mode = mode == TableMode::ClipboardHistory;
             if mode == TableMode::ClipboardHistory {
                 update_clipboard_preview_selection(row_option);
             } else {
                 update_clipboard_preview_selection(None);
             }
+            refresh_selection_visuals(table, clipboard_mode, row_option);
         }
     }
 
@@ -690,10 +699,6 @@ pub unsafe fn register_table_delegate_class() {
     decl.add_method(
         sel!(tableView:viewForTableColumn:row:),
         view_for_row as extern "C" fn(&Object, Sel, id, id, isize) -> id,
-    );
-    decl.add_method(
-        sel!(tableView:rowViewForRow:),
-        row_view_for_row as extern "C" fn(&Object, Sel, id, isize) -> id,
     );
     decl.add_method(
         sel!(tableViewSelectionDidChange:),
