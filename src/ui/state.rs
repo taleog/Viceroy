@@ -2,7 +2,7 @@ use crate::search_engine;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
@@ -19,8 +19,22 @@ lazy_static! {
     pub static ref CURRENT_SEARCH: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 }
 
+pub static CLIPBOARD_PREVIEW: OnceLock<ClipboardPreviewRefs> = OnceLock::new();
+pub static TABLE_SCROLL_VIEW: OnceLock<usize> = OnceLock::new();
+
 #[derive(Copy, Clone, PartialEq)]
 pub enum TableMode {
     Search,
     ClipboardHistory,
+}
+
+#[derive(Clone)]
+pub struct ClipboardPreviewRefs {
+    pub root: usize,
+    pub title_field: usize,
+    pub detail_field: usize,
+    pub placeholder_field: usize,
+    pub text_scroll: usize,
+    pub text_view: usize,
+    pub image_view: usize,
 }
