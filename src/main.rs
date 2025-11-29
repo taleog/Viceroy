@@ -605,8 +605,8 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     // 1. Create Container View (The "Search Bar" visual)
     let container: id = msg_send![class!(NSView), alloc];
     let container_frame = NSRect::new(
-        NSPoint::new(20.0, bounds.size.height - 80.0), // 20px from top
-        NSSize::new(bounds.size.width - 40.0, 60.0),
+        NSPoint::new(20.0, bounds.size.height - style::TABLE_TOP_OFFSET),
+        NSSize::new(bounds.size.width - 40.0, style::SEARCH_BAR_HEIGHT),
     );
     let container: id = msg_send![container, initWithFrame: container_frame];
     let _: () = msg_send![container, setWantsLayer: YES];

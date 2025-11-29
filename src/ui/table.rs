@@ -150,7 +150,7 @@ pub unsafe fn resize_window_for_results() {
 
     if sv_count >= 2 {
         let container: id = msg_send![subviews, objectAtIndex:1];
-        let new_search_y = new_height - 80.0;
+        let new_search_y = new_height - style::TABLE_TOP_OFFSET;
         let new_search_frame = NSRect::new(
             NSPoint::new(20.0, new_search_y),
             NSSize::new(current_frame.size.width - 40.0, 60.0),
