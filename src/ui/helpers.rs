@@ -7,7 +7,7 @@ pub mod style {
     /// Horizontal inset applied to row content within the table.
     pub const ROW_HORIZONTAL_INSET: f64 = 12.0;
     /// Padding above and below each row's card to create breathing room.
-    pub const ROW_VERTICAL_PADDING: f64 = 8.0;
+    pub const ROW_VERTICAL_PADDING: f64 = 5.0;
     /// Visual spacing between rows (equals the combined vertical padding).
     pub const ROW_STACK_SPACING: f64 = ROW_VERTICAL_PADDING * 2.0;
     /// Interior padding before the icon within the row card.
@@ -36,6 +36,12 @@ pub mod style {
     pub const ROW_SELECTION_BORDER_ALPHA: f64 = 0.4;
     /// Corner radius for the clipboard preview panel.
     pub const PREVIEW_CORNER_RADIUS: f64 = 18.0;
+    /// Vertical offset between the top search bar and table start.
+    pub const TABLE_TOP_OFFSET: f64 = 100.0;
+    /// Footer height beneath the table.
+    pub const TABLE_FOOTER_HEIGHT: f64 = 22.0;
+    /// Top margin for the scroll frame.
+    pub const TABLE_TOP_MARGIN: f64 = 6.0;
 }
 
 /// Run work on the main thread. AppKit calls must be dispatched here.

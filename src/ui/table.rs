@@ -123,7 +123,7 @@ pub unsafe fn resize_window_for_results() {
         Ok(g) => g.len(),
         Err(_) => 0,
     };
-    let base_height = 106.0 + 22.0;
+    let base_height = style::TABLE_TOP_OFFSET + style::TABLE_FOOTER_HEIGHT;
     let row_height = ROW_HEIGHT;
     let max_visible_rows = 8;
     let visible_rows = num_results.min(max_visible_rows);
@@ -176,10 +176,11 @@ pub fn update_preview_layout(preview_visible: bool) {
             return;
         }
         let bounds: NSRect = msg_send![parent, bounds];
-        let table_height = (bounds.size.height - 116.0 - 22.0).max(0.0);
+        let table_height =
+            (bounds.size.height - style::TABLE_TOP_OFFSET - style::TABLE_FOOTER_HEIGHT).max(0.0);
         let preview_spacing = 12.0;
         let right_margin = 12.0;
-        let origin = NSPoint::new(0.0, 10.0);
+        let origin = NSPoint::new(0.0, style::TABLE_TOP_MARGIN);
         let list_width = if preview_visible {
             (bounds.size.width * 0.52).max(280.0)
         } else {
@@ -261,10 +262,35 @@ pub fn schedule_table_update_next_tick() {
     });
 }
 
+fn register_row_highlight_view_class() {
+    unsafe {
+        if objc::runtime::Class::get("MKRowHighlightView").is_some() {
+            return;
+        }
+        let superclass = class!(NSTableRowView);
+        let mut decl = ClassDecl::new("MKRowHighlightView", superclass).unwrap();
+
+        extern "C" fn draw_selection(_this: &Object, _cmd: Sel, _rect: NSRect) {}
+        decl.add_method(
+            sel!(drawSelectionInRect:),
+            draw_selection as extern "C" fn(&Object, Sel, NSRect),
+        );
+
+        extern "C" fn draw_background(_this: &Object, _cmd: Sel, _rect: NSRect) {}
+        decl.add_method(
+            sel!(drawBackgroundInRect:),
+            draw_background as extern "C" fn(&Object, Sel, NSRect),
+        );
+
+        decl.register();
+    }
+}
+
 pub unsafe fn register_table_delegate_class() {
     if objc::runtime::Class::get("MKTableDelegate").is_some() {
         return;
     }
+    register_row_highlight_view_class();
     let mut decl = ClassDecl::new("MKTableDelegate", class!(NSObject)).unwrap();
 
     extern "C" fn rows(_this: &Object, _cmd: Sel, _table: id) -> isize {
@@ -553,6 +579,20 @@ pub unsafe fn register_table_delegate_class() {
         }
     }
 
+    extern "C" fn row_view_for_row(_this: &Object, _cmd: Sel, _table: id, _row: isize) -> id {
+        unsafe {
+            let highlight_cls = class!(MKRowHighlightView);
+            let row_view: id = msg_send![highlight_cls, alloc];
+            let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+            let row_view: id = msg_send![row_view, initWithFrame: frame];
+            let _: () = msg_send![row_view, setSelectionHighlightStyle:0];
+            let _: () = msg_send![row_view, setEmphasized:NO];
+            let clear_bg: id = msg_send![class!(NSColor), clearColor];
+            let _: () = msg_send![row_view, setBackgroundColor: clear_bg];
+            row_view
+        }
+    }
+
     unsafe fn apply_selection_visuals(container: id, clipboard_mode: bool, is_selected: bool) {
         if container == nil {
             return;
@@ -699,6 +739,10 @@ pub unsafe fn register_table_delegate_class() {
     decl.add_method(
         sel!(tableView:viewForTableColumn:row:),
         view_for_row as extern "C" fn(&Object, Sel, id, id, isize) -> id,
+    );
+    decl.add_method(
+        sel!(tableView:rowViewForRow:),
+        row_view_for_row as extern "C" fn(&Object, Sel, id, isize) -> id,
     );
     decl.add_method(
         sel!(tableViewSelectionDidChange:),

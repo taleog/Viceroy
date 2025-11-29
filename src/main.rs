@@ -30,7 +30,7 @@ use ui::clipboard_view::{
     apply_clipboard_history_state, build_clipboard_history_payload, create_clipboard_preview_view,
     show_clipboard_history_view, update_clipboard_preview_selection,
 };
-use ui::helpers::run_on_main;
+use ui::helpers::{run_on_main, style};
 use ui::state::*;
 use ui::table;
 
@@ -701,7 +701,8 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     table::register_table_delegate_class();
 
     // Layout constants for list + preview split
-    let table_height = bounds.size.height - 116.0 - 22.0; // below search field and above footer
+    let table_height =
+        (bounds.size.height - style::TABLE_TOP_OFFSET - style::TABLE_FOOTER_HEIGHT).max(0.0);
     let list_width = bounds.size.width * 0.52;
     let preview_spacing = 12.0;
     let preview_origin_x = list_width + preview_spacing;
@@ -710,7 +711,7 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     // Scroll view container with padding on the left
     let scroll: id = msg_send![class!(NSScrollView), alloc];
     let frame = NSRect::new(
-        NSPoint::new(0.0, 10.0), // Reduced bottom margin
+        NSPoint::new(0.0, style::TABLE_TOP_MARGIN), // Reduced bottom margin
         NSSize::new(list_width, table_height),
     );
     let scroll: id = msg_send![scroll, initWithFrame: frame];
