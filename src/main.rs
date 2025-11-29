@@ -731,7 +731,7 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     let _: () = msg_send![table, setHeaderView: nil];
     let _: () = msg_send![table, setRowHeight: table::ROW_HEIGHT];
     let _: () = msg_send![table, setIntercellSpacing: NSSize::new(0.0, 6.0)];
-    let _: () = msg_send![table, setSelectionHighlightStyle: 0]; // Custom selection drawing
+    let _: () = msg_send![table, setSelectionHighlightStyle: -1]; // Custom selection drawing
     let _: () = msg_send![table, setFocusRingType: 0];
     let bg_color: id = msg_send![class!(NSColor), clearColor];
     let _: () = msg_send![table, setBackgroundColor: bg_color];

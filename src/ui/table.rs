@@ -261,44 +261,12 @@ pub fn schedule_table_update_next_tick() {
     });
 }
 
-fn register_row_highlight_view_class() {
-    unsafe {
-        if objc::runtime::Class::get("MKRowHighlightView").is_some() {
-            return;
-        }
-        let superclass = class!(NSTableRowView);
-        let mut decl = ClassDecl::new("MKRowHighlightView", superclass).unwrap();
-
-        extern "C" fn draw_selection(_this: &Object, _cmd: Sel, _rect: NSRect) {}
-        decl.add_method(
-            sel!(drawSelectionInRect:),
-            draw_selection as extern "C" fn(&Object, Sel, NSRect),
-        );
-
-        decl.register();
-    }
-}
-
 pub unsafe fn register_table_delegate_class() {
     if objc::runtime::Class::get("MKTableDelegate").is_some() {
         return;
     }
-    register_row_highlight_view_class();
     let mut decl = ClassDecl::new("MKTableDelegate", class!(NSObject)).unwrap();
 
-    extern "C" fn row_view_for_row(_this: &Object, _cmd: Sel, _table: id, _row: isize) -> id {
-        unsafe {
-            let highlight_cls = class!(MKRowHighlightView);
-            let row_view: id = msg_send![highlight_cls, alloc];
-            let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
-            let row_view: id = msg_send![row_view, initWithFrame: frame];
-            let _: () = msg_send![row_view, setSelectionHighlightStyle:0];
-            let clear_bg: id = msg_send![class!(NSColor), clearColor];
-            let _: () = msg_send![row_view, setBackgroundColor: clear_bg];
-            let _: () = msg_send![row_view, setEmphasized:NO];
-            row_view
-        }
-    }
     extern "C" fn rows(_this: &Object, _cmd: Sel, _table: id) -> isize {
         match TABLE_DATA.lock() {
             Ok(g) => g.len() as isize,
@@ -697,10 +665,6 @@ pub unsafe fn register_table_delegate_class() {
     decl.add_method(
         sel!(tableView:viewForTableColumn:row:),
         view_for_row as extern "C" fn(&Object, Sel, id, id, isize) -> id,
-    );
-    decl.add_method(
-        sel!(tableView:rowViewForRow:),
-        row_view_for_row as extern "C" fn(&Object, Sel, id, isize) -> id,
     );
     decl.add_method(
         sel!(tableViewSelectionDidChange:),
