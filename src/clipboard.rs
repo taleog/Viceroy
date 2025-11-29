@@ -41,6 +41,25 @@ pub struct ClipboardEntry {
     pub image_height: Option<i64>,
 }
 
+struct ClipboardMonitorPauseGuard;
+
+impl ClipboardMonitorPauseGuard {
+    fn new() -> Self {
+        if let Ok(mut paused) = MONITOR_PAUSED.lock() {
+            *paused = true;
+        }
+        ClipboardMonitorPauseGuard
+    }
+}
+
+impl Drop for ClipboardMonitorPauseGuard {
+    fn drop(&mut self) {
+        if let Ok(mut paused) = MONITOR_PAUSED.lock() {
+            *paused = false;
+        }
+    }
+}
+
 pub async fn start_monitor() -> Result<()> {
     let mut clipboard = Clipboard::new()?;
     let mut last_text = String::new();
@@ -208,8 +227,11 @@ pub async fn search_history(query: &str) -> Result<Vec<ClipboardEntry>> {
 }
 
 pub async fn paste_to_active_app(content: &str) -> Result<()> {
+    let _guard = ClipboardMonitorPauseGuard::new();
+    // First, copy to clipboard
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(content)?;
+    // Small delay to ensure clipboard is updated
     sleep(Duration::from_millis(50)).await;
     send_paste_keystroke()?;
     Ok(())

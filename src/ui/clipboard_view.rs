@@ -63,18 +63,28 @@ pub fn build_clipboard_history_payload(
         };
         let subtitle = format!("{} · {} · {}", app_label, time_label, detail_label);
 
+        let image_title = if entry.content_type == "image" {
+            if detail_label == "Image" {
+                "Image".to_string()
+            } else {
+                format!("Image · {}", detail_label)
+            }
+        } else {
+            String::new()
+        };
+
         let preview = if entry.content_type == "image" {
             entry
                 .custom_name
                 .clone()
-                .unwrap_or_else(|| "Image".to_string())
+                .unwrap_or_else(|| image_title.clone())
         } else {
             truncate_text(&entry.content, 100)
         };
 
         let title = entry.custom_name.clone().unwrap_or_else(|| {
             if entry.content_type == "image" {
-                "Image".to_string()
+                image_title.clone()
             } else {
                 truncate_text(&entry.content, 60)
             }
