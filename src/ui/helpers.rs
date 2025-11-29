@@ -44,8 +44,6 @@ pub mod style {
     pub const TABLE_TOP_OFFSET: f64 = SEARCH_BAR_HEIGHT + SEARCH_BAR_TOP_MARGIN;
     /// Footer height beneath the table.
     pub const TABLE_FOOTER_HEIGHT: f64 = 22.0;
-    /// Top margin for the scroll frame.
-    pub const TABLE_TOP_MARGIN: f64 = 6.0;
 }
 
 /// Run work on the main thread. AppKit calls must be dispatched here.

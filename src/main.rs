@@ -711,7 +711,7 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     // Scroll view container with padding on the left
     let scroll: id = msg_send![class!(NSScrollView), alloc];
     let frame = NSRect::new(
-        NSPoint::new(0.0, style::TABLE_TOP_MARGIN), // Reduced bottom margin
+        NSPoint::new(0.0, style::TABLE_FOOTER_HEIGHT),
         NSSize::new(list_width, table_height),
     );
     let scroll: id = msg_send![scroll, initWithFrame: frame];

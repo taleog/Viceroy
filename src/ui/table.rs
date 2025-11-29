@@ -180,7 +180,7 @@ pub fn update_preview_layout(preview_visible: bool) {
             (bounds.size.height - style::TABLE_TOP_OFFSET - style::TABLE_FOOTER_HEIGHT).max(0.0);
         let preview_spacing = 12.0;
         let right_margin = 12.0;
-        let origin = NSPoint::new(0.0, style::TABLE_TOP_MARGIN);
+        let origin = NSPoint::new(0.0, style::TABLE_FOOTER_HEIGHT);
         let list_width = if preview_visible {
             (bounds.size.width * 0.52).max(280.0)
         } else {
@@ -208,7 +208,7 @@ pub fn update_preview_layout(preview_visible: bool) {
                 let preview_width =
                     (bounds.size.width - preview_origin_x - right_margin).max(240.0);
                 let preview_frame = NSRect::new(
-                    NSPoint::new(preview_origin_x, 10.0),
+                    NSPoint::new(preview_origin_x, style::TABLE_FOOTER_HEIGHT),
                     NSSize::new(preview_width, table_height),
                 );
                 let _: () = msg_send![preview, setHidden: NO];
