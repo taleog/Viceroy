@@ -87,7 +87,6 @@ impl AppDelegate for ViceroyApp {
 
             // Rounded corners
             let _: () = msg_send![ns_window, setOpaque: NO];
-            let _: () = msg_send![ns_window, setOpaque: NO];
             let clear_color: id = msg_send![class!(NSColor), clearColor];
             let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
             let _: () = msg_send![ns_window, setHasShadow: YES];
