@@ -116,6 +116,57 @@ For more details (DMG, signing, etc.), see [`APP_BUNDLE.md`](./APP_BUNDLE.md).
 
 ---
 
+## Updates
+
+- Viceroy performs a **non-blocking update check** shortly after launch (the UI stays responsive while the helper task runs) and only logs failures so it never interrupts your workflow.
+- Disable the updater with `--no-update-check` or `VICEROY_NO_UPDATE_CHECK=1`.
+- Run a silent check (no prompt; the update is downloaded automatically) with `--silent-update-check` or `VICEROY_SILENT_UPDATE_CHECK=1`.
+- Override the metadata source with `VICEROY_UPDATE_METADATA_URL` when you need to point to a staging/mock server (see the ignored integration test for an example).
+
+### How the updater works
+
+1. Viceroy resolves the metadata URL (default is `https://example.com/viceroy/latest.json` but `VICEROY_UPDATE_METADATA_URL` can override it).
+2. It downloads the metadata JSON (version + download URL + sha256 checksum) and compares the declared version with `env!("CARGO_PKG_VERSION")` using `semver`.
+3. If a newer version is found and neither `--silent-update-check` nor `VICEROY_SILENT_UPDATE_CHECK` was passed, the user is prompted on the console (`Y/n`).
+4. The release binary is streamed to a temporary `<current-exe>.download` on disk while a SHA-256 digest is computed.
+5. Once the checksum matches, the helper copies the executable bit from the running binary, renames the temp file to replace the current executable (macOS requires restarting Viceroy to pick up the new code), and logs the successful install.
+6. Errors are logged via `env_logger` (see `src/main.rs`) and the update gracefully gives up instead of panicking.
+
+### Metadata contract
+
+The metadata endpoint must return this document:
+
+```json
+{
+  "version": "0.1.1",
+  "download_url": "https://example.com/releases/viceroy-0.1.1",
+  "sha256": "abc123..."
+}
+```
+
+`download_url` needs to point to a raw executable built for the same architecture that is currently running. The SHA checksum should be computed over that executable so Viceroy can verify the download before renaming it into place.
+
+### Testing
+
+- `tests/updater_integration.rs` is ignored by default because it expects a mock server on `http://127.0.0.1:8999`. Set `VICEROY_UPDATE_METADATA_URL` to your local metadata endpoint before running it:
+
+  ```bash
+  export VICEROY_UPDATE_METADATA_URL="http://127.0.0.1:8999/latest.json"
+  cargo test updater_integration -- --ignored
+  ```
+
+Start the local helper server (after building the release binary) with:
+
+```bash
+python3 scripts/mock_update_server.py --binary target/release/viceroy --version 0.1.1 --port 8999
+```
+
+It prints the metadata document and a matching download URL (`/download`). Point `VICEROY_UPDATE_METADATA_URL` at the printed metadata endpoint if you use a non-default port.
+
+The mocked server should serve the metadata above and a valid binary blob with the matching SHA so the end-to-end flow can finish.
+
+---
+
 ## Usage
 
 > The exact keybindings and behaviour may change as the project evolves. The high-level usage pattern will stay the same.
@@ -194,6 +245,27 @@ On first run, Viceroy will create a default config. You can edit it by hand, e.g
 ```
 
 > Note: The hotkey syntax is parsed by the `global-hotkey` crate. Not all combinations may be valid on all macOS versions.
+
+---
+
+## Development Workflow
+
+The repo ships with a `Makefile` so repetitive commands stay discoverable:
+
+```bash
+make help
+```
+
+Common targets:
+
+- `make run RUN_ARGS='--silent-update-check'` — run Viceroy with optional CLI arguments.
+- `make fmt` / `make lint` / `make test` — formatting, clippy (fails on warnings), and the full test suite.
+- `make release` — produce `target/release/viceroy` once and reuse it for manual tests.
+- `make mock-server` — build the release binary (if needed) and serve metadata + the binary locally. Override `UPDATER_PORT` if you need a different port.
+- `make mock-update-check` / `make test-updater` — run Viceroy or the ignored integration test against `http://127.0.0.1:${UPDATER_PORT}/latest.json` (expects the mock server to already be running).
+- `make mock-e2e` — fully automated path: build, start the mock server in the background, run the ignored integration test, then tear the server down. Logs land in `/tmp/viceroy-mock-server.log` by default (override via `MOCK_SERVER_LOG`).
+
+Targets inherit `CARGO`, `PYTHON`, and the updater env vars, so you can set `CARGO=~/.cargo/bin/cargo` or tweak `UPDATER_PORT` to match your setup without editing the file.
 
 ---
 

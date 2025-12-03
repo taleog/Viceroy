@@ -35,6 +35,12 @@ log = "0.4"
 env_logger = "0.11"
 lazy_static = "1.4"
 urlencoding = "2.1"
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+semver = "1.0"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3.10"
 
 [profile.release]
 opt-level = "z"

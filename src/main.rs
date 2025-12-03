@@ -26,6 +26,7 @@ mod ui;
 mod usage;
 mod web_search;
 
+use log::{error, info};
 use std::sync::atomic::Ordering;
 use ui::clipboard_view::{
     apply_clipboard_history_state, build_clipboard_history_payload, create_clipboard_preview_view,
@@ -35,6 +36,8 @@ use ui::helpers::{run_on_main, style};
 use ui::settings_view;
 use ui::state::*;
 use ui::table;
+use viceroy::updater;
+use viceroy::updater::{UPDATE_CHECK_DISABLED_ENV, UPDATE_METADATA_URL_ENV, UPDATE_SILENT_ENV};
 
 struct ViceroyApp;
 
@@ -1654,7 +1657,32 @@ unsafe fn setup_window_delegate(ns_window: id) {
     let _: () = msg_send![ns_window, setDelegate: delegate];
 }
 
+fn print_cli_help() {
+    println!("Viceroy v{}", env!("CARGO_PKG_VERSION"));
+    println!("Usage: viceroy [--no-update-check] [--silent-update-check]\n");
+    println!("Options:");
+    println!(
+        "  --no-update-check        Skip background update checks (or set {}=1)",
+        UPDATE_CHECK_DISABLED_ENV
+    );
+    println!(
+        "  --silent-update-check    Run update checks without prompting (or set {}=1)",
+        UPDATE_SILENT_ENV
+    );
+    println!("Environment:");
+    println!(
+        "  {}    Override the metadata URL used for update checks",
+        UPDATE_METADATA_URL_ENV
+    );
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_cli_help();
+        return;
+    }
+
     // Set panic hook to see errors
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("!!! PANIC: {:?}", panic_info);
@@ -1667,6 +1695,21 @@ fn main() {
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Error)
         .init();
+
+    if updater::update_check_disabled(&args) {
+        info!(
+            "Skipping update check because --no-update-check was passed or {} is set",
+            UPDATE_CHECK_DISABLED_ENV
+        );
+    } else {
+        let silent = updater::silent_update_check(&args);
+        ui::state::SEARCH_RT.spawn(async move {
+            if let Err(err) = updater::check_for_updates(silent).await {
+                error!("Update check failed: {err:#}");
+            }
+        });
+    }
+
     let app = App::new("com.viceroy.app", ViceroyApp);
     app.run();
 }
