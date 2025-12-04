@@ -6,6 +6,7 @@ use anyhow::Result;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum SearchMode {
@@ -93,6 +94,8 @@ async fn run_search(
     include_files: bool,
     include_clipboard: bool,
 ) -> Result<Vec<SearchResult>> {
+    let start_time = Instant::now();
+    
     if query.is_empty() {
         return Ok(Vec::new());
     }
@@ -378,6 +381,16 @@ async fn run_search(
 
     // Smart ranking based on query context and match quality
     results.sort_by(|a, b| b.0.cmp(&a.0));
+
+    // Log search latency
+    let elapsed = start_time.elapsed();
+    log::info!(
+        "search: query='{}' mode={:?} results={} elapsed={:.1}ms",
+        query,
+        mode,
+        results.len(),
+        elapsed.as_secs_f64() * 1000.0
+    );
 
     // Return top 50 results
     Ok(results

@@ -7,7 +7,7 @@ use base64::Engine;
 use chrono::Utc;
 use lazy_static::lazy_static;
 use regex::Regex;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::io::Cursor;
@@ -136,7 +136,8 @@ fn should_skip_programmatic_text(content: &str) -> bool {
         if let Some((last, ts)) = &*lock {
             let now = Utc::now().timestamp();
             let age = now.saturating_sub(*ts);
-            return age <= 5 && normalize_text(content) == *last;
+            // Extended window: 10 seconds to catch programmatic writes more reliably
+            return age <= 10 && normalize_text(content) == *last;
         }
     }
     false
@@ -147,7 +148,8 @@ fn should_skip_programmatic_image(hash: &blake3::Hash) -> bool {
         if let Some((last_hash, ts)) = &*lock {
             let now = Utc::now().timestamp();
             let age = now.saturating_sub(*ts);
-            return age <= 5 && last_hash == hash;
+            // Extended window: 10 seconds to catch programmatic writes more reliably
+            return age <= 10 && last_hash == hash;
         }
     }
     false
@@ -160,28 +162,29 @@ fn should_skip_duplicate_text(
     timestamp: i64,
 ) -> Result<bool> {
     let normalized_new = normalize_text(content);
-    // Look at most recent entry only; fast and good enough to prevent spam.
+    // Check against last 5 entries to catch duplicates more reliably
     let mut stmt = conn.prepare(
         "SELECT content, content_type, app_name, timestamp 
          FROM clipboard_history 
          ORDER BY id DESC 
-         LIMIT 1",
+         LIMIT 5",
     )?;
 
-    let previous: Option<(String, String, Option<String>, i64)> = stmt
-        .query_row([], |row| {
+    let previous_entries: Vec<(String, String, Option<String>, i64)> = stmt
+        .query_map([], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })
-        .optional()?;
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
 
-    if let Some((prev_content, prev_type, prev_app, prev_ts)) = previous {
+    for (prev_content, prev_type, prev_app, prev_ts) in previous_entries {
         if prev_type != "text" {
-            return Ok(false);
+            continue;
         }
         let normalized_prev = normalize_text(&prev_content);
-        let same_app = prev_app == *app_name;
+        let _same_app = prev_app == *app_name;
         let close_in_time = timestamp.saturating_sub(prev_ts) <= 120; // 2-minute window
-        if normalized_prev == normalized_new && same_app && close_in_time {
+        // Check both same-app and app-agnostic duplicates
+        if normalized_prev == normalized_new && close_in_time {
             return Ok(true);
         }
     }
@@ -318,14 +321,26 @@ fn search_history_blocking(query: &str) -> Result<Vec<ClipboardEntry>> {
 
 pub async fn paste_to_active_app(content: &str) -> Result<()> {
     let _guard = ClipboardMonitorPauseGuard::new();
-    // First, copy to clipboard
+    // Store the frontmost app BEFORE modifying clipboard
+    let previous_app = app_launcher::get_frontmost_app_name();
+    
+    // Copy to clipboard
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(content)?;
     if let Ok(mut guard) = LAST_PROGRAMMATIC_TEXT.lock() {
         *guard = Some((normalize_text(content), Utc::now().timestamp()));
     }
-    // Small delay to ensure clipboard is updated and focus returns to target app
-    sleep(Duration::from_millis(140)).await;
+    
+    // Delay to ensure clipboard is updated
+    sleep(Duration::from_millis(100)).await;
+    
+    // Explicitly activate the previous app to ensure focus is correct before paste
+    if let Some(app_name) = previous_app {
+        activate_app(&app_name)?;
+    }
+    
+    // Longer pause to ensure focus is returned and app is ready
+    sleep(Duration::from_millis(200)).await;
     send_paste_keystroke()?;
     Ok(())
 }
@@ -343,13 +358,16 @@ pub async fn paste_history_entry(
     } else {
         paste_to_active_app(content).await?;
     }
-    // Hold pause a bit longer so the monitor's next poll doesn't capture it.
-    sleep(Duration::from_millis(180)).await;
+    // Hold pause longer to ensure monitor doesn't capture the paste result
+    sleep(Duration::from_millis(300)).await;
     Ok(())
 }
 
 async fn paste_image_to_active_app(content: &str) -> Result<()> {
     let _guard = ClipboardMonitorPauseGuard::new();
+    // Store the frontmost app BEFORE modifying clipboard
+    let previous_app = app_launcher::get_frontmost_app_name();
+    
     let image = decode_history_image(content)?;
     let mut clipboard = Clipboard::new()?;
     let hash = blake3::hash(&image.bytes);
@@ -357,7 +375,17 @@ async fn paste_image_to_active_app(content: &str) -> Result<()> {
     if let Ok(mut guard) = LAST_PROGRAMMATIC_IMAGE.lock() {
         guard.replace((hash, Utc::now().timestamp()));
     }
-    sleep(Duration::from_millis(60)).await;
+    
+    // Delay to ensure clipboard is updated
+    sleep(Duration::from_millis(100)).await;
+    
+    // Explicitly activate the previous app
+    if let Some(app_name) = previous_app {
+        activate_app(&app_name)?;
+    }
+    
+    // Longer pause to ensure focus is returned
+    sleep(Duration::from_millis(200)).await;
     send_paste_keystroke()?;
     Ok(())
 }
@@ -381,6 +409,23 @@ fn decode_history_image(content: &str) -> Result<ImageData<'static>> {
         height: info.height as usize,
         bytes: Cow::Owned(buf),
     })
+}
+
+fn activate_app(app_name: &str) -> Result<()> {
+    let script = format!(
+        r#"tell application "{}" to activate"#,
+        app_name.replace('\"', "\\\"")
+    );
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .status()
+        .context("failed to activate app")?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("failed to activate app: {}", app_name))
+    }
 }
 
 fn send_paste_keystroke() -> Result<()> {

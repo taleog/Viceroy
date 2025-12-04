@@ -1,8 +1,7 @@
 use anyhow::Result;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
@@ -38,12 +37,15 @@ pub fn search_files(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
         return Ok(cached);
     }
 
-    let mut files = run_mdfind(query).unwrap_or_default();
-
-    // Spotlight unavailable or empty? fall back to a shallow filesystem walk.
-    if files.is_empty() && fallback_enabled() {
-        files = fallback_walk(query, CACHE_STORE_LIMIT);
+    // File search disabled by default to avoid privacy permission prompts
+    // Users must explicitly enable with VICEROY_FALLBACK_FS=1 (which enables fallback indexing)
+    // Spotlight is broken on many systems so we don't bother with mdfind either
+    if !fallback_enabled() {
+        return Ok(Vec::new());
     }
+
+    // Only fallback walk if explicitly enabled
+    let mut files = fallback_walk(query, CACHE_STORE_LIMIT);
 
     // Nothing found
     if files.is_empty() {
@@ -60,30 +62,6 @@ pub fn search_files(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
     Ok(files)
 }
 
-fn run_mdfind(query: &str) -> Result<Vec<FileInfo>> {
-    // Spotlight responds best to an explicit name contains query
-    let spotlight_query = format!(r#"kMDItemFSName == "*{}*"c"#, query);
-
-    let mut cmd = Command::new("mdfind");
-    cmd.arg(spotlight_query);
-    for dir in preferred_roots() {
-        cmd.arg("-onlyin").arg(dir);
-    }
-
-    let output = cmd.output()?;
-    if !output.status.success() {
-        return Ok(Vec::new());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let files: Vec<FileInfo> = stdout
-        .lines()
-        .filter_map(|line| path_to_info(line.trim()))
-        .collect();
-
-    Ok(files)
-}
-
 fn fallback_walk(query: &str, limit: usize) -> Vec<FileInfo> {
     let index = get_fallback_index();
     let query_lower = query.to_lowercase();
@@ -95,19 +73,6 @@ fn fallback_walk(query: &str, limit: usize) -> Vec<FileInfo> {
         })
         .take(limit)
         .collect()
-}
-
-fn preferred_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        for sub in ["Documents", "Downloads", "Desktop"] {
-            let path = home.join(sub);
-            if path.is_dir() {
-                roots.push(path);
-            }
-        }
-    }
-    roots
 }
 
 fn should_skip_path(path: &Path) -> bool {
@@ -130,6 +95,8 @@ fn should_skip_path(path: &Path) -> bool {
 }
 
 fn fallback_enabled() -> bool {
+    // Disabled by default to prevent privacy prompts; users can opt-in via env var
+    // Set VICEROY_FALLBACK_FS=1 to enable
     std::env::var(FALLBACK_ENV)
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
         .unwrap_or(false)
@@ -169,23 +136,33 @@ fn get_fallback_index() -> Vec<FileInfo> {
 }
 
 fn build_fallback_index() -> Vec<FileInfo> {
+    // Build fallback index from user directories (Documents, Downloads, Desktop)
+    // Only called when VICEROY_FALLBACK_FS=1 is explicitly set
     let mut results = Vec::new();
-    for root in preferred_roots() {
-        for entry in WalkDir::new(root)
-            .max_depth(FALLBACK_MAX_DEPTH)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            if results.len() >= FALLBACK_INDEX_LIMIT || results.len() >= FALLBACK_SCAN_LIMIT {
-                break;
-            }
-            let path = entry.path();
-            if should_skip_path(path) {
+    
+    if let Some(home) = dirs::home_dir() {
+        for subdir in &["Documents", "Downloads", "Desktop"] {
+            let root = home.join(subdir);
+            if !root.exists() {
                 continue;
             }
-            if let Some(info) = path_to_info(path.to_string_lossy().as_ref()) {
-                results.push(info);
+            
+            for entry in WalkDir::new(&root)
+                .max_depth(FALLBACK_MAX_DEPTH)
+                .follow_links(false)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if results.len() >= FALLBACK_INDEX_LIMIT || results.len() >= FALLBACK_SCAN_LIMIT {
+                    break;
+                }
+                let path = entry.path();
+                if should_skip_path(path) {
+                    continue;
+                }
+                if let Some(info) = path_to_info(path.to_string_lossy().as_ref()) {
+                    results.push(info);
+                }
             }
         }
     }
