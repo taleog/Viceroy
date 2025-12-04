@@ -490,14 +490,35 @@ unsafe fn register_escape_textfield_class() {
                     NO
                 }
                 "insertTab:" => {
-                    if let Some(query) = get_current_search_query() {
-                        if query.is_empty() {
-                            show_clipboard_history_view();
-                        } else {
-                            table::move_table_selection(true);
+                    // Tab toggles between Search and Clipboard History views
+                    let should_show_clipboard = if let Ok(mut mode) = TABLE_MODE.lock() {
+                        match *mode {
+                            TableMode::ClipboardHistory => {
+                                *mode = TableMode::Search;
+                                false
+                            }
+                            _ => {
+                                *mode = TableMode::ClipboardHistory;
+                                true
+                            }
                         }
                     } else {
+                        false
+                    };
+                    
+                    // Dispatch UI updates to avoid deadlocks
+                    if should_show_clipboard {
                         show_clipboard_history_view();
+                    } else {
+                        // Clear results and schedule update
+                        if let Ok(mut tr) = TABLE_RESULTS.lock() {
+                            tr.clear();
+                        }
+                        if let Ok(mut td) = TABLE_DATA.lock() {
+                            td.clear();
+                        }
+                        table::update_preview_layout(false);
+                        table::schedule_table_update_next_tick();
                     }
                     YES // Handled
                 }
