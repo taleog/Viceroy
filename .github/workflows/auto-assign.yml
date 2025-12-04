@@ -47,7 +47,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue.number,
-              body: `Thanks @${commenter}! You've been assigned to this issue. Happy coding! 🎉\n\nPlease see [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) for development guidelines.`
+              body: `Thanks @${commenter}! You've been assigned to this issue. Happy coding! 🎉\n\nPlease see [CONTRIBUTING.md](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/CONTRIBUTING.md) for development guidelines.`
             });
             
             // Add "in progress" label
