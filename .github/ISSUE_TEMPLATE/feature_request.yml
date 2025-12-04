@@ -1,0 +1,79 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for Viceroy
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new feature! Please fill out the information below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature Description
+      description: A clear and concise description of the feature
+      placeholder: What would you like to see added?
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation / Use Case
+      description: Why would this feature be useful? What problem does it solve?
+      placeholder: |
+        I often find myself needing to...
+        This would help with...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Feature Category
+      options:
+        - Search (apps, files, clipboard, etc.)
+        - Clipboard Management
+        - System Commands
+        - Calculator
+        - Emoji / Dictionary
+        - UI / UX
+        - Performance
+        - Configuration / Settings
+        - Integration (other apps/services)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority (in your opinion)
+      options:
+        - Nice to have
+        - Would be useful
+        - Important
+        - Critical for my workflow
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution (Optional)
+      description: If you have ideas on how this could be implemented
+      placeholder: |
+        I think this could work by...
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered (Optional)
+      description: Other solutions or workarounds you've considered
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Add any other context, mockups, or examples

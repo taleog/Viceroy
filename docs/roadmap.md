@@ -1,8 +1,15 @@
 # Viceroy Development Roadmap
 
-## Release Status: v0.1 (Initial Fixes Complete)
+> Last updated: 2024-12-04
 
-### ✅ Completed (v0.1)
+## Release Status: v0.1.0-alpha.1 (Private Alpha)
+
+### Version Scheme
+- **Alpha** (0.x.y-alpha.z): Early development, breaking changes expected
+- **Beta** (0.x.y-beta.z): Feature complete for milestone, bug fixes only
+- **Release** (x.y.z): Stable releases
+
+### ✅ Completed (v0.1.0-alpha.1)
 - [x] Clipboard paste determinism - app activation + extended write detection window
 - [x] Duplicate clipboard elimination - check last 5 entries with app-agnostic comparison  
 - [x] Privacy prompt fix - disabled file search by default

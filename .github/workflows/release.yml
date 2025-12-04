@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+      
+      - name: Build release binary
+        run: cargo build --release
+      
+      - name: Build app bundle
+        run: ./build_app.sh
+      
+      - name: Create ZIP of app bundle
+        run: |
+          cd .
+          zip -r Viceroy-${{ github.ref_name }}.zip Viceroy.app
+      
+      - name: Compute SHA256
+        id: sha256
+        run: |
+          SHA=$(shasum -a 256 target/release/viceroy | cut -d ' ' -f1)
+          echo "sha256=$SHA" >> $GITHUB_OUTPUT
+          echo "SHA256: $SHA"
+      
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # Extract changelog section for this version
+          VERSION=${{ steps.version.outputs.version }}
+          NOTES=$(awk "/## \[$VERSION\]/,/## \[/" CHANGELOG.md | head -n -1)
+          if [ -z "$NOTES" ]; then
+            NOTES="Release $VERSION"
+          fi
+          # Write to file to handle multiline
+          echo "$NOTES" > /tmp/release_notes.md
+          echo "Generated release notes for $VERSION"
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Viceroy ${{ steps.version.outputs.version }}
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
+          files: |
+            target/release/viceroy
+            Viceroy-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Create update metadata JSON
+        run: |
+          cat > latest.json << EOF
+          {
+            "version": "${{ steps.version.outputs.version }}",
+            "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/viceroy",
+            "sha256": "${{ steps.sha256.outputs.sha256 }}"
+          }
+          EOF
+          cat latest.json
+      
+      - name: Upload metadata artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-metadata
+          path: latest.json
+          retention-days: 90

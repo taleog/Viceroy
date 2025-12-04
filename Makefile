@@ -14,20 +14,39 @@ MOCK_SERVER_LOG ?= /tmp/viceroy-mock-server.log
 
 .DEFAULT_GOAL := help
 
-.PHONY: help fmt lint test test-updater run release clean mock-server mock-update-check mock-e2e
+.PHONY: help setup fmt lint test test-updater run release clean mock-server mock-update-check mock-e2e check version bump-version
 
 help:
-	@echo "Available targets:"
+	@echo "Viceroy Development Commands (v$(VERSION))"
+	@echo ""
+	@echo "Setup & Development:"
+	@echo "  make setup                                 # Set up development environment (git hooks, etc.)"
 	@echo "  make run RUN_ARGS='--silent-update-check'  # Run Viceroy with optional CLI args"
 	@echo "  make fmt                                   # Format Rust sources"
 	@echo "  make lint                                  # Run cargo clippy with -D warnings"
 	@echo "  make test                                  # Run the full test suite"
+	@echo "  make check                                 # Run fmt + lint + test"
+	@echo ""
+	@echo "Build & Release:"
 	@echo "  make release                               # Build target/release/$(PACKAGE)"
+	@echo "  make version                               # Show current version"
+	@echo "  make clean                                 # Remove target artifacts"
+	@echo ""
+	@echo "Update System Testing:"
 	@echo "  make mock-server                           # Serve release binary + metadata locally"
 	@echo "  make mock-update-check                     # Run updater against the mock server URL"
 	@echo "  make test-updater                          # Run the ignored updater integration test"
 	@echo "  make mock-e2e                              # Build, launch mock server, run integration test"
-	@echo "  make clean                                 # Remove target artifacts"
+
+setup:
+	@echo "Setting up development environment..."
+	@./scripts/setup-dev.sh
+
+check: fmt lint test
+	@echo "All checks passed!"
+
+version:
+	@echo "Viceroy version: $(VERSION)"
 
 fmt:
 	$(CARGO) fmt

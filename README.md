@@ -1,9 +1,13 @@
 # Viceroy
 
+[![CI](https://github.com/taleog/Viceroy/actions/workflows/ci.yml/badge.svg)](https://github.com/taleog/Viceroy/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-blue)](https://github.com/taleog/Viceroy/releases)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Viceroy is a lightweight **native macOS launcher** written in Rust.  
 It gives you a fast, Spotlight-style command palette for **apps, files, clipboard history, system commands, emoji, web search, and a calculator** — all in one place.
 
-> ⚠️ Status: early/experimental. Expect rough edges and breaking changes.
+> ⚠️ **Status: Private Alpha (0.1.0-alpha.x)** — Not publicly released. Expect rough edges and breaking changes.
 
 ---
 
@@ -250,22 +254,47 @@ On first run, Viceroy will create a default config. You can edit it by hand, e.g
 
 ## Development Workflow
 
+### Quick Start
+
+```bash
+# Clone and set up development environment
+git clone https://github.com/taleog/Viceroy.git
+cd Viceroy
+make setup  # Installs git hooks and checks toolchain
+```
+
 The repo ships with a `Makefile` so repetitive commands stay discoverable:
 
 ```bash
 make help
 ```
 
-Common targets:
+### Common Commands
 
-- `make run RUN_ARGS='--silent-update-check'` — run Viceroy with optional CLI arguments.
-- `make fmt` / `make lint` / `make test` — formatting, clippy (fails on warnings), and the full test suite.
-- `make release` — produce `target/release/viceroy` once and reuse it for manual tests.
-- `make mock-server` — build the release binary (if needed) and serve metadata + the binary locally. Override `UPDATER_PORT` if you need a different port.
-- `make mock-update-check` / `make test-updater` — run Viceroy or the ignored integration test against `http://127.0.0.1:${UPDATER_PORT}/latest.json` (expects the mock server to already be running).
-- `make mock-e2e` — fully automated path: build, start the mock server in the background, run the ignored integration test, then tear the server down. Logs land in `/tmp/viceroy-mock-server.log` by default (override via `MOCK_SERVER_LOG`).
+**Development:**
+- `make setup` — Set up development environment (git hooks, toolchain check)
+- `make run RUN_ARGS='--silent-update-check'` — Run Viceroy with optional CLI arguments
+- `make fmt` / `make lint` / `make test` — Formatting, clippy (fails on warnings), and tests
+- `make check` — Run all checks (fmt + lint + test)
 
-Targets inherit `CARGO`, `PYTHON`, and the updater env vars, so you can set `CARGO=~/.cargo/bin/cargo` or tweak `UPDATER_PORT` to match your setup without editing the file.
+**Build & Release:**
+- `make release` — Build release binary at `target/release/viceroy`
+- `make version` — Show current version
+
+**Update System Testing:**
+- `make mock-server` — Serve release binary + metadata locally
+- `make mock-e2e` — Full end-to-end test with mock server
+
+### Git Hooks
+
+After running `make setup`, git hooks are installed:
+
+- **pre-commit**: Runs `cargo fmt` and `cargo clippy`, reminds you to update CHANGELOG.md
+- **commit-msg**: Validates commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
+
+### Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guidelines.
 
 ---
 

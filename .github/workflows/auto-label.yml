@@ -1,0 +1,59 @@
+name: Auto Label Issues
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Auto-label based on title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const title = issue.title.toLowerCase();
+            const body = (issue.body || '').toLowerCase();
+            const labels = [];
+            
+            // Check title prefix for type
+            if (title.startsWith('[bug]')) {
+              labels.push('bug');
+            } else if (title.startsWith('[feature]')) {
+              labels.push('enhancement');
+            }
+            
+            // Check content for category
+            if (title.includes('search') || body.includes('search')) {
+              labels.push('search');
+            }
+            if (title.includes('clipboard') || body.includes('clipboard')) {
+              labels.push('clipboard');
+            }
+            if (title.includes('ui') || title.includes('ux') || body.includes('window') || body.includes('animation')) {
+              labels.push('ui');
+            }
+            if (title.includes('performance') || body.includes('slow') || body.includes('freeze') || body.includes('lag')) {
+              labels.push('performance');
+            }
+            if (title.includes('crash') || body.includes('crash') || body.includes('panic')) {
+              labels.push('crash');
+            }
+            
+            // Check for priority keywords
+            if (body.includes('critical') || body.includes('urgent')) {
+              labels.push('priority:high');
+            }
+            
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: labels
+              });
+              console.log(`Added labels: ${labels.join(', ')}`);
+            }
