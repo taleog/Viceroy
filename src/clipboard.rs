@@ -6,7 +6,8 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::Utc;
 use lazy_static::lazy_static;
-use rusqlite::params;
+use regex::Regex;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::io::Cursor;
@@ -16,6 +17,11 @@ use tokio::time::{sleep, Duration};
 
 lazy_static! {
     static ref MONITOR_PAUSED: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    static ref WS_RE: Regex = Regex::new(r"\s+").expect("failed to compile whitespace regex");
+    static ref LAST_PROGRAMMATIC_TEXT: Arc<Mutex<Option<(String, i64)>>> =
+        Arc::new(Mutex::new(None));
+    static ref LAST_PROGRAMMATIC_IMAGE: Arc<Mutex<Option<(blake3::Hash, i64)>>> =
+        Arc::new(Mutex::new(None));
 }
 
 const PASSWORD_MANAGERS: &[&str] = &[
@@ -76,6 +82,10 @@ pub async fn start_monitor() -> Result<()> {
         // Text capture
         if let Ok(content) = clipboard.get_text() {
             if content != last_text && !content.trim().is_empty() {
+                if should_skip_programmatic_text(&content) {
+                    last_text = content;
+                    continue;
+                }
                 if should_skip_app(&app_name) {
                     last_text = content;
                     continue;
@@ -91,6 +101,10 @@ pub async fn start_monitor() -> Result<()> {
             let hash = blake3::hash(&image.bytes);
             let changed = last_image_hash.map(|h| h != hash).unwrap_or(true);
             if changed {
+                if should_skip_programmatic_image(&hash) {
+                    last_image_hash = Some(hash);
+                    continue;
+                }
                 if should_skip_app(&app_name) {
                     last_image_hash = Some(hash);
                     continue;
@@ -112,9 +126,77 @@ fn should_skip_app(app_name: &Option<String>) -> bool {
     }
 }
 
+fn normalize_text(content: &str) -> String {
+    let trimmed = content.trim();
+    WS_RE.replace_all(trimmed, " ").to_string()
+}
+
+fn should_skip_programmatic_text(content: &str) -> bool {
+    if let Ok(lock) = LAST_PROGRAMMATIC_TEXT.lock() {
+        if let Some((last, ts)) = &*lock {
+            let now = Utc::now().timestamp();
+            let age = now.saturating_sub(*ts);
+            return age <= 5 && normalize_text(content) == *last;
+        }
+    }
+    false
+}
+
+fn should_skip_programmatic_image(hash: &blake3::Hash) -> bool {
+    if let Ok(lock) = LAST_PROGRAMMATIC_IMAGE.lock() {
+        if let Some((last_hash, ts)) = &*lock {
+            let now = Utc::now().timestamp();
+            let age = now.saturating_sub(*ts);
+            return age <= 5 && last_hash == hash;
+        }
+    }
+    false
+}
+
+fn should_skip_duplicate_text(
+    conn: &rusqlite::Connection,
+    content: &str,
+    app_name: &Option<String>,
+    timestamp: i64,
+) -> Result<bool> {
+    let normalized_new = normalize_text(content);
+    // Look at most recent entry only; fast and good enough to prevent spam.
+    let mut stmt = conn.prepare(
+        "SELECT content, content_type, app_name, timestamp 
+         FROM clipboard_history 
+         ORDER BY id DESC 
+         LIMIT 1",
+    )?;
+
+    let previous: Option<(String, String, Option<String>, i64)> = stmt
+        .query_row([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .optional()?;
+
+    if let Some((prev_content, prev_type, prev_app, prev_ts)) = previous {
+        if prev_type != "text" {
+            return Ok(false);
+        }
+        let normalized_prev = normalize_text(&prev_content);
+        let same_app = prev_app == *app_name;
+        let close_in_time = timestamp.saturating_sub(prev_ts) <= 120; // 2-minute window
+        if normalized_prev == normalized_new && same_app && close_in_time {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 async fn save_clipboard_entry(content: &str, app_name: &Option<String>) -> Result<()> {
     let conn = database::get_connection()?;
     let timestamp = Utc::now().timestamp();
+
+    if should_skip_duplicate_text(&conn, content, app_name, timestamp)? {
+        return Ok(());
+    }
+
     conn.execute(
         "INSERT INTO clipboard_history (content, content_type, app_name, timestamp, image_width, image_height) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
@@ -239,8 +321,11 @@ pub async fn paste_to_active_app(content: &str) -> Result<()> {
     // First, copy to clipboard
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(content)?;
-    // Small delay to ensure clipboard is updated
-    sleep(Duration::from_millis(50)).await;
+    if let Ok(mut guard) = LAST_PROGRAMMATIC_TEXT.lock() {
+        *guard = Some((normalize_text(content), Utc::now().timestamp()));
+    }
+    // Small delay to ensure clipboard is updated and focus returns to target app
+    sleep(Duration::from_millis(140)).await;
     send_paste_keystroke()?;
     Ok(())
 }
@@ -251,17 +336,27 @@ pub async fn paste_history_entry(
     _image_width: Option<i64>,
     _image_height: Option<i64>,
 ) -> Result<()> {
+    // Pause monitor so we don't re-ingest the same entry after paste.
+    let _guard = ClipboardMonitorPauseGuard::new();
     if content_type == "image" {
-        paste_image_to_active_app(content).await
+        paste_image_to_active_app(content).await?;
     } else {
-        paste_to_active_app(content).await
+        paste_to_active_app(content).await?;
     }
+    // Hold pause a bit longer so the monitor's next poll doesn't capture it.
+    sleep(Duration::from_millis(180)).await;
+    Ok(())
 }
 
 async fn paste_image_to_active_app(content: &str) -> Result<()> {
+    let _guard = ClipboardMonitorPauseGuard::new();
     let image = decode_history_image(content)?;
     let mut clipboard = Clipboard::new()?;
+    let hash = blake3::hash(&image.bytes);
     clipboard.set_image(image)?;
+    if let Ok(mut guard) = LAST_PROGRAMMATIC_IMAGE.lock() {
+        guard.replace((hash, Utc::now().timestamp()));
+    }
     sleep(Duration::from_millis(60)).await;
     send_paste_keystroke()?;
     Ok(())

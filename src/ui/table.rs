@@ -953,6 +953,21 @@ fn format_pretty_path(path: &str) -> String {
 }
 
 unsafe fn perform_result_action(index: usize) {
+    unsafe fn hide_window_immediately() {
+        if let Ok(mut showing) = WINDOW_SHOWING.lock() {
+            *showing = false;
+        }
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let windows: id = msg_send![app, windows];
+        let count: usize = msg_send![windows, count];
+        if count > 0 {
+            let window: id = msg_send![windows, objectAtIndex:0];
+            let _: () = msg_send![window, orderOut: nil];
+        }
+        // Relinquish focus so the previous app regains key status for paste.
+        let _: () = msg_send![app, deactivate];
+    }
+
     let results = match TABLE_RESULTS.lock() {
         Ok(g) => g.clone(),
         Err(_) => return,
@@ -977,6 +992,7 @@ unsafe fn perform_result_action(index: usize) {
             image_height,
             ..
         } => {
+            hide_window_immediately();
             let content_clone = content.clone();
             let content_type_clone = content_type.clone();
             SEARCH_RT.spawn(async move {
@@ -995,12 +1011,14 @@ unsafe fn perform_result_action(index: usize) {
             });
         }
         search_engine::SearchResult::Calculator { result, .. } => {
+            hide_window_immediately();
             let to_paste = result.clone();
             SEARCH_RT.spawn(async move {
                 let _ = crate::clipboard::paste_to_active_app(&to_paste).await;
             });
         }
         search_engine::SearchResult::Emoji { emoji, .. } => {
+            hide_window_immediately();
             let to_paste = emoji.clone();
             SEARCH_RT.spawn(async move {
                 let _ = crate::clipboard::paste_to_active_app(&to_paste).await;
@@ -1014,14 +1032,6 @@ unsafe fn perform_result_action(index: usize) {
         }
     }
 
-    if let Ok(mut showing) = WINDOW_SHOWING.lock() {
-        *showing = false;
-    }
-    let app: id = msg_send![class!(NSApplication), sharedApplication];
-    let windows: id = msg_send![app, windows];
-    let count: usize = msg_send![windows, count];
-    if count > 0 {
-        let window: id = msg_send![windows, objectAtIndex:0];
-        let _: () = msg_send![window, orderOut: nil];
-    }
+    // Non-paste actions hide after triggering.
+    hide_window_immediately();
 }

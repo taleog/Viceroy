@@ -30,6 +30,7 @@ const FALLBACK_MAX_DEPTH: usize = 6;
 const FALLBACK_SCAN_LIMIT: usize = 600;
 const FALLBACK_INDEX_LIMIT: usize = 4000;
 const FALLBACK_INDEX_TTL: Duration = Duration::from_secs(45);
+const FALLBACK_ENV: &str = "VICEROY_FALLBACK_FS";
 
 pub fn search_files(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
     if let Some(mut cached) = try_cached_results(query) {
@@ -40,7 +41,7 @@ pub fn search_files(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
     let mut files = run_mdfind(query).unwrap_or_default();
 
     // Spotlight unavailable or empty? fall back to a shallow filesystem walk.
-    if files.is_empty() {
+    if files.is_empty() && fallback_enabled() {
         files = fallback_walk(query, CACHE_STORE_LIMIT);
     }
 
@@ -99,10 +100,12 @@ fn fallback_walk(query: &str, limit: usize) -> Vec<FileInfo> {
 fn preferred_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        roots.push(home.clone());
-        roots.push(home.join("Documents"));
-        roots.push(home.join("Downloads"));
-        roots.push(home.join("Desktop"));
+        for sub in ["Documents", "Downloads", "Desktop"] {
+            let path = home.join(sub);
+            if path.is_dir() {
+                roots.push(path);
+            }
+        }
     }
     roots
 }
@@ -124,6 +127,12 @@ fn should_skip_path(path: &Path) -> bool {
         }
     }
     false
+}
+
+fn fallback_enabled() -> bool {
+    std::env::var(FALLBACK_ENV)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
+        .unwrap_or(false)
 }
 
 fn path_to_info(path: &str) -> Option<FileInfo> {

@@ -1,4 +1,7 @@
+use cocoa::base::{id, nil, YES};
+use cocoa::foundation::NSString;
 use dispatch::Queue;
+use objc::{class, msg_send, sel, sel_impl};
 
 /// Shared UI style constants for consistent layout.
 pub mod style {
@@ -74,6 +77,155 @@ where
     F: FnOnce() + Send + 'static,
 {
     Queue::main().exec_async(task);
+}
+
+/// Quick fade-in helper for lightweight transitions.
+pub unsafe fn fade_in_view(view: id, duration: f64) {
+    if view.is_null() {
+        return;
+    }
+    let _: () = msg_send![view, setAlphaValue: 0.0f64];
+    let _: () = msg_send![class!(NSAnimationContext), beginGrouping];
+    let ctx: id = msg_send![class!(NSAnimationContext), currentContext];
+    let _: () = msg_send![ctx, setDuration: duration];
+    let animator: id = msg_send![view, animator];
+    let _: () = msg_send![animator, setAlphaValue: 1.0f64];
+    let _: () = msg_send![class!(NSAnimationContext), endGrouping];
+}
+
+#[allow(dead_code)]
+/// Quick bounce scale for a lively snap. Uses Core Animation; no layout cost.
+pub unsafe fn bounce_view(view: id, duration: f64) {
+    if view.is_null() {
+        return;
+    }
+
+    // Ensure backing layer exists
+    let layer: id = msg_send![view, layer];
+    let layer = if layer == nil {
+        let _: () = msg_send![view, setWantsLayer: YES];
+        msg_send![view, layer]
+    } else {
+        layer
+    };
+    if layer == nil {
+        return;
+    }
+
+    // Reset to identity before animating
+    let identity = CATransform3D::identity();
+    let _: () = msg_send![layer, setTransform: identity];
+
+    // Create scale animation
+    let anim_key = nsstring("transform.scale");
+    let animation: id = msg_send![class!(CABasicAnimation), animationWithKeyPath: anim_key];
+    if animation == nil {
+        return;
+    }
+    let from_val: id = msg_send![class!(NSNumber), numberWithDouble: 0.94f64];
+    let to_val: id = msg_send![class!(NSNumber), numberWithDouble: 1.0f64];
+    let _: () = msg_send![animation, setFromValue: from_val];
+    let _: () = msg_send![animation, setToValue: to_val];
+    let _: () = msg_send![animation, setDuration: duration];
+    let timing: id =
+        msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeOut")];
+    let _: () = msg_send![animation, setTimingFunction: timing];
+    let _: () = msg_send![layer, addAnimation: animation forKey: nsstring("bounce")];
+}
+
+/// Springier bounce for more visible movement without feeling heavy.
+pub unsafe fn bounce_spring_view(view: id, from_scale: f64, to_scale: f64, duration_cap: f64) {
+    if view.is_null() {
+        return;
+    }
+    let layer: id = msg_send![view, layer];
+    let layer = if layer == nil {
+        let _: () = msg_send![view, setWantsLayer: YES];
+        msg_send![view, layer]
+    } else {
+        layer
+    };
+    if layer == nil {
+        return;
+    }
+
+    let identity = CATransform3D::identity();
+    let _: () = msg_send![layer, setTransform: identity];
+
+    let anim_key = nsstring("transform.scale");
+    let animation: id = msg_send![class!(CASpringAnimation), animationWithKeyPath: anim_key];
+    if animation == nil {
+        return;
+    }
+
+    let _: () = msg_send![animation, setFromValue: nsnumber(from_scale)];
+    let _: () = msg_send![animation, setToValue: nsnumber(to_scale)];
+    let _: () = msg_send![animation, setDamping: 16.0f64];
+    let _: () = msg_send![animation, setMass: 1.0f64];
+    let _: () = msg_send![animation, setStiffness: 180.0f64];
+    let _: () = msg_send![animation, setInitialVelocity: 10.0f64];
+
+    let mut settling: f64 = msg_send![animation, settlingDuration];
+    if settling.is_nan() || settling <= 0.0 {
+        settling = 0.38;
+    }
+    let duration = settling.min(duration_cap);
+    let _: () = msg_send![animation, setDuration: duration];
+
+    let _: () = msg_send![layer, addAnimation: animation forKey: nsstring("spring-bounce")];
+}
+
+unsafe fn nsstring(s: &str) -> id {
+    NSString::alloc(nil).init_str(s)
+}
+
+unsafe fn nsnumber(v: f64) -> id {
+    msg_send![class!(NSNumber), numberWithDouble: v]
+}
+
+// CATransform3D from QuartzCore (redeclared to avoid extra deps)
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CATransform3D {
+    m11: f64,
+    m12: f64,
+    m13: f64,
+    m14: f64,
+    m21: f64,
+    m22: f64,
+    m23: f64,
+    m24: f64,
+    m31: f64,
+    m32: f64,
+    m33: f64,
+    m34: f64,
+    m41: f64,
+    m42: f64,
+    m43: f64,
+    m44: f64,
+}
+
+impl CATransform3D {
+    const fn identity() -> Self {
+        Self {
+            m11: 1.0,
+            m12: 0.0,
+            m13: 0.0,
+            m14: 0.0,
+            m21: 0.0,
+            m22: 1.0,
+            m23: 0.0,
+            m24: 0.0,
+            m31: 0.0,
+            m32: 0.0,
+            m33: 1.0,
+            m34: 0.0,
+            m41: 0.0,
+            m42: 0.0,
+            m43: 0.0,
+            m44: 1.0,
+        }
+    }
 }
 
 /// Calculate the next table row index with wrap-around semantics.
