@@ -117,44 +117,114 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![detail, setStringValue: NSString::alloc(nil).init_str("Configure hotkey, clipboard history, and theme preferences from here.")];
 
     let target = ensure_actions_target();
+    let card_margin = 36.0;
+    let card_inset = 20.0;
+    let card_width = bounds.size.width - card_margin * 2.0;
+    let mut top_anchor = height - 170.0;
 
-    let section_x = 36.0;
-    let mut current_y = height - 150.0;
-    let label_width = 160.0;
+    // General card for hotkey
+    let general_card_height = 136.0;
+    let general_card_y = (top_anchor - general_card_height).max(card_margin);
+    let general_card: id = msg_send![class!(NSView), alloc];
+    let general_card: id = msg_send![general_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, general_card_y), NSSize::new(card_width, general_card_height))];
+    let _: () = msg_send![general_card, setWantsLayer: YES];
+    let general_layer: id = msg_send![general_card, layer];
+    let general_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.1f64 alpha:0.85f64];
+    let general_bg_cg: id = msg_send![general_bg, CGColor];
+    let _: () = msg_send![general_layer, setCornerRadius: 18.0f64];
+    let _: () = msg_send![general_layer, setBackgroundColor: general_bg_cg];
+    let _: () = msg_send![general_layer, setBorderWidth: 1.0f64];
+    let general_border: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+    let general_border_cg: id = msg_send![general_border, CGColor];
+    let _: () = msg_send![general_layer, setBorderColor: general_border_cg];
 
-    // Hotkey input
-    let hotkey_label: id = msg_send![class!(NSTextField), alloc];
-    let hotkey_label: id = msg_send![hotkey_label, initWithFrame:NSRect::new(NSPoint::new(section_x, current_y), NSSize::new(label_width, 18.0))];
-    let _: () = msg_send![hotkey_label, setBezeled: NO];
-    let _: () = msg_send![hotkey_label, setEditable: NO];
-    let _: () = msg_send![hotkey_label, setDrawsBackground: NO];
-    let _: () = msg_send![hotkey_label, setBordered: NO];
+    let hotkey_heading: id = msg_send![class!(NSTextField), alloc];
+    let hotkey_heading: id = msg_send![hotkey_heading, initWithFrame:NSRect::new(NSPoint::new(card_inset, general_card_height - card_inset - 24.0), NSSize::new(card_width - card_inset * 2.0, 22.0))];
+    let _: () = msg_send![hotkey_heading, setBezeled: NO];
+    let _: () = msg_send![hotkey_heading, setEditable: NO];
+    let _: () = msg_send![hotkey_heading, setDrawsBackground: NO];
+    let _: () = msg_send![hotkey_heading, setBordered: NO];
+    let general_font: id = msg_send![class!(NSFont), systemFontOfSize:15.0 weight:0.6];
+    let _: () = msg_send![hotkey_heading, setFont: general_font];
+    let heading_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.9f64];
+    let _: () = msg_send![hotkey_heading, setTextColor: heading_color];
     let _: () =
-        msg_send![hotkey_label, setStringValue: NSString::alloc(nil).init_str("Global hotkey")];
+        msg_send![hotkey_heading, setStringValue: NSString::alloc(nil).init_str("Global hotkey")];
+
+    let hotkey_caption: id = msg_send![class!(NSTextField), alloc];
+    let hotkey_caption: id = msg_send![hotkey_caption, initWithFrame:NSRect::new(NSPoint::new(card_inset, general_card_height - card_inset - 48.0), NSSize::new(card_width - card_inset * 2.0, 18.0))];
+    let _: () = msg_send![hotkey_caption, setBezeled: NO];
+    let _: () = msg_send![hotkey_caption, setEditable: NO];
+    let _: () = msg_send![hotkey_caption, setDrawsBackground: NO];
+    let _: () = msg_send![hotkey_caption, setBordered: NO];
+    let caption_font: id = msg_send![class!(NSFont), systemFontOfSize:12.5];
+    let caption_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.65f64];
+    let _: () = msg_send![hotkey_caption, setFont: caption_font];
+    let _: () = msg_send![hotkey_caption, setTextColor: caption_color];
+    let _: () = msg_send![hotkey_caption, setStringValue: NSString::alloc(nil).init_str("Choose the keyboard shortcut that summons Viceroy from anywhere.")];
+
     let hotkey_field: id = msg_send![class!(NSTextField), alloc];
     let hotkey_field_frame = NSRect::new(
-        NSPoint::new(section_x + label_width + 12.0, current_y - 4.0),
-        NSSize::new(240.0, 22.0),
+        NSPoint::new(card_inset, card_inset),
+        NSSize::new(card_width - card_inset * 2.0, 30.0),
     );
     let hotkey_field: id = msg_send![hotkey_field, initWithFrame: hotkey_field_frame];
     let _: () = msg_send![hotkey_field, setBezeled: YES];
     let _: () = msg_send![hotkey_field, setEditable: YES];
     let _: () = msg_send![hotkey_field, setDrawsBackground: YES];
     let _: () = msg_send![hotkey_field, setBordered: YES];
-    current_y -= 34.0;
+    let _: () = msg_send![general_card, addSubview: hotkey_heading];
+    let _: () = msg_send![general_card, addSubview: hotkey_caption];
+    let _: () = msg_send![general_card, addSubview: hotkey_field];
 
-    // Max results slider
+    // Behavior card
+    top_anchor = general_card_y - 24.0;
+    let behavior_card_height = 220.0;
+    let behavior_card_y = (top_anchor - behavior_card_height).max(card_margin);
+    let behavior_card: id = msg_send![class!(NSView), alloc];
+    let behavior_card: id = msg_send![behavior_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, behavior_card_y), NSSize::new(card_width, behavior_card_height))];
+    let _: () = msg_send![behavior_card, setWantsLayer: YES];
+    let behavior_layer: id = msg_send![behavior_card, layer];
+    let behavior_bg: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:0.11f64 alpha:0.82f64];
+    let behavior_bg_cg: id = msg_send![behavior_bg, CGColor];
+    let _: () = msg_send![behavior_layer, setCornerRadius: 18.0f64];
+    let _: () = msg_send![behavior_layer, setBackgroundColor: behavior_bg_cg];
+    let _: () = msg_send![behavior_layer, setBorderWidth: 1.0f64];
+    let behavior_border: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+    let behavior_border_cg: id = msg_send![behavior_border, CGColor];
+    let _: () = msg_send![behavior_layer, setBorderColor: behavior_border_cg];
+
+    let behavior_heading: id = msg_send![class!(NSTextField), alloc];
+    let behavior_heading: id = msg_send![behavior_heading, initWithFrame:NSRect::new(NSPoint::new(card_inset, behavior_card_height - card_inset - 24.0), NSSize::new(card_width - card_inset * 2.0, 22.0))];
+    let _: () = msg_send![behavior_heading, setBezeled: NO];
+    let _: () = msg_send![behavior_heading, setEditable: NO];
+    let _: () = msg_send![behavior_heading, setDrawsBackground: NO];
+    let _: () = msg_send![behavior_heading, setBordered: NO];
+    let _: () =
+        msg_send![behavior_heading, setFont: general_font];
+    let _: () = msg_send![behavior_heading, setTextColor: heading_color];
+    let _: () = msg_send![behavior_heading, setStringValue: NSString::alloc(nil).init_str("Results & behavior")];
+
     let max_label: id = msg_send![class!(NSTextField), alloc];
-    let max_label: id = msg_send![max_label, initWithFrame:NSRect::new(NSPoint::new(section_x, current_y), NSSize::new(label_width + 80.0, 18.0))];
+    let max_label: id = msg_send![max_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, behavior_card_height - card_inset - 50.0), NSSize::new(card_width - card_inset * 2.0, 20.0))];
     let _: () = msg_send![max_label, setBezeled: NO];
     let _: () = msg_send![max_label, setEditable: NO];
     let _: () = msg_send![max_label, setDrawsBackground: NO];
     let _: () = msg_send![max_label, setBordered: NO];
     let _: () =
         msg_send![max_label, setStringValue: NSString::alloc(nil).init_str("Max results: 50")];
+    let max_label_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.65f64];
+    let _: () = msg_send![max_label, setTextColor: max_label_color];
+
     let slider_frame = NSRect::new(
-        NSPoint::new(section_x, current_y - 30.0),
-        NSSize::new(bounds.size.width - section_x * 2.0 - 20.0, 22.0),
+        NSPoint::new(card_inset, behavior_card_height - card_inset - 90.0),
+        NSSize::new(card_width - card_inset * 2.0, 26.0),
     );
     let max_slider: id = msg_send![class!(NSSlider), alloc];
     let max_slider: id = msg_send![max_slider, initWithFrame: slider_frame];
@@ -164,31 +234,30 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![max_slider, setNumberOfTickMarks: 10];
     let _: () = msg_send![max_slider, setTarget: target];
     let _: () = msg_send![max_slider, setAction: sel!(maxResultsSliderChanged:)];
-    current_y -= 60.0;
 
-    // Toggle rows
-    let esc_toggle_frame =
-        NSRect::new(NSPoint::new(section_x, current_y), NSSize::new(240.0, 28.0));
     let esc_toggle: id = msg_send![class!(NSButton), alloc];
-    let esc_toggle: id = msg_send![esc_toggle, initWithFrame: esc_toggle_frame];
+    let esc_toggle: id = msg_send![esc_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, card_inset + 60.0), NSSize::new(card_width / 2.0 - card_inset, 28.0))];
     let _: () = msg_send![esc_toggle, setButtonType: 3];
     let _: () = msg_send![esc_toggle, setTitle: NSString::alloc(nil).init_str("Dismiss on Escape")];
     let _: () = msg_send![esc_toggle, setTarget: target];
     let _: () = msg_send![esc_toggle, setAction: sel!(toggleSetting:)];
-    current_y -= 36.0;
-    let click_toggle_frame =
-        NSRect::new(NSPoint::new(section_x, current_y), NSSize::new(240.0, 28.0));
+
     let click_toggle: id = msg_send![class!(NSButton), alloc];
-    let click_toggle: id = msg_send![click_toggle, initWithFrame: click_toggle_frame];
+    let click_toggle: id = msg_send![click_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, card_inset + 24.0), NSSize::new(card_width / 2.0 - card_inset, 28.0))];
     let _: () = msg_send![click_toggle, setButtonType: 3];
     let _: () =
         msg_send![click_toggle, setTitle: NSString::alloc(nil).init_str("Dismiss on click away")];
     let _: () = msg_send![click_toggle, setTarget: target];
     let _: () = msg_send![click_toggle, setAction: sel!(toggleSetting:)];
-    current_y -= 48.0;
+
+    let _: () = msg_send![behavior_card, addSubview: behavior_heading];
+    let _: () = msg_send![behavior_card, addSubview: max_label];
+    let _: () = msg_send![behavior_card, addSubview: max_slider];
+    let _: () = msg_send![behavior_card, addSubview: esc_toggle];
+    let _: () = msg_send![behavior_card, addSubview: click_toggle];
 
     let save_button_frame =
-        NSRect::new(NSPoint::new(section_x, current_y), NSSize::new(140.0, 30.0));
+        NSRect::new(NSPoint::new(bounds.size.width - card_margin - 160.0, card_margin + 12.0), NSSize::new(150.0, 32.0));
     let save_button: id = msg_send![class!(NSButton), alloc];
     let save_button: id = msg_send![save_button, initWithFrame: save_button_frame];
     let _: () = msg_send![save_button, setBezelStyle: 4];
@@ -213,12 +282,8 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
 
     let _: () = msg_send![panel, addSubview: title];
     let _: () = msg_send![panel, addSubview: detail];
-    let _: () = msg_send![panel, addSubview: hotkey_label];
-    let _: () = msg_send![panel, addSubview: hotkey_field];
-    let _: () = msg_send![panel, addSubview: max_label];
-    let _: () = msg_send![panel, addSubview: max_slider];
-    let _: () = msg_send![panel, addSubview: esc_toggle];
-    let _: () = msg_send![panel, addSubview: click_toggle];
+    let _: () = msg_send![panel, addSubview: general_card];
+    let _: () = msg_send![panel, addSubview: behavior_card];
     let _: () = msg_send![panel, addSubview: save_button];
     let _: () = msg_send![panel, addSubview: button];
     let controls = SettingsControls {

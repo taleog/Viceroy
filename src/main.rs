@@ -63,7 +63,7 @@ impl AppDelegate for ViceroyApp {
             register_key_window_class();
 
             let ns_window: id = msg_send![class!(MKKeyWindow), alloc];
-            let rect = NSRect::new(NSPoint::new(100.0, 100.0), NSSize::new(720.0, 106.0)); // Better proportions
+            let rect = NSRect::new(NSPoint::new(100.0, 100.0), NSSize::new(960.0, 132.0)); // Better proportions
 
             let style_mask = NSWindowStyleMask::NSBorderlessWindowMask
                 | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
@@ -246,44 +246,33 @@ impl AppDelegate for ViceroyApp {
                                                     let _: () = msg_send![window, makeKeyAndOrderFront: nil];
 
                                                     // Focus and reset search field on each hotkey show
-                                                    let content_view: id = msg_send![window, contentView];
-                                                    let subviews: id = msg_send![content_view, subviews];
-                                                    let sv_count: usize = msg_send![subviews, count];
-                                                    if sv_count > 1 {
-                                                        // Container is at index 1
-                                                        let container: id = msg_send![subviews, objectAtIndex:1];
-                                                        let container_subviews: id = msg_send![container, subviews];
-                                                        let csv_count: usize = msg_send![container_subviews, count];
-                                                        if csv_count > 0 {
-                                                            let search_field: id = msg_send![container_subviews, objectAtIndex:csv_count-1];
+                                                    if let Some(search_field) = find_search_field() {
+                                                        // Clear previous query text and any existing results
+                                                        let empty: id = NSString::alloc(nil).init_str("");
+                                                        let _: () = msg_send![search_field, setStringValue: empty];
 
-                                                            // Clear previous query text and any existing results
-                                                            let empty: id = NSString::alloc(nil).init_str("");
-                                                            let _: () = msg_send![search_field, setStringValue: empty];
-
-                                                            if let Ok(mut mode) = TABLE_MODE.lock() {
-                                                                *mode = TableMode::Search;
-                                                            }
-                                                            update_clipboard_preview_selection(None);
-                                                            table::update_preview_layout(false);
-
-                                                            if let Ok(mut tr) = TABLE_RESULTS.lock() {
-                                                                tr.clear();
-                                                            }
-                                                            if let Ok(mut td) = TABLE_DATA.lock() {
-                                                                td.clear();
-                                                            }
-                                                            table::schedule_table_update_next_tick();
-
-                                                            // Ensure white insertion point before typing
-                                                            let field_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
-                                                            if field_editor != nil {
-                                                                let white: id = msg_send![class!(NSColor), whiteColor];
-                                                                let _: () = msg_send![field_editor, setInsertionPointColor: white];
-                                                            }
-
-                                                            let _: () = msg_send![window, makeFirstResponder: search_field];
+                                                        if let Ok(mut mode) = TABLE_MODE.lock() {
+                                                            *mode = TableMode::Search;
                                                         }
+                                                        update_clipboard_preview_selection(None);
+                                                        table::update_preview_layout(false);
+
+                                                        if let Ok(mut tr) = TABLE_RESULTS.lock() {
+                                                            tr.clear();
+                                                        }
+                                                        if let Ok(mut td) = TABLE_DATA.lock() {
+                                                            td.clear();
+                                                        }
+                                                        table::schedule_table_update_next_tick();
+
+                                                        // Ensure white insertion point before typing
+                                                        let field_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
+                                                        if field_editor != nil {
+                                                            let white: id = msg_send![class!(NSColor), whiteColor];
+                                                            let _: () = msg_send![field_editor, setInsertionPointColor: white];
+                                                        }
+
+                                                        let _: () = msg_send![window, makeFirstResponder: search_field];
                                                     }
                                                 }
                                             });
@@ -559,6 +548,10 @@ unsafe fn register_escape_textfield_class() {
                         msg_send![class!(NSApplication), sendAction:sel!(cut:) to:nil from:this];
                     return YES;
                 }
+                if s == "," {
+                    settings_view::show_settings_panel();
+                    return YES;
+                }
             }
 
             // Call super
@@ -609,51 +602,68 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     // 1. Create Container View (The "Search Bar" visual)
     let container: id = msg_send![class!(NSView), alloc];
     let container_frame = NSRect::new(
-        NSPoint::new(20.0, bounds.size.height - style::TABLE_TOP_OFFSET),
-        NSSize::new(bounds.size.width - 40.0, style::SEARCH_BAR_HEIGHT),
+        NSPoint::new(
+            style::CONTENT_SIDE_INSET,
+            bounds.size.height - style::TABLE_TOP_OFFSET,
+        ),
+        NSSize::new(
+            bounds.size.width - style::CONTENT_SIDE_INSET * 2.0,
+            style::SEARCH_BAR_HEIGHT,
+        ),
     );
     let container: id = msg_send![container, initWithFrame: container_frame];
     let _: () = msg_send![container, setWantsLayer: YES];
     let layer: id = msg_send![container, layer];
-    let _: () = msg_send![layer, setCornerRadius: 16.0f64];
+    let _: () = msg_send![layer, setCornerRadius: 20.0f64];
     let _: () = msg_send![layer, setMasksToBounds: YES];
 
     // Add subtle border
-    let _: () = msg_send![layer, setBorderWidth: 0.5f64];
+    let _: () = msg_send![layer, setBorderWidth: 0.8f64];
     let border_color: id =
-        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.15f64];
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
     let border_cg: id = msg_send![border_color, CGColor];
     let _: () = msg_send![layer, setBorderColor: border_cg];
+    let bg_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.05f64 alpha:0.9f64];
+    let bg_color_cg: id = msg_send![bg_color, CGColor];
+    let _: () = msg_send![layer, setBackgroundColor: bg_color_cg];
 
     // Add Visual Effect View for Glass Look (Dark HUD style)
     let effect_view: id = msg_send![class!(NSVisualEffectView), alloc];
     let effect_view: id = msg_send![effect_view, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), container_frame.size)];
-    let _: () = msg_send![effect_view, setMaterial: 13]; // HUDWindow (Dark, Translucent)
+    let _: () = msg_send![effect_view, setMaterial: 12]; // Sidebar
     let _: () = msg_send![effect_view, setBlendingMode: 0]; // BehindWindow
     let _: () = msg_send![effect_view, setState: 1]; // Active
     let _: () = msg_send![effect_view, setAutoresizingMask: 18]; // Width+Height
     let _: () = msg_send![container, addSubview: effect_view];
 
-    // 2. Add Icon (Vertically Centered)
+    // 2. Add Icon badge
+    let icon_badge: id = msg_send![class!(NSView), alloc];
+    let badge_size = 38.0;
+    let badge_origin_y = (style::SEARCH_BAR_HEIGHT - badge_size) / 2.0;
+    let icon_badge: id = msg_send![icon_badge, initWithFrame: NSRect::new(NSPoint::new(18.0, badge_origin_y), NSSize::new(badge_size, badge_size))];
+    let _: () = msg_send![icon_badge, setWantsLayer: YES];
+    let badge_layer: id = msg_send![icon_badge, layer];
+    let badge_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+    let badge_bg_cg: id = msg_send![badge_bg, CGColor];
+    let _: () = msg_send![badge_layer, setCornerRadius: 13.0f64];
+    let _: () = msg_send![badge_layer, setBackgroundColor: badge_bg_cg];
+    let _: () = msg_send![badge_layer, setBorderWidth: 0.0f64];
     let icon_view: id = msg_send![class!(NSImageView), alloc];
-    // Center vertically in 60px height. Icon size 26x26 (slightly larger).
-    // y = (60 - 26) / 2 = 17.
-    let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(18.0, 17.0), NSSize::new(26.0, 26.0))];
+    let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(6.0, 6.0), NSSize::new(26.0, 26.0))];
     let icon_name = NSString::alloc(nil).init_str("magnifyingglass");
     let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName:icon_name accessibilityDescription:nil];
     let _: () = msg_send![icon_view, setImage: image];
     let icon_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.5f64]; // Subtle gray
     let _: () = msg_send![icon_view, setContentTintColor: icon_color];
-    let _: () = msg_send![container, addSubview: icon_view];
+    let _: () = msg_send![icon_badge, addSubview: icon_view];
+    let _: () = msg_send![container, addSubview: icon_badge];
 
     // 3. Create Search Input (Transparent, Centered)
     let search_field: id = msg_send![class!(MKEscapeTextField), alloc];
-    // Height 30px is enough for text. Center vertically: (60 - 30) / 2 = 15.
-    // Adjusted to 14.0 to visually center with the larger font.
-    // Left padding: 18 + 26 + 12 = 56.
+    // Height 32px centered vertically.
     let input_frame = NSRect::new(
-        NSPoint::new(56.0, 14.0),
-        NSSize::new(container_frame.size.width - 72.0, 30.0),
+        NSPoint::new(18.0 + badge_size + 16.0, (style::SEARCH_BAR_HEIGHT - 32.0) / 2.0),
+        NSSize::new(container_frame.size.width - (18.0 + badge_size + 16.0) - 190.0, 32.0),
     );
     let search_field: id = msg_send![search_field, initWithFrame: input_frame];
 
@@ -672,7 +682,8 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     let _: () = msg_send![search_field, setTextColor: text_color];
 
     // Placeholder
-    let placeholder_text = NSString::alloc(nil).init_str("Search apps and commands");
+    let placeholder_text =
+        NSString::alloc(nil).init_str("Search apps, files, clipboard history, and more");
     let placeholder_attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
     let placeholder_color: id =
         msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.3f64]; // Very subtle
@@ -687,7 +698,48 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     let _: () = msg_send![cell, setScrollable: YES];
     let _: () = msg_send![cell, setUsesSingleLineMode: YES];
 
+    // Right-side hint label
+    let hint_label: id = msg_send![class!(NSTextField), alloc];
+    let hint_label: id = msg_send![hint_label, initWithFrame: NSRect::new(NSPoint::new(container_frame.size.width - 190.0, (style::SEARCH_BAR_HEIGHT - 32.0) / 2.0), NSSize::new(170.0, 32.0))];
+    let _: () = msg_send![hint_label, setBezeled: NO];
+    let _: () = msg_send![hint_label, setEditable: NO];
+    let _: () = msg_send![hint_label, setDrawsBackground: NO];
+    let _: () = msg_send![hint_label, setBordered: NO];
+    let _: () = msg_send![hint_label, setAlignment: 2];
+    let hint_font: id = msg_send![class!(NSFont), systemFontOfSize:12.0 weight:0.4];
+    let _: () = msg_send![hint_label, setFont: hint_font];
+    let _: () = msg_send![hint_label, setUsesSingleLineMode: YES];
+    let _: () = msg_send![hint_label, setLineBreakMode: 4];
+    let hint_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.55f64];
+    let _: () = msg_send![hint_label, setTextColor: hint_color];
+    let hint_text = NSString::alloc(nil).init_str("⌘ + , Preferences");
+    let _: () = msg_send![hint_label, setStringValue: hint_text];
+
+    // Secondary hint chips stacked below input for quick shortcuts
+    let chip_container: id = msg_send![class!(NSView), alloc];
+    let chip_container: id = msg_send![chip_container, initWithFrame: NSRect::new(NSPoint::new(18.0 + badge_size + 16.0, 6.0), NSSize::new(container_frame.size.width - (18.0 + badge_size + 16.0) - 200.0, 18.0))];
+    let _: () = msg_send![chip_container, setWantsLayer: NO];
+    let chip_font: id = msg_send![class!(NSFont), monospacedSystemFontOfSize:11.0 weight:0.2];
+    let chip_text: id = msg_send![class!(NSTextField), alloc];
+    let chip_text: id = msg_send![chip_text, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(container_frame.size.width - (18.0 + badge_size + 16.0) - 220.0, 18.0))];
+    let _: () = msg_send![chip_text, setBezeled: NO];
+    let _: () = msg_send![chip_text, setEditable: NO];
+    let _: () = msg_send![chip_text, setDrawsBackground: NO];
+    let _: () = msg_send![chip_text, setBordered: NO];
+    let _: () = msg_send![chip_text, setFont: chip_font];
+    let _: () = msg_send![chip_text, setUsesSingleLineMode: YES];
+    let _: () = msg_send![chip_text, setLineBreakMode: 4];
+    let chip_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
+    let _: () = msg_send![chip_text, setTextColor: chip_color];
+    let chip_value =
+        NSString::alloc(nil).init_str("Tab = clipboard · / = web search · Esc = hide");
+    let _: () = msg_send![chip_text, setStringValue: chip_value];
+    let _: () = msg_send![chip_container, addSubview: chip_text];
+
     let _: () = msg_send![container, addSubview: search_field];
+    let _ = SEARCH_FIELD.set(search_field as usize);
+    let _: () = msg_send![container, addSubview: hint_label];
+    let _: () = msg_send![container, addSubview: chip_container];
     let _: () = msg_send![content_view, addSubview: container];
 
     // Focus immediately
@@ -706,42 +758,56 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
 
     // Layout constants for list + preview split
     let table_height =
-        (bounds.size.height - style::TABLE_TOP_OFFSET - style::TABLE_FOOTER_HEIGHT).max(0.0);
-    let list_width = bounds.size.width * 0.52;
-    let preview_spacing = 12.0;
-    let preview_origin_x = list_width + preview_spacing;
-    let preview_width = bounds.size.width - preview_origin_x - 12.0;
+        (bounds.size.height - style::RESULTS_TOP_OFFSET - style::TABLE_FOOTER_HEIGHT).max(0.0);
+    let available_width = (bounds.size.width
+        - style::CONTENT_SIDE_INSET * 2.0
+        - style::LIST_EXTRA_MARGIN * 2.0)
+        .max(style::LIST_MIN_WIDTH);
+    let split_list_width = (available_width * style::LIST_WIDTH_RATIO).max(style::LIST_MIN_WIDTH);
+    let preview_width =
+        (available_width - split_list_width - style::PREVIEW_GAP).max(style::PREVIEW_MIN_WIDTH);
+    let list_origin_x = style::CONTENT_SIDE_INSET + style::LIST_EXTRA_MARGIN;
+    let preview_origin_x = list_origin_x + split_list_width + style::PREVIEW_GAP;
 
     // Scroll view container with padding on the left
     let scroll: id = msg_send![class!(NSScrollView), alloc];
     let frame = NSRect::new(
-        NSPoint::new(0.0, style::TABLE_FOOTER_HEIGHT),
-        NSSize::new(list_width, table_height),
+        NSPoint::new(list_origin_x, style::TABLE_FOOTER_HEIGHT),
+        NSSize::new(split_list_width, table_height),
     );
     let scroll: id = msg_send![scroll, initWithFrame: frame];
+    table::install_constrained_clip_view(scroll, NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(frame.size.width, table_height)));
     let _: () = msg_send![scroll, setBorderType: 0];
     let _: () = msg_send![scroll, setDrawsBackground: NO];
     let _: () = msg_send![scroll, setWantsLayer: YES];
     let scroll_layer: id = msg_send![scroll, layer];
-    let _: () = msg_send![scroll_layer, setCornerRadius: 10.0f64];
+    let _: () = msg_send![scroll_layer, setCornerRadius: 18.0f64];
     let _: () = msg_send![scroll_layer, setMasksToBounds: YES];
+    let scroll_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.05f64 alpha:0.38f64];
+    let scroll_bg_cg: id = msg_send![scroll_bg, CGColor];
+    let _: () = msg_send![scroll_layer, setBackgroundColor: scroll_bg_cg];
     let _: () = msg_send![scroll, setHasVerticalScroller: YES];
     let _: () = msg_send![scroll, setHasHorizontalScroller: NO];
+    let _: () = msg_send![scroll, setAutohidesScrollers: YES];
+    let _: () = msg_send![scroll, setScrollerStyle:1];
+    let _: () = msg_send![scroll, setHorizontalScrollElasticity:1];
     let _: () = msg_send![scroll, setAutoresizingMask: 16]; // height only
     let _ = TABLE_SCROLL_VIEW.set(scroll as usize);
 
     // Table view with modern spacing
     let table: id = msg_send![class!(NSTableView), alloc];
-    let table: id = msg_send![table, initWithFrame: NSRect::new(NSPoint::new(0.0,0.0), NSSize::new(bounds.size.width, table_height))];
+    let table: id = msg_send![table, initWithFrame: NSRect::new(NSPoint::new(0.0,0.0), NSSize::new(frame.size.width, table_height))];
     let _: () = msg_send![table, setHeaderView: nil];
     let _: () = msg_send![table, setRowHeight: table::ROW_HEIGHT];
-    let _: () = msg_send![table, setIntercellSpacing: NSSize::new(0.0, 6.0)];
+    let _: () = msg_send![table, setIntercellSpacing: NSSize::new(0.0, style::ROW_STACK_SPACING)];
+    let _: () = msg_send![table, setColumnAutoresizingStyle: 1u64]; // uniform auto-resize
     let _: () = msg_send![table, setSelectionHighlightStyle: -1]; // Custom selection drawing
     let _: () = msg_send![table, setFocusRingType: 0];
     let bg_color: id = msg_send![class!(NSColor), clearColor];
     let _: () = msg_send![table, setBackgroundColor: bg_color];
     let _: () = msg_send![table, setGridStyleMask: 0]; // No grid
     let _: () = msg_send![table, setBackgroundColor: bg_color];
+    let _: () = msg_send![table, setAllowsExpansionToolTips: YES];
 
     // Enable alternating row colors set to clear for consistent look
     let _: () = msg_send![table, setUsesAlternatingRowBackgroundColors: NO];
@@ -749,7 +815,8 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     // Single column
     let column: id = msg_send![class!(NSTableColumn), alloc];
     let column: id = msg_send![column, initWithIdentifier: NSString::alloc(nil).init_str("main")];
-    let _: () = msg_send![column, setWidth: list_width];
+    let _: () = msg_send![column, setWidth: frame.size.width];
+    let _: () = msg_send![column, setResizingMask: 1u64];
     let _: () = msg_send![table, addTableColumn: column];
 
     // Data source & delegate
@@ -787,14 +854,14 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
 
     // Clipboard preview panel to the right of the list
     let preview_frame = NSRect::new(
-        NSPoint::new(preview_origin_x, 10.0),
+        NSPoint::new(preview_origin_x, style::TABLE_FOOTER_HEIGHT),
         NSSize::new(preview_width, table_height),
     );
     create_clipboard_preview_view(content_view, preview_frame);
     table::update_preview_layout(false);
 
     // Footer hint bar
-    let footer_height = 22.0;
+    let footer_height = style::TABLE_FOOTER_HEIGHT;
     let footer_frame = NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(bounds.size.width, footer_height),
@@ -806,33 +873,56 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     let footer_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.08f64 alpha:0.95f64];
     let footer_bg_cg: id = msg_send![footer_bg, CGColor];
     let _: () = msg_send![footer_layer, setBackgroundColor: footer_bg_cg];
+    let border_layer: id = msg_send![class!(CALayer), layer];
+    let divider_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.05f64];
+    let divider_color_cg: id = msg_send![divider_color, CGColor];
+    let _: () = msg_send![border_layer, setBackgroundColor: divider_color_cg];
+    let _: () = msg_send![border_layer, setFrame:NSRect::new(NSPoint::new(0.0, footer_height - 1.0), NSSize::new(bounds.size.width, 1.0))];
+    let _: () = msg_send![footer_layer, addSublayer:border_layer];
 
     // Left label (static hint)
     let left_label: id = msg_send![class!(NSTextField), alloc];
-    let left_label: id = msg_send![left_label, initWithFrame: NSRect::new(NSPoint::new(12.0, 3.0), NSSize::new(200.0, 16.0))];
+    let left_label: id = msg_send![left_label, initWithFrame: NSRect::new(NSPoint::new(style::CONTENT_SIDE_INSET, 6.0), NSSize::new(260.0, footer_height - 10.0))];
     let _: () = msg_send![left_label, setBezeled: NO];
     let _: () = msg_send![left_label, setEditable: NO];
     let _: () = msg_send![left_label, setDrawsBackground: NO];
     let _: () = msg_send![left_label, setBordered: NO];
-    let left_font: id = msg_send![class!(NSFont), systemFontOfSize:11.0];
+    let left_font: id = msg_send![class!(NSFont), monospacedSystemFontOfSize:11.0 weight:0.2];
     let _: () = msg_send![left_label, setFont: left_font];
-    let left_text = NSString::alloc(nil).init_str("TAB  Next result");
+    let left_text = NSString::alloc(nil).init_str("↑ / ↓  Navigate    •    Tab  Clipboard history");
     let _: () = msg_send![left_label, setStringValue: left_text];
     let left_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
     let _: () = msg_send![left_label, setTextColor: left_color];
     let _: () = msg_send![footer, addSubview: left_label];
 
+    // Center label
+    let center_label: id = msg_send![class!(NSTextField), alloc];
+    let center_label: id = msg_send![center_label, initWithFrame: NSRect::new(NSPoint::new(bounds.size.width / 2.0 - 160.0, 6.0), NSSize::new(320.0, footer_height - 10.0))];
+    let _: () = msg_send![center_label, setBezeled: NO];
+    let _: () = msg_send![center_label, setEditable: NO];
+    let _: () = msg_send![center_label, setDrawsBackground: NO];
+    let _: () = msg_send![center_label, setBordered: NO];
+    let _: () = msg_send![center_label, setAlignment: 1];
+    let center_font: id = msg_send![class!(NSFont), monospacedSystemFontOfSize:11.0 weight:0.2];
+    let _: () = msg_send![center_label, setFont: center_font];
+    let center_text = NSString::alloc(nil).init_str("⌘⌫ Clear query    •    ⌘, Settings");
+    let _: () = msg_send![center_label, setStringValue: center_text];
+    let center_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
+    let _: () = msg_send![center_label, setTextColor: center_color];
+    let _: () = msg_send![footer, addSubview: center_label];
+
     // Right label (static for now)
     let right_label: id = msg_send![class!(NSTextField), alloc];
-    let right_label: id = msg_send![right_label, initWithFrame: NSRect::new(NSPoint::new(bounds.size.width - 180.0, 3.0), NSSize::new(160.0, 16.0))];
+    let right_label: id = msg_send![right_label, initWithFrame: NSRect::new(NSPoint::new(bounds.size.width - style::CONTENT_SIDE_INSET - 200.0, 6.0), NSSize::new(190.0, footer_height - 10.0))];
     let _: () = msg_send![right_label, setBezeled: NO];
     let _: () = msg_send![right_label, setEditable: NO];
     let _: () = msg_send![right_label, setDrawsBackground: NO];
     let _: () = msg_send![right_label, setBordered: NO];
     let _: () = msg_send![right_label, setAlignment: 2];
-    let right_font: id = msg_send![class!(NSFont), systemFontOfSize:11.0];
+    let right_font: id = msg_send![class!(NSFont), monospacedSystemFontOfSize:11.0 weight:0.2];
     let _: () = msg_send![right_label, setFont: right_font];
-    let right_text = NSString::alloc(nil).init_str("↩  Open selected");
+    let right_text = NSString::alloc(nil).init_str("↩  Launch / Paste    •    Esc  Hide");
     let _: () = msg_send![right_label, setStringValue: right_text];
     let right_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
     let _: () = msg_send![right_label, setTextColor: right_color];
@@ -1093,6 +1183,12 @@ fn abort_current_search() {
 }
 
 unsafe fn find_search_field() -> Option<id> {
+    if let Some(&ptr) = SEARCH_FIELD.get() {
+        let field: id = ptr as id;
+        if field != nil {
+            return Some(field);
+        }
+    }
     let app: id = msg_send![class!(NSApplication), sharedApplication];
     let windows: id = msg_send![app, windows];
     let count: usize = msg_send![windows, count];
@@ -1478,39 +1574,29 @@ unsafe fn bring_window_to_front_with_search_reset(window: id) {
     update_clipboard_preview_selection(None);
     table::update_preview_layout(false);
 
-    let content_view: id = msg_send![window, contentView];
-    let subviews: id = msg_send![content_view, subviews];
-    let sv_count: usize = msg_send![subviews, count];
-    if sv_count > 1 {
-        let container: id = msg_send![subviews, objectAtIndex:1];
-        let container_subviews: id = msg_send![container, subviews];
-        let csv_count: usize = msg_send![container_subviews, count];
-        if csv_count > 0 {
-            let search_field: id = msg_send![container_subviews, objectAtIndex:csv_count-1];
+    if let Some(search_field) = find_search_field() {
+        let empty: id = NSString::alloc(nil).init_str("");
+        let _: () = msg_send![search_field, setStringValue: empty];
 
-            let empty: id = NSString::alloc(nil).init_str("");
-            let _: () = msg_send![search_field, setStringValue: empty];
-
-            if let Ok(mut tr) = TABLE_RESULTS.lock() {
-                tr.clear();
-            } else {
-                eprintln!("WARNING: TABLE_RESULTS lock poisoned in menu action");
-            }
-            if let Ok(mut td) = TABLE_DATA.lock() {
-                td.clear();
-            } else {
-                eprintln!("WARNING: TABLE_DATA lock poisoned in menu action");
-            }
-            table::reload_table();
-
-            let field_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
-            if field_editor != nil {
-                let white: id = msg_send![class!(NSColor), whiteColor];
-                let _: () = msg_send![field_editor, setInsertionPointColor: white];
-            }
-
-            let _: () = msg_send![window, makeFirstResponder: search_field];
+        if let Ok(mut tr) = TABLE_RESULTS.lock() {
+            tr.clear();
+        } else {
+            eprintln!("WARNING: TABLE_RESULTS lock poisoned in menu action");
         }
+        if let Ok(mut td) = TABLE_DATA.lock() {
+            td.clear();
+        } else {
+            eprintln!("WARNING: TABLE_DATA lock poisoned in menu action");
+        }
+        table::reload_table();
+
+        let field_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
+        if field_editor != nil {
+            let white: id = msg_send![class!(NSColor), whiteColor];
+            let _: () = msg_send![field_editor, setInsertionPointColor: white];
+        }
+
+        let _: () = msg_send![window, makeFirstResponder: search_field];
     }
 }
 
@@ -1590,20 +1676,8 @@ unsafe fn setup_window_delegate(ns_window: id) {
             let count: usize = msg_send![windows, count];
             if count > 0 {
                 let window: id = msg_send![windows, objectAtIndex:0];
-                let content_view: id = msg_send![window, contentView];
-                let subviews: id = msg_send![content_view, subviews];
-                let sv_count: usize = msg_send![subviews, count];
-                if sv_count > 1 {
-                    // Container is at index 1
-                    let container: id = msg_send![subviews, objectAtIndex:1];
-                    let container_subviews: id = msg_send![container, subviews];
-                    let csv_count: usize = msg_send![container_subviews, count];
-                    // Search field is the last subview added to container (index 2: effect, icon, field)
-                    if csv_count > 0 {
-                        let search_field: id =
-                            msg_send![container_subviews, objectAtIndex:csv_count-1];
-                        let _: () = msg_send![window, makeFirstResponder: search_field];
-                    }
+                if let Some(search_field) = find_search_field() {
+                    let _: () = msg_send![window, makeFirstResponder: search_field];
                 }
             }
         }

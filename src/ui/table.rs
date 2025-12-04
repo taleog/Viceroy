@@ -17,9 +17,78 @@ use objc::{class, msg_send, sel, sel_impl};
 use std::sync::atomic::Ordering;
 
 use crate::app_launcher;
-use crate::ui::clipboard_view::{icon_for_history_entry, update_clipboard_preview_selection};
+use crate::ui::clipboard_view::{
+    icon_for_history_entry, refresh_clipboard_preview_layout, update_clipboard_preview_selection,
+};
 
 pub use crate::ui::helpers::style::ROW_HEIGHT;
+
+fn sanitize_coordinate(value: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        0.0
+    }
+}
+
+fn sanitize_dimension(value: f64) -> f64 {
+    if value.is_finite() && value >= 0.0 {
+        value
+    } else {
+        0.0
+    }
+}
+
+fn register_constrained_clip_view_class() {
+    unsafe {
+        if objc::runtime::Class::get("MKConstrainedClipView").is_some() {
+            return;
+        }
+        let superclass = class!(NSClipView);
+        let mut decl = ClassDecl::new("MKConstrainedClipView", superclass).unwrap();
+
+        extern "C" fn constrain_bounds_rect(
+            this: &Object,
+            _cmd: Sel,
+            mut proposed: NSRect,
+        ) -> NSRect {
+            proposed.origin.x = 0.0;
+            proposed.origin.y = sanitize_coordinate(proposed.origin.y);
+            proposed.size.width = sanitize_dimension(proposed.size.width);
+            proposed.size.height = sanitize_dimension(proposed.size.height);
+            unsafe { msg_send![super(this, class!(NSClipView)), constrainBoundsRect: proposed] }
+        }
+
+        extern "C" fn scroll_to_point(this: &Object, _cmd: Sel, mut point: NSPoint) {
+            point.x = 0.0;
+            point.y = sanitize_coordinate(point.y);
+            unsafe {
+                let _: () = msg_send![super(this, class!(NSClipView)), scrollToPoint: point];
+            }
+        }
+
+        decl.add_method(
+            sel!(constrainBoundsRect:),
+            constrain_bounds_rect as extern "C" fn(&Object, Sel, NSRect) -> NSRect,
+        );
+        decl.add_method(
+            sel!(scrollToPoint:),
+            scroll_to_point as extern "C" fn(&Object, Sel, NSPoint),
+        );
+        decl.register();
+    }
+}
+
+pub unsafe fn install_constrained_clip_view(scroll: id, initial_bounds: NSRect) {
+    register_constrained_clip_view_class();
+    let clip_class = class!(MKConstrainedClipView);
+    let clip_view: id = msg_send![clip_class, alloc];
+    let clip_view: id = msg_send![clip_view, initWithFrame: initial_bounds];
+    let _: () = msg_send![clip_view, setDrawsBackground: NO];
+    let _: () = msg_send![clip_view, setCopiesOnScroll: NO];
+    let _: () = msg_send![clip_view, setPostsBoundsChangedNotifications: YES];
+    let _: () = msg_send![scroll, setContentView: clip_view];
+}
 
 const COLLAPSED_RESULT_AREA_HEIGHT: f64 = 0.0;
 const OPEN_RESULT_AREA_HEIGHT: f64 = 360.0;
@@ -190,45 +259,64 @@ pub fn update_preview_layout(preview_visible: bool) {
         let bounds: NSRect = msg_send![parent, bounds];
         let table_height =
             (bounds.size.height - style::TABLE_TOP_OFFSET - style::TABLE_FOOTER_HEIGHT).max(0.0);
-        let preview_spacing = 12.0;
-        let right_margin = 12.0;
-        let origin = NSPoint::new(0.0, style::TABLE_FOOTER_HEIGHT);
+        let horizontal_margin = style::CONTENT_SIDE_INSET + style::LIST_EXTRA_MARGIN;
+        let available_width = (bounds.size.width - horizontal_margin * 2.0).max(style::LIST_MIN_WIDTH);
         let list_width = if preview_visible {
-            (bounds.size.width * 0.52).max(280.0)
+            (available_width * style::LIST_WIDTH_RATIO).max(style::LIST_MIN_WIDTH)
         } else {
-            (bounds.size.width - right_margin).max(280.0)
+            available_width
         };
-        let scroll_frame = NSRect::new(origin, NSSize::new(list_width, table_height));
+        let preview_width = if preview_visible {
+            (available_width - list_width - style::PREVIEW_GAP).max(style::PREVIEW_MIN_WIDTH)
+        } else {
+            0.0
+        };
+        let list_origin = NSPoint::new(horizontal_margin, style::TABLE_FOOTER_HEIGHT);
+        let scroll_frame = NSRect::new(list_origin, NSSize::new(list_width, table_height));
         let _: () = msg_send![scroll, setFrame: scroll_frame];
+        let _: () = msg_send![scroll, tile];
+        let clip_view: id = msg_send![scroll, contentView];
+        if clip_view != nil {
+            let clip_frame =
+                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(list_width, table_height));
+            let _: () = msg_send![clip_view, setFrame: clip_frame];
+            let current_bounds: NSRect = msg_send![clip_view, bounds];
+            let new_bounds = NSRect::new(
+                NSPoint::new(0.0, sanitize_coordinate(current_bounds.origin.y)),
+                clip_frame.size,
+            );
+            let _: () = msg_send![clip_view, setBounds: new_bounds];
+        }
         let table_view: id = msg_send![scroll, documentView];
         if table_view != nil {
-            let _: () = msg_send![table_view, setFrame:NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(list_width, table_height))];
+            let clip_width = list_width;
+            let doc_frame =
+                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(clip_width, table_height));
+            let _: () = msg_send![table_view, setFrame: doc_frame];
             let columns: id = msg_send![table_view, tableColumns];
             let col_count: usize = msg_send![columns, count];
             if col_count > 0 {
                 let column: id = msg_send![columns, objectAtIndex:0];
-                let _: () = msg_send![column, setWidth:list_width];
+                let _: () = msg_send![column, setWidth:clip_width];
             }
         }
         if let Some(refs) = CLIPBOARD_PREVIEW.get() {
             let preview: id = refs.root as id;
-            if preview == nil {
-                return;
-            }
-            if preview_visible {
-                let preview_origin_x = list_width + preview_spacing;
-                let preview_width =
-                    (bounds.size.width - preview_origin_x - right_margin).max(240.0);
-                let preview_frame = NSRect::new(
-                    NSPoint::new(preview_origin_x, style::TABLE_FOOTER_HEIGHT),
-                    NSSize::new(preview_width, table_height),
-                );
-                let _: () = msg_send![preview, setHidden: NO];
-                let _: () = msg_send![preview, setFrame: preview_frame];
-            } else {
-                let _: () = msg_send![preview, setHidden: YES];
+            if preview != nil {
+                if preview_visible {
+                    let preview_origin_x = horizontal_margin + list_width + style::PREVIEW_GAP;
+                    let preview_frame = NSRect::new(
+                        NSPoint::new(preview_origin_x, style::TABLE_FOOTER_HEIGHT),
+                        NSSize::new(preview_width, table_height),
+                    );
+                    let _: () = msg_send![preview, setHidden: NO];
+                    let _: () = msg_send![preview, setFrame: preview_frame];
+                } else {
+                    let _: () = msg_send![preview, setHidden: YES];
+                }
             }
         }
+        refresh_clipboard_preview_layout();
     }
 }
 

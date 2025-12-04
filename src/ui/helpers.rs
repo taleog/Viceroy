@@ -3,49 +3,67 @@ use dispatch::Queue;
 /// Shared UI style constants for consistent layout.
 pub mod style {
     /// Fixed NSTableView row height.
-    pub const ROW_HEIGHT: f64 = 54.0;
+    pub const ROW_HEIGHT: f64 = 78.0;
     /// Horizontal inset applied to row content within the table.
-    pub const ROW_HORIZONTAL_INSET: f64 = 12.0;
+    pub const ROW_HORIZONTAL_INSET: f64 = 18.0;
     /// Padding above and below each row's card to create breathing room.
-    pub const ROW_VERTICAL_PADDING: f64 = 4.0;
+    pub const ROW_VERTICAL_PADDING: f64 = 6.0;
     /// Visual spacing between rows (equals the combined vertical padding).
     pub const ROW_STACK_SPACING: f64 = ROW_VERTICAL_PADDING * 2.0;
     /// Interior padding before the icon within the row card.
-    pub const ROW_INTERNAL_PADDING: f64 = 12.0;
+    pub const ROW_INTERNAL_PADDING: f64 = 18.0;
     /// Gap between the icon and the text column.
-    pub const ROW_ICON_TEXT_PADDING: f64 = 10.0;
+    pub const ROW_ICON_TEXT_PADDING: f64 = 14.0;
     /// Width reserved for the trailing type label.
-    pub const ROW_TYPE_LABEL_WIDTH: f64 = 72.0;
+    pub const ROW_TYPE_LABEL_WIDTH: f64 = 96.0;
     /// Trailing padding after the type label.
-    pub const ROW_TRAILING_PADDING: f64 = 12.0;
+    pub const ROW_TRAILING_PADDING: f64 = 16.0;
     /// Default icon size inside a row card.
-    pub const ROW_ICON_SIZE: f64 = 38.0;
+    pub const ROW_ICON_SIZE: f64 = 44.0;
     /// Row title text field height.
-    pub const ROW_TITLE_HEIGHT: f64 = 20.0;
+    pub const ROW_TITLE_HEIGHT: f64 = 24.0;
     /// Row subtitle text field height.
-    pub const ROW_SUBTITLE_HEIGHT: f64 = 16.0;
+    pub const ROW_SUBTITLE_HEIGHT: f64 = 18.0;
     /// Spacing between title and subtitle text.
-    pub const ROW_TEXT_SPACING: f64 = 3.0;
+    pub const ROW_TEXT_SPACING: f64 = 4.0;
     /// Top inset for content to align text/icon closer to the top of the row card.
-    pub const ROW_CONTENT_TOP_INSET: f64 = 5.0;
+    pub const ROW_CONTENT_TOP_INSET: f64 = 2.0;
     /// Corner radius for row cards.
-    pub const ROW_CORNER_RADIUS: f64 = 12.0;
+    pub const ROW_CORNER_RADIUS: f64 = 14.0;
     /// Border width for row cards.
     pub const ROW_BORDER_WIDTH: f64 = 1.0;
     /// Selection background opacity applied to the accent color.
-    pub const ROW_SELECTION_BG_ALPHA: f64 = 0.22;
+    pub const ROW_SELECTION_BG_ALPHA: f64 = 0.28;
     /// Selection border opacity applied to the accent color.
-    pub const ROW_SELECTION_BORDER_ALPHA: f64 = 0.4;
+    pub const ROW_SELECTION_BORDER_ALPHA: f64 = 0.55;
     /// Corner radius for the clipboard preview panel.
-    pub const PREVIEW_CORNER_RADIUS: f64 = 18.0;
+    pub const PREVIEW_CORNER_RADIUS: f64 = 20.0;
+    /// Horizontal inset for primary content (search bar, table, preview).
+    pub const CONTENT_SIDE_INSET: f64 = 24.0;
+    /// Extra margin inside the list container to avoid clipping shadows.
+    pub const LIST_EXTRA_MARGIN: f64 = 12.0;
+    /// Minimum width allotted to the list when both list and preview are visible.
+    pub const LIST_MIN_WIDTH: f64 = 360.0;
+    /// Minimum width allotted to the preview panel.
+    pub const PREVIEW_MIN_WIDTH: f64 = 280.0;
+    /// Ratio used to split available width between list and preview.
+    pub const LIST_WIDTH_RATIO: f64 = 0.56;
+    /// Gap between list and preview.
+    pub const PREVIEW_GAP: f64 = 16.0;
+    /// Padding inside the clipboard preview card.
+    pub const PREVIEW_CONTENT_INSET: f64 = 20.0;
     /// Height of the search bar container.
-    pub const SEARCH_BAR_HEIGHT: f64 = 60.0;
+    pub const SEARCH_BAR_HEIGHT: f64 = 68.0;
     /// Top spacing between the window frame and the search bar.
-    pub const SEARCH_BAR_TOP_MARGIN: f64 = 20.0;
+    pub const SEARCH_BAR_TOP_MARGIN: f64 = 22.0;
+    /// Gap between the search bar and the top of the results/preview split.
+    pub const SEARCH_RESULTS_GAP: f64 = 14.0;
     /// Vertical offset between the top search bar and table start.
     pub const TABLE_TOP_OFFSET: f64 = SEARCH_BAR_HEIGHT + SEARCH_BAR_TOP_MARGIN;
+    /// Vertical offset where the results/preview layout begins.
+    pub const RESULTS_TOP_OFFSET: f64 = TABLE_TOP_OFFSET + SEARCH_RESULTS_GAP;
     /// Footer height beneath the table.
-    pub const TABLE_FOOTER_HEIGHT: f64 = 22.0;
+    pub const TABLE_FOOTER_HEIGHT: f64 = 30.0;
 }
 
 /// Run work on the main thread. AppKit calls must be dispatched here.

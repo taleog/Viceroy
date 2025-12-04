@@ -11,12 +11,15 @@ use crate::ui::table::{reload_table, schedule_table_update_next_tick};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{Local, LocalResult, TimeZone, Utc};
-use cocoa::base::{id, nil, NO, YES};
-use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
+use cocoa::base::{id, nil, NO, YES, BOOL};
+use cocoa::foundation::{NSPoint, NSRange, NSRect, NSSize, NSString};
+use objc::declare::ClassDecl;
+use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use std::fmt::Write;
 
 const MAX_PREVIEW_CHARS: usize = 5000;
+const PREVIEW_HEADER_HEIGHT: f64 = 86.0;
 
 pub fn format_clipboard_relative_time(timestamp: i64, now: i64) -> String {
     let delta = (now - timestamp).max(0);
@@ -259,10 +262,12 @@ fn set_placeholder_for_mode(mode: TableMode) {
             let placeholder = id_from(refs.placeholder_field);
             let text_scroll = id_from(refs.text_scroll);
             let image_view = id_from(refs.image_view);
+            let text_background = id_from(refs.text_background);
             set_hidden(title, true);
             set_hidden(detail, true);
             set_hidden(text_scroll, true);
             set_hidden(image_view, true);
+            set_hidden(text_background, true);
             set_hidden(placeholder, false);
             set_string(placeholder, placeholder_text_for_mode(mode));
         }
@@ -278,17 +283,20 @@ fn show_text_preview(title: &str, subtitle: &str, body: &str) {
             let text_scroll = id_from(refs.text_scroll);
             let text_view = id_from(refs.text_view);
             let image_view = id_from(refs.image_view);
+            let text_background = id_from(refs.text_background);
 
             set_hidden(placeholder, true);
             set_hidden(image_view, true);
             set_hidden(text_scroll, false);
             set_hidden(title_field, false);
             set_hidden(detail_field, false);
+            set_hidden(text_background, false);
 
             set_string(title_field, title);
             set_string(detail_field, subtitle);
             let ns_body = NSString::alloc(nil).init_str(body);
             let _: () = msg_send![text_view, setString: ns_body];
+            reset_text_scroll_position(text_scroll, text_view);
         }
     }
 }
@@ -296,20 +304,24 @@ fn show_text_preview(title: &str, subtitle: &str, body: &str) {
 fn show_image_preview(title: &str, subtitle: &str, image: id) {
     if let Some(refs) = preview_refs() {
         unsafe {
+            let preview_root = id_from(refs.root);
             let title_field = id_from(refs.title_field);
             let detail_field = id_from(refs.detail_field);
             let placeholder = id_from(refs.placeholder_field);
             let text_scroll = id_from(refs.text_scroll);
             let image_view = id_from(refs.image_view);
+            let text_background = id_from(refs.text_background);
 
             set_hidden(placeholder, true);
             set_hidden(text_scroll, true);
             set_hidden(image_view, false);
             set_hidden(title_field, false);
             set_hidden(detail_field, false);
+            set_hidden(text_background, true);
 
             set_string(title_field, title);
             set_string(detail_field, subtitle);
+            layout_image_preview(preview_root, image_view, image);
             let _: () = msg_send![image_view, setImage: image];
         }
     }
@@ -352,21 +364,178 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
     set_placeholder_for_mode(mode);
 }
 
+fn reset_text_scroll_position(text_scroll: id, text_view: id) {
+    unsafe {
+        let start = NSRange::new(0, 0);
+        let _: () = msg_send![text_view, setSelectedRange: start];
+        let _: () = msg_send![text_view, scrollRangeToVisible: start];
+        let clip_view: id = msg_send![text_scroll, contentView];
+        if clip_view == nil {
+            return;
+        }
+        let doc_bounds: NSRect = msg_send![text_view, bounds];
+        let clip_bounds: NSRect = msg_send![clip_view, bounds];
+        let is_flipped: BOOL = msg_send![text_view, isFlipped];
+        let target_y = if is_flipped == YES {
+            0.0
+        } else {
+            (doc_bounds.size.height - clip_bounds.size.height).max(0.0)
+        };
+        let _: () = msg_send![clip_view, scrollToPoint: NSPoint::new(0.0, target_y)];
+        let _: () = msg_send![text_scroll, reflectScrolledClipView: clip_view];
+    }
+}
+
+fn preview_content_frame(bounds: NSRect) -> NSRect {
+    let content_inset = style::PREVIEW_CONTENT_INSET;
+    let width = (bounds.size.width - content_inset * 2.0).max(120.0);
+    let height = (bounds.size.height - PREVIEW_HEADER_HEIGHT - content_inset).max(140.0);
+    NSRect::new(
+        NSPoint::new(content_inset, content_inset),
+        NSSize::new(width, height),
+    )
+}
+
+unsafe fn apply_preview_subview_layout(bounds: NSRect, refs: &ClipboardPreviewRefs) {
+    let text_area_frame = preview_content_frame(bounds);
+    let title_field = id_from(refs.title_field);
+    let detail_field = id_from(refs.detail_field);
+    let placeholder = id_from(refs.placeholder_field);
+    let text_scroll = id_from(refs.text_scroll);
+    let text_view = id_from(refs.text_view);
+    let image_view = id_from(refs.image_view);
+    let text_background = id_from(refs.text_background);
+
+    let text_width = text_area_frame.size.width.max(40.0);
+    let text_size = NSSize::new((text_width - 20.0).max(40.0), text_area_frame.size.height);
+    let placeholder_height = 80.0;
+    let content_inset = style::PREVIEW_CONTENT_INSET;
+    let label_width = (bounds.size.width - content_inset * 2.0).max(40.0);
+    let title_height = 26.0;
+    let detail_height = 20.0;
+    let title_origin_y = bounds.size.height - content_inset - title_height;
+    let detail_origin_y = (title_origin_y - detail_height - 4.0).max(content_inset);
+    let placeholder_origin_y =
+        text_area_frame.origin.y + (text_area_frame.size.height - placeholder_height) / 2.0;
+
+    let title_frame = NSRect::new(
+        NSPoint::new(content_inset, title_origin_y),
+        NSSize::new(label_width, title_height),
+    );
+    let detail_frame = NSRect::new(
+        NSPoint::new(content_inset, detail_origin_y),
+        NSSize::new(label_width, detail_height),
+    );
+    let placeholder_frame = NSRect::new(
+        NSPoint::new(text_area_frame.origin.x, placeholder_origin_y),
+        NSSize::new(text_area_frame.size.width, placeholder_height),
+    );
+
+    let _: () = msg_send![text_background, setFrame: text_area_frame];
+    let _: () = msg_send![text_scroll, setFrame: text_area_frame];
+    let _: () = msg_send![text_view, setFrame:NSRect::new(NSPoint::new(0.0, 0.0), text_size)];
+    let _: () = msg_send![image_view, setFrame: text_area_frame];
+    let _: () = msg_send![placeholder, setFrame: placeholder_frame];
+    let _: () = msg_send![title_field, setFrame: title_frame];
+    let _: () = msg_send![detail_field, setFrame: detail_frame];
+}
+
+pub fn refresh_clipboard_preview_layout() {
+    if let Some(refs) = preview_refs() {
+        unsafe {
+            let preview = id_from(refs.root);
+            if preview == nil {
+                return;
+            }
+            let bounds: NSRect = msg_send![preview, bounds];
+            apply_preview_subview_layout(bounds, &refs);
+        }
+    }
+}
+
+fn layout_image_preview(preview: id, image_view: id, image: id) {
+    unsafe {
+        let bounds: NSRect = msg_send![preview, bounds];
+        let area_frame = preview_content_frame(bounds);
+        let area_width = area_frame.size.width.max(60.0);
+        let area_height = area_frame.size.height.max(60.0);
+
+        let raw_size: NSSize = msg_send![image, size];
+        let mut draw_width = area_width;
+        let mut draw_height = area_height;
+        if raw_size.width > 0.0 && raw_size.height > 0.0 {
+            let scale =
+                f64::min(area_width / raw_size.width, area_height / raw_size.height).max(0.01);
+            draw_width = (raw_size.width * scale).min(area_width);
+            draw_height = (raw_size.height * scale).min(area_height);
+        }
+
+        let origin_x = area_frame.origin.x + (area_width - draw_width) / 2.0;
+        let origin_y = area_frame.origin.y + (area_height - draw_height) / 2.0;
+        let frame = NSRect::new(
+            NSPoint::new(origin_x, origin_y),
+            NSSize::new(draw_width, draw_height),
+        );
+        let _: () = msg_send![image_view, setFrame: frame];
+    }
+}
+
+fn register_preview_text_view_class() {
+    unsafe {
+        if objc::runtime::Class::get("MKPreviewTextView").is_some() {
+            return;
+        }
+        let superclass = class!(NSTextView);
+        let mut decl = ClassDecl::new("MKPreviewTextView", superclass).unwrap();
+
+        extern "C" fn is_flipped(_this: &Object, _cmd: Sel) -> BOOL {
+            YES
+        }
+
+        decl.add_method(
+            sel!(isFlipped),
+            is_flipped as extern "C" fn(&Object, Sel) -> BOOL,
+        );
+        decl.register();
+    }
+}
+
 pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let preview: id = msg_send![class!(NSView), alloc];
     let preview: id = msg_send![preview, initWithFrame: frame];
     let _: () = msg_send![preview, setWantsLayer: YES];
     let layer: id = msg_send![preview, layer];
-    let bg_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.1f64 alpha:0.75f64];
+    let bg_color: id = msg_send![class!(NSColor), clearColor];
     let bg_color_cg: id = msg_send![bg_color, CGColor];
     let _: () = msg_send![layer, setBackgroundColor: bg_color_cg];
     let _: () = msg_send![layer, setCornerRadius: style::PREVIEW_CORNER_RADIUS];
     let _: () = msg_send![layer, setBorderWidth: 0.0f64];
     let _: () = msg_send![preview, setAutoresizingMask: 16]; // height only
+    let content_inset = style::PREVIEW_CONTENT_INSET;
+    let text_area_height = (frame.size.height - content_inset - PREVIEW_HEADER_HEIGHT).max(140.0);
+    let text_area_frame = NSRect::new(
+        NSPoint::new(content_inset, content_inset),
+        NSSize::new(frame.size.width - content_inset * 2.0, text_area_height),
+    );
+    let text_bg: id = msg_send![class!(NSVisualEffectView), alloc];
+    let text_bg: id = msg_send![text_bg, initWithFrame: text_area_frame];
+    let _: () = msg_send![text_bg, setMaterial: 12];
+    let _: () = msg_send![text_bg, setBlendingMode: 0];
+    let _: () = msg_send![text_bg, setState: 1];
+    let _: () = msg_send![text_bg, setWantsLayer: YES];
+    let text_bg_layer: id = msg_send![text_bg, layer];
+    let _: () = msg_send![text_bg_layer, setCornerRadius: 18.0f64];
+    let _: () = msg_send![text_bg_layer, setBorderWidth: 1.0f64];
+    let text_border: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+    let text_border_cg: id = msg_send![text_border, CGColor];
+    let _: () = msg_send![text_bg_layer, setBorderColor: text_border_cg];
+    let _: () = msg_send![text_bg_layer, setMasksToBounds: YES];
+    let _: () = msg_send![text_bg, setHidden: YES];
 
     // Title label
     let title_field: id = msg_send![class!(NSTextField), alloc];
-    let title_field: id = msg_send![title_field, initWithFrame: NSRect::new(NSPoint::new(16.0, frame.size.height - 42.0), NSSize::new(frame.size.width - 32.0, 24.0))];
+    let title_field: id = msg_send![title_field, initWithFrame: NSRect::new(NSPoint::new(content_inset, frame.size.height - content_inset - 26.0), NSSize::new(frame.size.width - content_inset * 2.0, 26.0))];
     let _: () = msg_send![title_field, setBezeled: NO];
     let _: () = msg_send![title_field, setEditable: NO];
     let _: () = msg_send![title_field, setDrawsBackground: NO];
@@ -381,7 +550,7 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
 
     // Detail label
     let detail_field: id = msg_send![class!(NSTextField), alloc];
-    let detail_field: id = msg_send![detail_field, initWithFrame: NSRect::new(NSPoint::new(16.0, frame.size.height - 64.0), NSSize::new(frame.size.width - 32.0, 18.0))];
+    let detail_field: id = msg_send![detail_field, initWithFrame: NSRect::new(NSPoint::new(content_inset, frame.size.height - content_inset - 50.0), NSSize::new(frame.size.width - content_inset * 2.0, 20.0))];
     let _: () = msg_send![detail_field, setBezeled: NO];
     let _: () = msg_send![detail_field, setEditable: NO];
     let _: () = msg_send![detail_field, setDrawsBackground: NO];
@@ -396,13 +565,15 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
 
     // Text scroll + view
     let text_scroll: id = msg_send![class!(NSScrollView), alloc];
-    let text_scroll: id = msg_send![text_scroll, initWithFrame: NSRect::new(NSPoint::new(12.0, 12.0), NSSize::new(frame.size.width - 24.0, frame.size.height - 84.0))];
+    let text_scroll: id = msg_send![text_scroll, initWithFrame: text_area_frame];
     let _: () = msg_send![text_scroll, setBorderType: 0];
     let _: () = msg_send![text_scroll, setHasVerticalScroller: YES];
     let _: () = msg_send![text_scroll, setDrawsBackground: NO];
     let _: () = msg_send![text_scroll, setAutoresizingMask: 18];
-    let text_view: id = msg_send![class!(NSTextView), alloc];
-    let text_view: id = msg_send![text_view, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(frame.size.width - 40.0, frame.size.height - 84.0))];
+    register_preview_text_view_class();
+    let text_class = class!(MKPreviewTextView);
+    let text_view: id = msg_send![text_class, alloc];
+    let text_view: id = msg_send![text_view, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(text_area_frame.size.width - 20.0, text_area_frame.size.height))];
     let _: () = msg_send![text_view, setEditable: NO];
     let _: () = msg_send![text_view, setSelectable: YES];
     let _: () = msg_send![text_view, setDrawsBackground: NO];
@@ -410,25 +581,27 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let _: () = msg_send![text_view, setFont: text_font];
     let text_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.9f64];
     let _: () = msg_send![text_view, setTextColor: text_color];
+    let _: () = msg_send![text_view, setTextContainerInset:NSSize::new(8.0, 10.0)];
     let _: () = msg_send![text_scroll, setDocumentView: text_view];
     let _: () = msg_send![text_scroll, setHidden: YES];
+    let _: () = msg_send![preview, addSubview: text_bg];
     let _: () = msg_send![preview, addSubview: text_scroll];
 
     // Image view
     let image_view: id = msg_send![class!(NSImageView), alloc];
-    let image_view: id = msg_send![image_view, initWithFrame: NSRect::new(NSPoint::new(24.0, 24.0), NSSize::new(frame.size.width - 48.0, frame.size.height - 112.0))];
+    let image_view: id = msg_send![image_view, initWithFrame: text_area_frame];
     let _: () = msg_send![image_view, setWantsLayer: YES];
-    let _: () = msg_send![image_view, setAutoresizingMask: 18];
+    let _: () = msg_send![image_view, setAutoresizingMask: 0];
     let image_layer: id = msg_send![image_view, layer];
-    let _: () = msg_send![image_layer, setCornerRadius: 12.0f64];
+    let _: () = msg_send![image_layer, setCornerRadius: 16.0f64];
     let _: () = msg_send![image_layer, setMasksToBounds: YES];
-    let _: () = msg_send![image_view, setImageScaling: 2]; // scale proportionally
+    let _: () = msg_send![image_view, setImageScaling: 1]; // proportionally fit
     let _: () = msg_send![image_view, setHidden: YES];
     let _: () = msg_send![preview, addSubview: image_view];
 
     // Placeholder
     let placeholder: id = msg_send![class!(NSTextField), alloc];
-    let placeholder: id = msg_send![placeholder, initWithFrame: NSRect::new(NSPoint::new(24.0, frame.size.height / 2.0 - 30.0), NSSize::new(frame.size.width - 48.0, 60.0))];
+    let placeholder: id = msg_send![placeholder, initWithFrame: NSRect::new(NSPoint::new(text_area_frame.origin.x, text_area_frame.origin.y + text_area_frame.size.height / 2.0 - 40.0), NSSize::new(text_area_frame.size.width, 80.0))];
     let _: () = msg_send![placeholder, setBezeled: NO];
     let _: () = msg_send![placeholder, setEditable: NO];
     let _: () = msg_send![placeholder, setDrawsBackground: NO];
@@ -452,8 +625,10 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
         text_scroll: text_scroll as usize,
         text_view: text_view as usize,
         image_view: image_view as usize,
+        text_background: text_bg as usize,
     });
     update_clipboard_preview_selection(None);
+    refresh_clipboard_preview_layout();
 }
 
 pub fn placeholder_clipboard_icon() -> id {

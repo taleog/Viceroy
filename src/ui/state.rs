@@ -23,6 +23,7 @@ lazy_static! {
 
 pub static CLIPBOARD_PREVIEW: OnceLock<ClipboardPreviewRefs> = OnceLock::new();
 pub static TABLE_SCROLL_VIEW: OnceLock<usize> = OnceLock::new();
+pub static SEARCH_FIELD: OnceLock<usize> = OnceLock::new();
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum TableMode {
@@ -40,4 +41,5 @@ pub struct ClipboardPreviewRefs {
     pub text_scroll: usize,
     pub text_view: usize,
     pub image_view: usize,
+    pub text_background: usize,
 }
