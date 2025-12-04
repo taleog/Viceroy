@@ -113,4 +113,4 @@ The repository includes a `Makefile` with commonly used commands. Run `make help
 - `make test` — Run the full test suite
 - `make release` — Build `target/release/viceroy`
 - `make mock-server` — Serve release binary + metadata locally for update testing
-- `make mock-e2e` — Build, launch mock server, run integration test, cleanup
+- `make mock-e2e` — Build, launch mock server, run integration test
