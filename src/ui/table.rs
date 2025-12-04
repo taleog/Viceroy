@@ -270,7 +270,8 @@ pub fn update_preview_layout(preview_visible: bool) {
         let table_height =
             (bounds.size.height - style::TABLE_TOP_OFFSET - style::TABLE_FOOTER_HEIGHT).max(0.0);
         let horizontal_margin = style::CONTENT_SIDE_INSET + style::LIST_EXTRA_MARGIN;
-        let available_width = (bounds.size.width - horizontal_margin * 2.0).max(style::LIST_MIN_WIDTH);
+        let available_width =
+            (bounds.size.width - horizontal_margin * 2.0).max(style::LIST_MIN_WIDTH);
         let list_width = if preview_visible {
             (available_width * style::LIST_WIDTH_RATIO).max(style::LIST_MIN_WIDTH)
         } else {
@@ -287,8 +288,10 @@ pub fn update_preview_layout(preview_visible: bool) {
         let _: () = msg_send![scroll, tile];
         let clip_view: id = msg_send![scroll, contentView];
         if clip_view != nil {
-            let clip_frame =
-                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(list_width, table_height));
+            let clip_frame = NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(list_width, table_height),
+            );
             let _: () = msg_send![clip_view, setFrame: clip_frame];
             let current_bounds: NSRect = msg_send![clip_view, bounds];
             let new_bounds = NSRect::new(
@@ -300,8 +303,15 @@ pub fn update_preview_layout(preview_visible: bool) {
         let table_view: id = msg_send![scroll, documentView];
         let column_width = (list_width - style::LIST_SCROLL_GUTTER).max(200.0);
         if table_view != nil {
-            let doc_frame =
-                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(column_width, table_height));
+            // Make document height reflect total rows so vertical scrolling works.
+            let num_rows: isize = msg_send![table_view, numberOfRows];
+            // Include inter-row spacing so the last rows remain reachable.
+            let row_stride = style::ROW_HEIGHT + style::ROW_STACK_SPACING;
+            let content_height = ((num_rows as f64) * row_stride).max(table_height);
+            let doc_frame = NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(column_width, content_height),
+            );
             let _: () = msg_send![table_view, setFrame: doc_frame];
             let columns: id = msg_send![table_view, tableColumns];
             let col_count: usize = msg_send![columns, count];

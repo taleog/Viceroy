@@ -286,7 +286,7 @@ async fn run_search(
     };
 
     // Execute all searches in parallel
-    let (mut app_results, mut file_results, mut clip_results, mut cmd_results, mut calc_results) = tokio::join!(
+    let (app_results, file_results, clip_results, cmd_results, calc_results) = tokio::join!(
         app_future,
         file_future,
         clipboard_future,
@@ -308,6 +308,13 @@ async fn run_search(
         query.starts_with("http://") || query.starts_with("https://") || query.contains("://");
     let is_short_query = query.len() <= 3;
 
+    let query_context = QueryContext {
+        is_file_query,
+        is_url,
+        is_short_query,
+        length: query.len(),
+    };
+
     // Cap results per category to ensure diversity
     let max_per_category = if mode == SearchMode::All {
         if is_short_query {
@@ -323,14 +330,7 @@ async fn run_search(
         (50, 50, 50) // no limits in specific modes
     };
 
-    app_results.truncate(max_per_category.0);
-    file_results.truncate(max_per_category.1);
-    clip_results.truncate(max_per_category.2);
-
-    // Combine results, de-duplicating .app bundles that already exist as apps
-    let mut results = Vec::new();
-
-    // Index app bundle paths for quick lookup
+    // De-duplicate .app bundles that already exist as apps
     use std::collections::HashSet;
     let app_paths: HashSet<String> = app_results
         .iter()
@@ -343,10 +343,8 @@ async fn run_search(
         })
         .collect();
 
-    // Keep all app results first
-    results.append(&mut app_results);
-
     // Filter file results: drop .app bundles that correspond to an App result
+    let mut file_results = file_results;
     let mut filtered_files = Vec::new();
     for f in file_results.into_iter() {
         if let SearchResult::File { ref path, .. } = f {
@@ -357,27 +355,36 @@ async fn run_search(
         }
         filtered_files.push(f);
     }
-    results.append(&mut filtered_files);
-    results.append(&mut clip_results);
-    results.append(&mut cmd_results);
-    results.append(&mut calc_results);
+    file_results = filtered_files;
+
+    // Score once per result to keep ranking stable and lightweight
+    let mut scored_apps = score_and_sort(app_results, query, &matcher, &query_context);
+    let mut scored_files = score_and_sort(file_results, query, &matcher, &query_context);
+    let mut scored_clips = score_and_sort(clip_results, query, &matcher, &query_context);
+    let mut scored_cmds = score_and_sort(cmd_results, query, &matcher, &query_context);
+    let mut scored_calcs = score_and_sort(calc_results, query, &matcher, &query_context);
+
+    truncate_scored(&mut scored_apps, max_per_category.0);
+    truncate_scored(&mut scored_files, max_per_category.1);
+    truncate_scored(&mut scored_clips, max_per_category.2);
+
+    // Combine scored results
+    let mut results: Vec<(i64, SearchResult)> = Vec::new();
+    results.append(&mut scored_apps);
+    results.append(&mut scored_files);
+    results.append(&mut scored_clips);
+    results.append(&mut scored_cmds);
+    results.append(&mut scored_calcs);
 
     // Smart ranking based on query context and match quality
-    let query_context = QueryContext {
-        is_file_query,
-        is_url,
-        is_short_query,
-        length: query.len(),
-    };
-
-    results.sort_by(|a, b| {
-        let score_a = get_smart_score(a, query, &matcher, &query_context);
-        let score_b = get_smart_score(b, query, &matcher, &query_context);
-        score_b.cmp(&score_a)
-    });
+    results.sort_by(|a, b| b.0.cmp(&a.0));
 
     // Return top 50 results
-    Ok(results.into_iter().take(50).collect())
+    Ok(results
+        .into_iter()
+        .take(50)
+        .map(|(_, result)| result)
+        .collect())
 }
 
 struct QueryContext {
@@ -385,6 +392,30 @@ struct QueryContext {
     is_url: bool,
     is_short_query: bool,
     length: usize,
+}
+
+fn score_and_sort(
+    results: Vec<SearchResult>,
+    query: &str,
+    matcher: &SkimMatcherV2,
+    context: &QueryContext,
+) -> Vec<(i64, SearchResult)> {
+    let mut scored: Vec<(i64, SearchResult)> = results
+        .into_iter()
+        .map(|result| {
+            let score = get_smart_score(&result, query, matcher, context);
+            (score, result)
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored
+}
+
+fn truncate_scored(results: &mut Vec<(i64, SearchResult)>, limit: usize) {
+    if results.len() > limit {
+        results.truncate(limit);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -657,6 +688,7 @@ fn get_smart_score(
             score,
             is_pinned,
             custom_name,
+            timestamp,
             ..
         } => {
             let content_lower = content.to_lowercase();
@@ -702,6 +734,20 @@ fn get_smart_score(
                 );
                 boost += name_boost;
             }
+
+            // Recency boost so the freshest snippets surface first
+            let now = chrono::Utc::now().timestamp();
+            let age_seconds = now.saturating_sub(*timestamp).max(0);
+            if age_seconds <= 120 {
+                boost += 18000;
+            } else if age_seconds <= 3600 {
+                boost += 12000;
+            } else if age_seconds <= 86_400 {
+                boost += 7000;
+            } else if age_seconds <= 3 * 86_400 {
+                boost += 3500;
+            }
+
             boost - 15000 // Clipboard lower priority unless very relevant
         }
         SearchResult::Command { name, score, .. } => {

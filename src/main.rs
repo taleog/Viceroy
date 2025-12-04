@@ -662,8 +662,14 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     let search_field: id = msg_send![class!(MKEscapeTextField), alloc];
     // Height 32px centered vertically.
     let input_frame = NSRect::new(
-        NSPoint::new(18.0 + badge_size + 16.0, (style::SEARCH_BAR_HEIGHT - 32.0) / 2.0),
-        NSSize::new(container_frame.size.width - (18.0 + badge_size + 16.0) - 190.0, 32.0),
+        NSPoint::new(
+            18.0 + badge_size + 16.0,
+            (style::SEARCH_BAR_HEIGHT - 32.0) / 2.0,
+        ),
+        NSSize::new(
+            container_frame.size.width - (18.0 + badge_size + 16.0) - 190.0,
+            32.0,
+        ),
     );
     let search_field: id = msg_send![search_field, initWithFrame: input_frame];
 
@@ -731,8 +737,7 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     let _: () = msg_send![chip_text, setLineBreakMode: 4];
     let chip_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
     let _: () = msg_send![chip_text, setTextColor: chip_color];
-    let chip_value =
-        NSString::alloc(nil).init_str("Tab = clipboard · / = web search · Esc = hide");
+    let chip_value = NSString::alloc(nil).init_str("Tab = clipboard · / = web search · Esc = hide");
     let _: () = msg_send![chip_text, setStringValue: chip_value];
     let _: () = msg_send![chip_container, addSubview: chip_text];
 
@@ -759,10 +764,9 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     // Layout constants for list + preview split
     let table_height =
         (bounds.size.height - style::RESULTS_TOP_OFFSET - style::TABLE_FOOTER_HEIGHT).max(0.0);
-    let available_width = (bounds.size.width
-        - style::CONTENT_SIDE_INSET * 2.0
-        - style::LIST_EXTRA_MARGIN * 2.0)
-        .max(style::LIST_MIN_WIDTH);
+    let available_width =
+        (bounds.size.width - style::CONTENT_SIDE_INSET * 2.0 - style::LIST_EXTRA_MARGIN * 2.0)
+            .max(style::LIST_MIN_WIDTH);
     let split_list_width = (available_width * style::LIST_WIDTH_RATIO).max(style::LIST_MIN_WIDTH);
     let preview_width =
         (available_width - split_list_width - style::PREVIEW_GAP).max(style::PREVIEW_MIN_WIDTH);
@@ -776,7 +780,13 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
         NSSize::new(split_list_width, table_height),
     );
     let scroll: id = msg_send![scroll, initWithFrame: frame];
-    table::install_constrained_clip_view(scroll, NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(frame.size.width, table_height)));
+    table::install_constrained_clip_view(
+        scroll,
+        NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(frame.size.width, table_height),
+        ),
+    );
     let _: () = msg_send![scroll, setBorderType: 0];
     let _: () = msg_send![scroll, setDrawsBackground: NO];
     let _: () = msg_send![scroll, setWantsLayer: YES];
@@ -908,7 +918,8 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     let _: () = msg_send![center_label, setFont: center_font];
     let center_text = NSString::alloc(nil).init_str("⌘⌫ Clear query    •    ⌘, Settings");
     let _: () = msg_send![center_label, setStringValue: center_text];
-    let center_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
+    let center_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
     let _: () = msg_send![center_label, setTextColor: center_color];
     let _: () = msg_send![footer, addSubview: center_label];
 

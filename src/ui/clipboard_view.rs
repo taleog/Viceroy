@@ -11,7 +11,7 @@ use crate::ui::table::{reload_table, schedule_table_update_next_tick};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{Local, LocalResult, TimeZone, Utc};
-use cocoa::base::{id, nil, NO, YES, BOOL};
+use cocoa::base::{id, nil, BOOL, NO, YES};
 use cocoa::foundation::{NSPoint, NSRange, NSRect, NSSize, NSString};
 use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
@@ -526,8 +526,7 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let text_bg_layer: id = msg_send![text_bg, layer];
     let _: () = msg_send![text_bg_layer, setCornerRadius: 18.0f64];
     let _: () = msg_send![text_bg_layer, setBorderWidth: 1.0f64];
-    let text_border: id =
-        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+    let text_border: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
     let text_border_cg: id = msg_send![text_border, CGColor];
     let _: () = msg_send![text_bg_layer, setBorderColor: text_border_cg];
     let _: () = msg_send![text_bg_layer, setMasksToBounds: YES];

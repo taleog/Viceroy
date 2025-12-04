@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
+use tokio::task;
 use tokio::time::{sleep, Duration};
 
 lazy_static! {
@@ -195,6 +196,13 @@ pub async fn get_history(limit: usize) -> Result<Vec<ClipboardEntry>> {
 }
 
 pub async fn search_history(query: &str) -> Result<Vec<ClipboardEntry>> {
+    let query = query.to_string();
+    task::spawn_blocking(move || search_history_blocking(&query))
+        .await
+        .map_err(|e| anyhow!("clipboard search task failed: {e}"))?
+}
+
+fn search_history_blocking(query: &str) -> Result<Vec<ClipboardEntry>> {
     let conn = database::get_connection()?;
     let search_pattern = format!("%{}%", query);
 

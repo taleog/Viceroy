@@ -205,8 +205,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![behavior_heading, setEditable: NO];
     let _: () = msg_send![behavior_heading, setDrawsBackground: NO];
     let _: () = msg_send![behavior_heading, setBordered: NO];
-    let _: () =
-        msg_send![behavior_heading, setFont: general_font];
+    let _: () = msg_send![behavior_heading, setFont: general_font];
     let _: () = msg_send![behavior_heading, setTextColor: heading_color];
     let _: () = msg_send![behavior_heading, setStringValue: NSString::alloc(nil).init_str("Results & behavior")];
 
@@ -256,8 +255,10 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![behavior_card, addSubview: esc_toggle];
     let _: () = msg_send![behavior_card, addSubview: click_toggle];
 
-    let save_button_frame =
-        NSRect::new(NSPoint::new(bounds.size.width - card_margin - 160.0, card_margin + 12.0), NSSize::new(150.0, 32.0));
+    let save_button_frame = NSRect::new(
+        NSPoint::new(bounds.size.width - card_margin - 160.0, card_margin + 12.0),
+        NSSize::new(150.0, 32.0),
+    );
     let save_button: id = msg_send![class!(NSButton), alloc];
     let save_button: id = msg_send![save_button, initWithFrame: save_button_frame];
     let _: () = msg_send![save_button, setBezelStyle: 4];
