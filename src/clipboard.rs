@@ -183,7 +183,7 @@ fn should_skip_duplicate_text(
         let normalized_prev = normalize_text(&prev_content);
         let _same_app = prev_app == *app_name;
         let close_in_time = timestamp.saturating_sub(prev_ts) <= 120; // 2-minute window
-        // Check both same-app and app-agnostic duplicates
+                                                                      // Check both same-app and app-agnostic duplicates
         if normalized_prev == normalized_new && close_in_time {
             return Ok(true);
         }
@@ -323,22 +323,22 @@ pub async fn paste_to_active_app(content: &str) -> Result<()> {
     let _guard = ClipboardMonitorPauseGuard::new();
     // Store the frontmost app BEFORE modifying clipboard
     let previous_app = app_launcher::get_frontmost_app_name();
-    
+
     // Copy to clipboard
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(content)?;
     if let Ok(mut guard) = LAST_PROGRAMMATIC_TEXT.lock() {
         *guard = Some((normalize_text(content), Utc::now().timestamp()));
     }
-    
+
     // Delay to ensure clipboard is updated
     sleep(Duration::from_millis(100)).await;
-    
+
     // Explicitly activate the previous app to ensure focus is correct before paste
     if let Some(app_name) = previous_app {
         activate_app(&app_name)?;
     }
-    
+
     // Longer pause to ensure focus is returned and app is ready
     sleep(Duration::from_millis(200)).await;
     send_paste_keystroke()?;
@@ -367,7 +367,7 @@ async fn paste_image_to_active_app(content: &str) -> Result<()> {
     let _guard = ClipboardMonitorPauseGuard::new();
     // Store the frontmost app BEFORE modifying clipboard
     let previous_app = app_launcher::get_frontmost_app_name();
-    
+
     let image = decode_history_image(content)?;
     let mut clipboard = Clipboard::new()?;
     let hash = blake3::hash(&image.bytes);
@@ -375,15 +375,15 @@ async fn paste_image_to_active_app(content: &str) -> Result<()> {
     if let Ok(mut guard) = LAST_PROGRAMMATIC_IMAGE.lock() {
         guard.replace((hash, Utc::now().timestamp()));
     }
-    
+
     // Delay to ensure clipboard is updated
     sleep(Duration::from_millis(100)).await;
-    
+
     // Explicitly activate the previous app
     if let Some(app_name) = previous_app {
         activate_app(&app_name)?;
     }
-    
+
     // Longer pause to ensure focus is returned
     sleep(Duration::from_millis(200)).await;
     send_paste_keystroke()?;
@@ -438,5 +438,153 @@ fn send_paste_keystroke() -> Result<()> {
         Ok(())
     } else {
         Err(anyhow!("paste keystroke command failed"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Test normalize_text function
+    #[test]
+    fn test_normalize_text_trims_whitespace() {
+        assert_eq!(normalize_text("  hello  "), "hello");
+        assert_eq!(normalize_text("\nhello\n"), "hello");
+        assert_eq!(normalize_text("\t\nhello\t\n"), "hello");
+    }
+
+    #[test]
+    fn test_normalize_text_collapses_multiple_spaces() {
+        assert_eq!(normalize_text("hello   world"), "hello world");
+        assert_eq!(normalize_text("hello\t\tworld"), "hello world");
+        assert_eq!(normalize_text("hello\n\nworld"), "hello world");
+        assert_eq!(normalize_text("hello  \t  \n  world"), "hello world");
+    }
+
+    #[test]
+    fn test_normalize_text_handles_empty_string() {
+        assert_eq!(normalize_text(""), "");
+        assert_eq!(normalize_text("   "), "");
+    }
+
+    #[test]
+    fn test_normalize_text_preserves_single_spaces() {
+        assert_eq!(normalize_text("hello world"), "hello world");
+        assert_eq!(normalize_text("one two three"), "one two three");
+    }
+
+    // Test should_skip_app function
+    #[test]
+    fn test_should_skip_app_detects_password_managers() {
+        // Test known password managers
+        assert!(should_skip_app(&Some("Keychain Access".to_string())));
+        assert!(should_skip_app(&Some("1Password".to_string())));
+        assert!(should_skip_app(&Some("Bitwarden".to_string())));
+        assert!(should_skip_app(&Some("LastPass".to_string())));
+        assert!(should_skip_app(&Some("Dashlane".to_string())));
+        assert!(should_skip_app(&Some("KeePassXC".to_string())));
+        assert!(should_skip_app(&Some("Enpass".to_string())));
+    }
+
+    #[test]
+    fn test_should_skip_app_allows_regular_apps() {
+        assert!(!should_skip_app(&Some("Safari".to_string())));
+        assert!(!should_skip_app(&Some("Chrome".to_string())));
+        assert!(!should_skip_app(&Some("VSCode".to_string())));
+        assert!(!should_skip_app(&Some("Terminal".to_string())));
+        assert!(!should_skip_app(&Some("Finder".to_string())));
+    }
+
+    #[test]
+    fn test_should_skip_app_handles_none() {
+        assert!(!should_skip_app(&None));
+    }
+
+    #[test]
+    fn test_should_skip_app_partial_matches() {
+        // Password manager names as part of longer strings should still match
+        assert!(should_skip_app(&Some("1Password 7".to_string())));
+        assert!(should_skip_app(&Some("Bitwarden Desktop".to_string())));
+        assert!(should_skip_app(&Some("KeePassXC Browser".to_string())));
+    }
+
+    // Test ClipboardEntry struct
+    #[test]
+    fn test_clipboard_entry_default_values() {
+        let entry = ClipboardEntry {
+            id: 1,
+            content: "test".to_string(),
+            content_type: "text".to_string(),
+            app_name: None,
+            timestamp: 1234567890,
+            custom_name: None,
+            is_favorite: false,
+            is_pinned: false,
+            image_width: None,
+            image_height: None,
+        };
+        assert_eq!(entry.id, 1);
+        assert_eq!(entry.content, "test");
+        assert_eq!(entry.content_type, "text");
+        assert!(entry.app_name.is_none());
+        assert!(!entry.is_favorite);
+        assert!(!entry.is_pinned);
+    }
+
+    #[test]
+    fn test_clipboard_entry_image_type() {
+        let entry = ClipboardEntry {
+            id: 2,
+            content: "base64data".to_string(),
+            content_type: "image".to_string(),
+            app_name: Some("Preview".to_string()),
+            timestamp: 1234567890,
+            custom_name: Some("My Screenshot".to_string()),
+            is_favorite: true,
+            is_pinned: true,
+            image_width: Some(1920),
+            image_height: Some(1080),
+        };
+        assert_eq!(entry.content_type, "image");
+        assert_eq!(entry.app_name.as_deref(), Some("Preview"));
+        assert_eq!(entry.custom_name.as_deref(), Some("My Screenshot"));
+        assert!(entry.is_favorite);
+        assert!(entry.is_pinned);
+        assert_eq!(entry.image_width, Some(1920));
+        assert_eq!(entry.image_height, Some(1080));
+    }
+
+    #[test]
+    fn test_clipboard_entry_serialization() {
+        let entry = ClipboardEntry {
+            id: 1,
+            content: "hello".to_string(),
+            content_type: "text".to_string(),
+            app_name: Some("Safari".to_string()),
+            timestamp: 1234567890,
+            custom_name: None,
+            is_favorite: false,
+            is_pinned: false,
+            image_width: None,
+            image_height: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: ClipboardEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry.id, deserialized.id);
+        assert_eq!(entry.content, deserialized.content);
+        assert_eq!(entry.content_type, deserialized.content_type);
+        assert_eq!(entry.app_name, deserialized.app_name);
+    }
+
+    // Test PASSWORD_MANAGERS constant
+    #[test]
+    fn test_password_managers_list_contains_expected_apps() {
+        assert!(PASSWORD_MANAGERS.contains(&"Keychain Access"));
+        assert!(PASSWORD_MANAGERS.contains(&"1Password"));
+        assert!(PASSWORD_MANAGERS.contains(&"Bitwarden"));
+        assert!(PASSWORD_MANAGERS.contains(&"LastPass"));
+        assert!(PASSWORD_MANAGERS.contains(&"Dashlane"));
+        assert!(PASSWORD_MANAGERS.contains(&"KeePassXC"));
+        assert!(PASSWORD_MANAGERS.contains(&"Enpass"));
     }
 }
