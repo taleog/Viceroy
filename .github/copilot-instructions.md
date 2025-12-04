@@ -4,6 +4,31 @@ These instructions make AI agents immediately productive in this codebase. Focus
 
 This project is a clone of the existing macOS app Monarch (https://monarchapp.com/) named Viceroy. It is written in Rust using native macOS Cocoa bindings for maximum performance and lightweight footprint (<20MB).
 
+## Quick Start Commands
+```bash
+# Build the project
+cargo build
+
+# Run in development mode
+cargo run
+
+# Format code
+make fmt
+# or: cargo fmt
+
+# Lint code (fails on warnings)
+make lint
+# or: cargo clippy --all-targets --all-features -- -D warnings
+
+# Run tests
+make test
+# or: cargo test
+
+# Build release binary
+make release
+# or: cargo build --release
+```
+
 ## Architecture Overview
 - **Runtime**: Pure Rust + Cocoa (via `cacao`, `cocoa`, `objc` crates). No webviews, no Tauri, no HTML/JS.
 - **Entry Point**: `src/main.rs` initializes `NSApplication`, sets up the `AppDelegate`, and constructs the programmatic UI.
@@ -69,3 +94,23 @@ This project is a clone of the existing macOS app Monarch (https://monarchapp.co
 - Keep `src/main.rs` focused on UI and event handling. Move logic to modules.
 - Preserve the "Viceroy" aesthetic: dark mode, translucency, rounded corners.
 - Do not introduce web-based UI crates.
+
+## Testing
+- Tests are located in the `tests/` directory and use standard Rust test infrastructure.
+- The updater integration test (`tests/updater_integration.rs`) is ignored by default as it requires a mock server.
+- To run the updater integration test with a mock server:
+  ```bash
+  make mock-e2e
+  ```
+- When adding new features, add tests in the appropriate module or in the `tests/` directory.
+- Run `make test` or `cargo test` to verify your changes don't break existing functionality.
+
+## Makefile Targets
+The repository includes a `Makefile` with commonly used commands. Run `make help` to see all available targets:
+- `make run RUN_ARGS='--arg'` — Run Viceroy with optional CLI args
+- `make fmt` — Format Rust sources
+- `make lint` — Run cargo clippy with `-D warnings`
+- `make test` — Run the full test suite
+- `make release` — Build `target/release/viceroy`
+- `make mock-server` — Serve release binary + metadata locally for update testing
+- `make mock-e2e` — Build, launch mock server, run integration test, cleanup
