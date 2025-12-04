@@ -4,7 +4,8 @@ set -e
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="Viceroy"
 BUNDLE_ID="com.viceroy.app"
-VERSION="1.0.0"
+# Extract version from Cargo.toml
+VERSION=$(grep '^version = ' "$PROJECT_ROOT/Cargo.toml" | head -1 | sed 's/version = "\(.*\)"/\1/')
 
 echo "🔨 Building release binary..."
 cargo build --release

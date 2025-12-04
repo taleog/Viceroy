@@ -1,9 +1,12 @@
 [package]
 name = "viceroy"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2021"
 authors = ["Viceroy Team"]
 description = "Lightweight macOS productivity launcher"
+repository = "https://github.com/taleog/Viceroy"
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 # Native Cocoa UI
