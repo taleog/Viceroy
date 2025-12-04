@@ -790,7 +790,7 @@ unsafe fn create_results_table(content_view: id, bounds: NSRect) {
     let _: () = msg_send![scroll, setHasHorizontalScroller: NO];
     let _: () = msg_send![scroll, setAutohidesScrollers: YES];
     let _: () = msg_send![scroll, setScrollerStyle:1];
-    let _: () = msg_send![scroll, setHorizontalScrollElasticity:1];
+    let _: () = msg_send![scroll, setHorizontalScrollElasticity:0];
     let _: () = msg_send![scroll, setAutoresizingMask: 16]; // height only
     let _ = TABLE_SCROLL_VIEW.set(scroll as usize);
 

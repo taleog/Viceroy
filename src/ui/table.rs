@@ -15,6 +15,7 @@ use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 
 use crate::app_launcher;
 use crate::ui::clipboard_view::{
@@ -37,6 +38,15 @@ fn sanitize_dimension(value: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+fn layout_debug_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("VICEROY_LAYOUT_DEBUG")
+            .map(|v| v != "0")
+            .unwrap_or(false)
+    })
 }
 
 fn register_constrained_clip_view_class() {
@@ -91,7 +101,7 @@ pub unsafe fn install_constrained_clip_view(scroll: id, initial_bounds: NSRect) 
 }
 
 const COLLAPSED_RESULT_AREA_HEIGHT: f64 = 0.0;
-const OPEN_RESULT_AREA_HEIGHT: f64 = 360.0;
+const OPEN_RESULT_AREA_HEIGHT: f64 = 420.0;
 const WINDOW_HEIGHT_OPEN: f64 =
     style::TABLE_TOP_OFFSET + style::TABLE_FOOTER_HEIGHT + OPEN_RESULT_AREA_HEIGHT;
 const WINDOW_HEIGHT_COLLAPSED: f64 =
@@ -288,16 +298,16 @@ pub fn update_preview_layout(preview_visible: bool) {
             let _: () = msg_send![clip_view, setBounds: new_bounds];
         }
         let table_view: id = msg_send![scroll, documentView];
+        let column_width = (list_width - style::LIST_SCROLL_GUTTER).max(200.0);
         if table_view != nil {
-            let clip_width = list_width;
             let doc_frame =
-                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(clip_width, table_height));
+                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(column_width, table_height));
             let _: () = msg_send![table_view, setFrame: doc_frame];
             let columns: id = msg_send![table_view, tableColumns];
             let col_count: usize = msg_send![columns, count];
             if col_count > 0 {
                 let column: id = msg_send![columns, objectAtIndex:0];
-                let _: () = msg_send![column, setWidth:clip_width];
+                let _: () = msg_send![column, setWidth:column_width];
             }
         }
         if let Some(refs) = CLIPBOARD_PREVIEW.get() {
@@ -317,6 +327,28 @@ pub fn update_preview_layout(preview_visible: bool) {
             }
         }
         refresh_clipboard_preview_layout();
+        if layout_debug_enabled() {
+            let clip_bounds: NSRect = if clip_view != nil {
+                msg_send![clip_view, bounds]
+            } else {
+                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0))
+            };
+            println!(
+                "[layout] update_preview preview_visible={} list_width={:.1} preview_width={:.1} scroll_frame=origin=({:.1},{:.1}) size=({:.1}×{:.1}) clip_bounds=origin=({:.1},{:.1}) size=({:.1}×{:.1}) column_width={:.1}",
+                preview_visible,
+                list_width,
+                preview_width,
+                scroll_frame.origin.x,
+                scroll_frame.origin.y,
+                scroll_frame.size.width,
+                scroll_frame.size.height,
+                clip_bounds.origin.x,
+                clip_bounds.origin.y,
+                clip_bounds.size.width,
+                clip_bounds.size.height,
+                column_width
+            );
+        }
     }
 }
 
@@ -415,6 +447,7 @@ pub unsafe fn register_table_delegate_class() {
             }
             let (raw_title, raw_subtitle) = &entries[row as usize];
             let frame: NSRect = msg_send![table, frame];
+            let row_width = frame.size.width.max(40.0);
             let identifier = NSString::alloc(nil).init_str("MKRowView");
             let mut container: id = msg_send![table, makeViewWithIdentifier:identifier owner:nil];
 
@@ -567,7 +600,6 @@ pub unsafe fn register_table_delegate_class() {
                 }
             }
 
-            let row_width = frame.size.width;
             let inset = style::ROW_HORIZONTAL_INSET;
             let container_height = style::ROW_HEIGHT - style::ROW_STACK_SPACING;
             let container_frame = NSRect::new(

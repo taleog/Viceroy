@@ -50,6 +50,8 @@ pub mod style {
     pub const LIST_WIDTH_RATIO: f64 = 0.56;
     /// Gap between list and preview.
     pub const PREVIEW_GAP: f64 = 16.0;
+    /// Extra gutter reserved inside the list for scrollbars and breathing room.
+    pub const LIST_SCROLL_GUTTER: f64 = 32.0;
     /// Padding inside the clipboard preview card.
     pub const PREVIEW_CONTENT_INSET: f64 = 20.0;
     /// Height of the search bar container.
