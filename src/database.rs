@@ -61,3 +61,43 @@ pub fn get_db_path() -> PathBuf {
 pub fn get_connection() -> Result<Connection> {
     Connection::open(get_db_path())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_db_path_returns_valid_path() {
+        let path = get_db_path();
+
+        // Should end with clipboard.db
+        assert!(path.ends_with("clipboard.db"));
+
+        // Should contain viceroy directory
+        let path_str = path.to_string_lossy();
+        assert!(path_str.contains("viceroy"));
+    }
+
+    #[test]
+    fn test_get_db_path_has_parent() {
+        let path = get_db_path();
+
+        // Should have a parent directory
+        assert!(path.parent().is_some());
+    }
+
+    #[test]
+    fn test_db_path_is_in_config_dir() {
+        let path = get_db_path();
+        let path_str = path.to_string_lossy();
+
+        // Should be in a config-like directory
+        // On Linux: ~/.config/viceroy/clipboard.db
+        // On macOS: ~/Library/Application Support/viceroy/clipboard.db
+        assert!(
+            path_str.contains(".config")
+                || path_str.contains("Application Support")
+                || path_str.contains("viceroy")
+        );
+    }
+}

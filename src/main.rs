@@ -505,7 +505,7 @@ unsafe fn register_escape_textfield_class() {
                     } else {
                         false
                     };
-                    
+
                     // Dispatch UI updates to avoid deadlocks
                     if should_show_clipboard {
                         show_clipboard_history_view();

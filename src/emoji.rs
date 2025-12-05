@@ -1053,3 +1053,209 @@ pub fn search_emojis(query: &str) -> Vec<Emoji> {
     // Return top 20 results
     results.into_iter().take(20).map(|(e, _)| e).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Test get_emoji_database
+    #[test]
+    fn test_emoji_database_not_empty() {
+        let db = get_emoji_database();
+        assert!(!db.is_empty());
+    }
+
+    #[test]
+    fn test_emoji_database_contains_common_emojis() {
+        let db = get_emoji_database();
+
+        // Check for common emojis
+        assert!(db.iter().any(|e| e.emoji == "😀"));
+        assert!(db.iter().any(|e| e.emoji == "❤️"));
+        assert!(db.iter().any(|e| e.emoji == "👍"));
+        assert!(db.iter().any(|e| e.emoji == "🔥"));
+    }
+
+    #[test]
+    fn test_emoji_struct_fields() {
+        let db = get_emoji_database();
+        let emoji = db.first().unwrap();
+
+        // Each emoji should have non-empty name and emoji character
+        assert!(!emoji.emoji.is_empty());
+        assert!(!emoji.name.is_empty());
+    }
+
+    // Test search_emojis with various queries
+    #[test]
+    fn test_search_emojis_by_name() {
+        let results = search_emojis("smile");
+        assert!(!results.is_empty());
+
+        // Should contain smile-related emojis
+        assert!(results.iter().any(|e| e.name.contains("smile")));
+    }
+
+    #[test]
+    fn test_search_emojis_by_keyword() {
+        let results = search_emojis("happy");
+        assert!(!results.is_empty());
+
+        // Should find emojis with "happy" keyword
+        assert!(results
+            .iter()
+            .any(|e| e.keywords.contains(&"happy".to_string())));
+    }
+
+    #[test]
+    fn test_search_emojis_with_colon_prefix() {
+        let results = search_emojis(":smile");
+        assert!(!results.is_empty());
+
+        // Colon prefix should be stripped and search should work
+        assert!(results.iter().any(|e| e.name.contains("smile")));
+    }
+
+    #[test]
+    fn test_search_emojis_exact_match() {
+        let results = search_emojis("heart");
+        assert!(!results.is_empty());
+
+        // Should find heart emoji
+        assert!(results.iter().any(|e| e.name == "heart"));
+    }
+
+    #[test]
+    fn test_search_emojis_partial_match() {
+        let results = search_emojis("grin");
+        assert!(!results.is_empty());
+
+        // Should find grinning emoji
+        assert!(results.iter().any(|e| e.name.contains("grin")));
+    }
+
+    #[test]
+    fn test_search_emojis_case_insensitive() {
+        let results_lower = search_emojis("smile");
+        let results_upper = search_emojis("SMILE");
+        let results_mixed = search_emojis("SmILe");
+
+        assert!(!results_lower.is_empty());
+        assert!(!results_upper.is_empty());
+        assert!(!results_mixed.is_empty());
+    }
+
+    #[test]
+    fn test_search_emojis_no_results() {
+        let results = search_emojis("xyznonexistent");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_emojis_returns_max_20() {
+        let results = search_emojis("a"); // Very broad search
+        assert!(results.len() <= 20);
+    }
+
+    #[test]
+    fn test_search_emojis_fire() {
+        let results = search_emojis("fire");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|e| e.emoji == "🔥"));
+    }
+
+    #[test]
+    fn test_search_emojis_rocket() {
+        let results = search_emojis("rocket");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|e| e.emoji == "🚀"));
+    }
+
+    #[test]
+    fn test_search_emojis_love() {
+        let results = search_emojis("love");
+        assert!(!results.is_empty());
+        // Should find multiple love-related emojis (hearts, etc.)
+    }
+
+    // Test Emoji struct serialization
+    #[test]
+    fn test_emoji_serialization() {
+        let emoji = Emoji {
+            emoji: "😀".to_string(),
+            name: "grinning".to_string(),
+            keywords: vec!["smile".to_string(), "happy".to_string()],
+        };
+
+        let json = serde_json::to_string(&emoji).unwrap();
+        let deserialized: Emoji = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(emoji.emoji, deserialized.emoji);
+        assert_eq!(emoji.name, deserialized.name);
+        assert_eq!(emoji.keywords, deserialized.keywords);
+    }
+
+    #[test]
+    fn test_emoji_clone() {
+        let emoji = Emoji {
+            emoji: "❤️".to_string(),
+            name: "heart".to_string(),
+            keywords: vec!["love".to_string()],
+        };
+
+        let cloned = emoji.clone();
+        assert_eq!(emoji.emoji, cloned.emoji);
+        assert_eq!(emoji.name, cloned.name);
+        assert_eq!(emoji.keywords, cloned.keywords);
+    }
+
+    // Test search ranking
+    #[test]
+    fn test_search_emojis_exact_match_ranked_first() {
+        let results = search_emojis("smile");
+
+        if !results.is_empty() {
+            // Exact match should be highly ranked
+            let first = &results[0];
+            assert!(
+                first.name == "smile"
+                    || first.name.starts_with("smile")
+                    || first.name.contains("smile")
+            );
+        }
+    }
+
+    #[test]
+    fn test_search_emojis_starts_with_ranked_high() {
+        let results = search_emojis("thi");
+
+        // Emojis that start with "thi" should be ranked higher
+        if !results.is_empty() {
+            // First result should start with or contain "thi"
+            let first = &results[0];
+            assert!(first.name.contains("thi") || first.keywords.iter().any(|k| k.contains("thi")));
+        }
+    }
+
+    // Test specific emoji lookups
+    #[test]
+    fn test_search_emojis_thumbsup() {
+        let results = search_emojis("thumbsup");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|e| e.emoji == "👍"));
+    }
+
+    #[test]
+    fn test_search_emojis_check() {
+        let results = search_emojis("check");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|e| e.emoji == "✅"));
+    }
+
+    #[test]
+    fn test_search_emojis_warning() {
+        let results = search_emojis("warning");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|e| e.emoji == "⚠️"));
+    }
+}

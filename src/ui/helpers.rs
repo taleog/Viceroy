@@ -193,16 +193,18 @@ pub unsafe fn slide_and_spring_show(view: id, duration: f64, slide_distance: f64
 
     // Create a group animation with scale and position
     let group: id = msg_send![class!(CAAnimationGroup), animation];
-    
+
     // Position animation (slide from below)
-    let pos_anim: id = msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("position.y")];
+    let pos_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("position.y")];
     let pos_from: id = msg_send![class!(NSNumber), numberWithDouble: -slide_distance];
     let pos_to: id = msg_send![class!(NSNumber), numberWithDouble: 0.0];
     let _: () = msg_send![pos_anim, setFromValue: pos_from];
     let _: () = msg_send![pos_anim, setToValue: pos_to];
-    
+
     // Scale animation (spring bounce)
-    let scale_anim: id = msg_send![class!(CASpringAnimation), animationWithKeyPath: nsstring("transform.scale")];
+    let scale_anim: id =
+        msg_send![class!(CASpringAnimation), animationWithKeyPath: nsstring("transform.scale")];
     let _: () = msg_send![scale_anim, setFromValue: nsnumber(0.96f64)];
     let _: () = msg_send![scale_anim, setToValue: nsnumber(1.0f64)];
     let _: () = msg_send![scale_anim, setDamping: 14.0f64];
@@ -211,16 +213,19 @@ pub unsafe fn slide_and_spring_show(view: id, duration: f64, slide_distance: f64
     let _: () = msg_send![scale_anim, setInitialVelocity: 8.0f64];
 
     // Opacity animation (fade in)
-    let opacity_anim: id = msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
+    let opacity_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
     let _: () = msg_send![opacity_anim, setFromValue: nsnumber(0.0f64)];
     let _: () = msg_send![opacity_anim, setToValue: nsnumber(1.0f64)];
-    
-    let anims: id = msg_send![class!(NSArray), arrayWithObjects:&[pos_anim, scale_anim, opacity_anim] count:3];
+
+    let anims: id =
+        msg_send![class!(NSArray), arrayWithObjects:&[pos_anim, scale_anim, opacity_anim] count:3];
     let _: () = msg_send![group, setAnimations: anims];
     let _: () = msg_send![group, setDuration: duration];
-    let timing: id = msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeOut")];
+    let timing: id =
+        msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeOut")];
     let _: () = msg_send![group, setTimingFunction: timing];
-    
+
     let _: () = msg_send![layer, addAnimation: group forKey: nsstring("show-slide-spring")];
 }
 
@@ -241,22 +246,26 @@ pub unsafe fn fade_scale_hide(view: id, duration: f64) {
     }
 
     // Opacity animation (fade out)
-    let opacity_anim: id = msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
+    let opacity_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
     let _: () = msg_send![opacity_anim, setFromValue: nsnumber(1.0f64)];
     let _: () = msg_send![opacity_anim, setToValue: nsnumber(0.0f64)];
-    
+
     // Scale animation (slight scale down)
-    let scale_anim: id = msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("transform.scale")];
+    let scale_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("transform.scale")];
     let _: () = msg_send![scale_anim, setFromValue: nsnumber(1.0f64)];
     let _: () = msg_send![scale_anim, setToValue: nsnumber(0.98f64)];
-    
-    let anims: id = msg_send![class!(NSArray), arrayWithObjects:&[opacity_anim, scale_anim] count:2];
+
+    let anims: id =
+        msg_send![class!(NSArray), arrayWithObjects:&[opacity_anim, scale_anim] count:2];
     let group: id = msg_send![class!(CAAnimationGroup), animation];
     let _: () = msg_send![group, setAnimations: anims];
     let _: () = msg_send![group, setDuration: duration];
-    let timing: id = msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeInEaseOut")];
+    let timing: id =
+        msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeInEaseOut")];
     let _: () = msg_send![group, setTimingFunction: timing];
-    
+
     let _: () = msg_send![layer, addAnimation: group forKey: nsstring("hide-fade-scale")];
 }
 

@@ -95,7 +95,7 @@ async fn run_search(
     include_clipboard: bool,
 ) -> Result<Vec<SearchResult>> {
     let start_time = Instant::now();
-    
+
     if query.is_empty() {
         return Ok(Vec::new());
     }
@@ -893,5 +893,261 @@ mod tests {
         let clip_score = get_smart_score(&clipboard, query, &matcher, &ctx);
         let cmd_score = get_smart_score(&command, query, &matcher, &ctx);
         assert!(clip_score > cmd_score);
+    }
+
+    // Tests for is_calculator_expression
+    #[test]
+    fn test_is_calculator_expression_basic_math() {
+        assert!(is_calculator_expression("2+2"));
+        assert!(is_calculator_expression("10-5"));
+        assert!(is_calculator_expression("3*4"));
+        assert!(is_calculator_expression("20/4"));
+        assert!(is_calculator_expression("2^8"));
+    }
+
+    #[test]
+    fn test_is_calculator_expression_with_parentheses() {
+        assert!(is_calculator_expression("(2+3)*4"));
+        assert!(is_calculator_expression("2*(3+4)"));
+        assert!(is_calculator_expression("((1+2))"));
+    }
+
+    #[test]
+    fn test_is_calculator_expression_negative_numbers() {
+        assert!(is_calculator_expression("-5+3"));
+        assert!(is_calculator_expression("10+-2"));
+    }
+
+    #[test]
+    fn test_is_calculator_expression_rejects_text() {
+        assert!(!is_calculator_expression("hello"));
+        assert!(!is_calculator_expression("Safari"));
+        assert!(!is_calculator_expression("report.pdf"));
+    }
+
+    #[test]
+    fn test_is_calculator_expression_requires_both_number_and_operator() {
+        // Just numbers - no operator
+        assert!(!is_calculator_expression("12345"));
+        // Just operators - no numbers
+        assert!(!is_calculator_expression("+-*/"));
+    }
+
+    #[test]
+    fn test_is_calculator_expression_with_spaces() {
+        assert!(is_calculator_expression("2 + 2"));
+        assert!(is_calculator_expression("10 * 5"));
+    }
+
+    // Tests for QueryContext detection
+    #[test]
+    fn test_query_context_short_query() {
+        let ctx = context_for("ab", false, false, true);
+        assert!(ctx.is_short_query);
+        assert!(!ctx.is_file_query);
+        assert!(!ctx.is_url);
+        assert_eq!(ctx.length, 2);
+    }
+
+    #[test]
+    fn test_query_context_file_query() {
+        let ctx = context_for("report.pdf", true, false, false);
+        assert!(ctx.is_file_query);
+        assert!(!ctx.is_short_query);
+        assert!(!ctx.is_url);
+        assert_eq!(ctx.length, 10);
+    }
+
+    #[test]
+    fn test_query_context_url_query() {
+        let ctx = context_for("https://example.com", false, true, false);
+        assert!(ctx.is_url);
+        assert!(!ctx.is_short_query);
+        assert!(!ctx.is_file_query);
+    }
+
+    // Tests for SearchMode enum
+    #[test]
+    fn test_search_mode_equality() {
+        assert_eq!(SearchMode::All, SearchMode::All);
+        assert_eq!(SearchMode::Apps, SearchMode::Apps);
+        assert_eq!(SearchMode::Files, SearchMode::Files);
+        assert_eq!(SearchMode::Clipboard, SearchMode::Clipboard);
+        assert_eq!(SearchMode::Calculator, SearchMode::Calculator);
+        assert_eq!(SearchMode::Emoji, SearchMode::Emoji);
+    }
+
+    #[test]
+    fn test_search_mode_serialization() {
+        let mode = SearchMode::Apps;
+        let json = serde_json::to_string(&mode).unwrap();
+        let deserialized: SearchMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(mode, deserialized);
+    }
+
+    // Tests for SearchResult enum
+    #[test]
+    fn test_search_result_app_variant() {
+        let result = SearchResult::App {
+            name: "Safari".to_string(),
+            path: "/Applications/Safari.app".to_string(),
+            score: 100,
+            icon: Some("safari.icns".to_string()),
+        };
+        match result {
+            SearchResult::App {
+                name,
+                path,
+                score,
+                icon,
+            } => {
+                assert_eq!(name, "Safari");
+                assert_eq!(path, "/Applications/Safari.app");
+                assert_eq!(score, 100);
+                assert_eq!(icon, Some("safari.icns".to_string()));
+            }
+            _ => panic!("Expected App variant"),
+        }
+    }
+
+    #[test]
+    fn test_search_result_file_variant() {
+        let result = SearchResult::File {
+            name: "document.pdf".to_string(),
+            path: "/Users/test/Documents/document.pdf".to_string(),
+            score: 50,
+        };
+        match result {
+            SearchResult::File { name, path, score } => {
+                assert_eq!(name, "document.pdf");
+                assert!(path.ends_with("document.pdf"));
+                assert_eq!(score, 50);
+            }
+            _ => panic!("Expected File variant"),
+        }
+    }
+
+    #[test]
+    fn test_search_result_calculator_variant() {
+        let result = SearchResult::Calculator {
+            expression: "2+2".to_string(),
+            result: "4".to_string(),
+            formats: vec![
+                "4".to_string(),
+                "0x4".to_string(),
+                "0b100".to_string(),
+                "400%".to_string(),
+            ],
+        };
+        match result {
+            SearchResult::Calculator {
+                expression,
+                result,
+                formats,
+            } => {
+                assert_eq!(expression, "2+2");
+                assert_eq!(result, "4");
+                assert_eq!(formats.len(), 4);
+            }
+            _ => panic!("Expected Calculator variant"),
+        }
+    }
+
+    #[test]
+    fn test_search_result_emoji_variant() {
+        let result = SearchResult::Emoji {
+            emoji: "😀".to_string(),
+            name: "grinning".to_string(),
+            keywords: vec!["smile".to_string(), "happy".to_string()],
+        };
+        match result {
+            SearchResult::Emoji {
+                emoji,
+                name,
+                keywords,
+            } => {
+                assert_eq!(emoji, "😀");
+                assert_eq!(name, "grinning");
+                assert!(keywords.contains(&"smile".to_string()));
+            }
+            _ => panic!("Expected Emoji variant"),
+        }
+    }
+
+    #[test]
+    fn test_search_result_serialization() {
+        let result = SearchResult::App {
+            name: "Safari".to_string(),
+            path: "/Applications/Safari.app".to_string(),
+            score: 100,
+            icon: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("Safari"));
+        assert!(json.contains("App"));
+    }
+
+    // Test exact match scoring
+    #[test]
+    fn test_exact_match_scores_highest() {
+        let matcher = SkimMatcherV2::default();
+        let query = "safari";
+        let ctx = context_for(query, false, false, false);
+
+        let exact_match = SearchResult::App {
+            name: "Safari".to_string(),
+            path: "/Applications/Safari.app".to_string(),
+            score: 10,
+            icon: None,
+        };
+        let partial_match = SearchResult::App {
+            name: "Safari Technology Preview".to_string(),
+            path: "/Applications/Safari Technology Preview.app".to_string(),
+            score: 10,
+            icon: None,
+        };
+
+        let exact_score = get_smart_score(&exact_match, query, &matcher, &ctx);
+        let partial_score = get_smart_score(&partial_match, query, &matcher, &ctx);
+        assert!(exact_score > partial_score);
+    }
+
+    // Test pinned clipboard items
+    #[test]
+    fn test_pinned_clipboard_gets_boost() {
+        let matcher = SkimMatcherV2::default();
+        let query = "test";
+        let ctx = context_for(query, false, false, false);
+
+        let pinned = SearchResult::Clipboard {
+            id: 1,
+            content: "test content".to_string(),
+            preview: "test content".to_string(),
+            content_type: "text".to_string(),
+            app_name: None,
+            timestamp: 0,
+            custom_name: None,
+            is_pinned: true,
+            image_width: None,
+            image_height: None,
+            score: 0,
+        };
+        let not_pinned = SearchResult::Clipboard {
+            id: 2,
+            content: "test content".to_string(),
+            preview: "test content".to_string(),
+            content_type: "text".to_string(),
+            app_name: None,
+            timestamp: 0,
+            custom_name: None,
+            is_pinned: false,
+            image_width: None,
+            image_height: None,
+            score: 0,
+        };
+
+        let pinned_score = get_smart_score(&pinned, query, &matcher, &ctx);
+        let not_pinned_score = get_smart_score(&not_pinned, query, &matcher, &ctx);
+        assert!(pinned_score > not_pinned_score);
     }
 }
