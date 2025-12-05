@@ -1,6 +1,7 @@
 use cocoa::base::{id, nil, YES};
-use cocoa::foundation::NSString;
+use cocoa::foundation::{NSArray, NSNumber, NSString};
 use dispatch::Queue;
+use objc::runtime::Object;
 use objc::{class, msg_send, sel, sel_impl};
 
 /// Shared UI style constants for consistent layout.
@@ -274,7 +275,8 @@ unsafe fn nsstring(s: &str) -> id {
 }
 
 unsafe fn nsnumber(v: f64) -> id {
-    msg_send![class!(NSNumber), numberWithDouble: v]
+    // NSNumber::numberWithDouble expects (id, f64)
+    NSNumber::numberWithDouble(nil, v)
 }
 
 // CATransform3D from QuartzCore (redeclared to avoid extra deps)
