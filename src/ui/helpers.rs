@@ -4,6 +4,8 @@ use dispatch::Queue;
 use objc::runtime::Object;
 use objc::{class, msg_send, sel, sel_impl};
 
+// CI trigger
+
 /// Shared UI style constants for consistent layout.
 pub mod style {
     /// Fixed NSTableView row height.
@@ -255,7 +257,7 @@ pub unsafe fn fade_scale_hide(view: id, duration: f64) {
     // Scale animation (slight scale down)
     let scale_anim: id =
         msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("transform.scale")];
-    let _: () = msg_send![scale_anim, setFromValue: nsnumber(1.0f64)];
+    let _: () = msg_send![scale_anim, setFromValue: nsnumber(1.0)];
     let _: () = msg_send![scale_anim, setToValue: nsnumber(0.98f64)];
 
     let anims: id =
