@@ -2,6 +2,7 @@ use anyhow::Result;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
@@ -37,15 +38,13 @@ pub fn search_files(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
         return Ok(cached);
     }
 
-    // File search disabled by default to avoid privacy permission prompts
-    // Users must explicitly enable with VICEROY_FALLBACK_FS=1 (which enables fallback indexing)
-    // Spotlight is broken on many systems so we don't bother with mdfind either
-    if !fallback_enabled() {
-        return Ok(Vec::new());
-    }
+    // Prefer Spotlight (mdfind) for fast, indexed file results.
+    let mut files = spotlight_search(query, CACHE_STORE_LIMIT).unwrap_or_default();
 
-    // Only fallback walk if explicitly enabled
-    let mut files = fallback_walk(query, CACHE_STORE_LIMIT);
+    // Fall back to a lightweight index walk only when explicitly enabled.
+    if files.is_empty() && fallback_enabled() {
+        files = fallback_walk(query, CACHE_STORE_LIMIT);
+    }
 
     // Nothing found
     if files.is_empty() {
@@ -60,6 +59,36 @@ pub fn search_files(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
     files.truncate(limit);
 
     Ok(files)
+}
+
+fn spotlight_search(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
+    let mut cmd = Command::new("mdfind");
+    cmd.arg("-name").arg(query);
+    if let Some(home) = dirs::home_dir() {
+        cmd.arg("-onlyin").arg(home);
+    }
+    let output = cmd.output()?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut results = Vec::new();
+    for line in stdout.lines() {
+        if results.len() >= limit {
+            break;
+        }
+        let path = line.trim();
+        if path.is_empty() {
+            continue;
+        }
+        if should_skip_path(Path::new(path)) {
+            continue;
+        }
+        if let Some(info) = path_to_info(path) {
+            results.push(info);
+        }
+    }
+    Ok(results)
 }
 
 fn fallback_walk(query: &str, limit: usize) -> Vec<FileInfo> {
