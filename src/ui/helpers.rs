@@ -1,5 +1,5 @@
 use cocoa::base::{id, nil, YES};
-use cocoa::foundation::NSString;
+use cocoa::foundation::{NSPoint, NSRect, NSString};
 use dispatch::Queue;
 use objc::{class, msg_send, sel, sel_impl};
 
@@ -133,6 +133,7 @@ pub unsafe fn bounce_view(view: id, duration: f64) {
     let _: () = msg_send![layer, addAnimation: animation forKey: nsstring("bounce")];
 }
 
+#[allow(dead_code)]
 /// Springier bounce for more visible movement without feeling heavy.
 pub unsafe fn bounce_spring_view(view: id, from_scale: f64, to_scale: f64, duration_cap: f64) {
     if view.is_null() {
@@ -175,6 +176,7 @@ pub unsafe fn bounce_spring_view(view: id, from_scale: f64, to_scale: f64, durat
     let _: () = msg_send![layer, addAnimation: animation forKey: nsstring("spring-bounce")];
 }
 
+#[allow(dead_code)]
 /// Slide + spring show animation: moves up from below with bounce.
 pub unsafe fn slide_and_spring_show(view: id, duration: f64, slide_distance: f64) {
     if view.is_null() {
@@ -193,16 +195,18 @@ pub unsafe fn slide_and_spring_show(view: id, duration: f64, slide_distance: f64
 
     // Create a group animation with scale and position
     let group: id = msg_send![class!(CAAnimationGroup), animation];
-    
+
     // Position animation (slide from below)
-    let pos_anim: id = msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("position.y")];
+    let pos_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("position.y")];
     let pos_from: id = msg_send![class!(NSNumber), numberWithDouble: -slide_distance];
     let pos_to: id = msg_send![class!(NSNumber), numberWithDouble: 0.0];
     let _: () = msg_send![pos_anim, setFromValue: pos_from];
     let _: () = msg_send![pos_anim, setToValue: pos_to];
-    
+
     // Scale animation (spring bounce)
-    let scale_anim: id = msg_send![class!(CASpringAnimation), animationWithKeyPath: nsstring("transform.scale")];
+    let scale_anim: id =
+        msg_send![class!(CASpringAnimation), animationWithKeyPath: nsstring("transform.scale")];
     let _: () = msg_send![scale_anim, setFromValue: nsnumber(0.96f64)];
     let _: () = msg_send![scale_anim, setToValue: nsnumber(1.0f64)];
     let _: () = msg_send![scale_anim, setDamping: 14.0f64];
@@ -211,19 +215,23 @@ pub unsafe fn slide_and_spring_show(view: id, duration: f64, slide_distance: f64
     let _: () = msg_send![scale_anim, setInitialVelocity: 8.0f64];
 
     // Opacity animation (fade in)
-    let opacity_anim: id = msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
+    let opacity_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
     let _: () = msg_send![opacity_anim, setFromValue: nsnumber(0.0f64)];
     let _: () = msg_send![opacity_anim, setToValue: nsnumber(1.0f64)];
-    
-    let anims: id = msg_send![class!(NSArray), arrayWithObjects:&[pos_anim, scale_anim, opacity_anim] count:3];
+
+    let anims: id =
+        msg_send![class!(NSArray), arrayWithObjects:&[pos_anim, scale_anim, opacity_anim] count:3];
     let _: () = msg_send![group, setAnimations: anims];
     let _: () = msg_send![group, setDuration: duration];
-    let timing: id = msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeOut")];
+    let timing: id =
+        msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeOut")];
     let _: () = msg_send![group, setTimingFunction: timing];
-    
+
     let _: () = msg_send![layer, addAnimation: group forKey: nsstring("show-slide-spring")];
 }
 
+#[allow(dead_code)]
 /// Fade + scale hide animation: subtle fade with slight scale down.
 pub unsafe fn fade_scale_hide(view: id, duration: f64) {
     if view.is_null() {
@@ -241,23 +249,139 @@ pub unsafe fn fade_scale_hide(view: id, duration: f64) {
     }
 
     // Opacity animation (fade out)
-    let opacity_anim: id = msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
+    let opacity_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
     let _: () = msg_send![opacity_anim, setFromValue: nsnumber(1.0f64)];
     let _: () = msg_send![opacity_anim, setToValue: nsnumber(0.0f64)];
-    
+
     // Scale animation (slight scale down)
-    let scale_anim: id = msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("transform.scale")];
+    let scale_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("transform.scale")];
     let _: () = msg_send![scale_anim, setFromValue: nsnumber(1.0f64)];
     let _: () = msg_send![scale_anim, setToValue: nsnumber(0.98f64)];
-    
-    let anims: id = msg_send![class!(NSArray), arrayWithObjects:&[opacity_anim, scale_anim] count:2];
+
+    let anims: id =
+        msg_send![class!(NSArray), arrayWithObjects:&[opacity_anim, scale_anim] count:2];
     let group: id = msg_send![class!(CAAnimationGroup), animation];
     let _: () = msg_send![group, setAnimations: anims];
     let _: () = msg_send![group, setDuration: duration];
-    let timing: id = msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeInEaseOut")];
+    let timing: id =
+        msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeInEaseOut")];
     let _: () = msg_send![group, setTimingFunction: timing];
-    
+
     let _: () = msg_send![layer, addAnimation: group forKey: nsstring("hide-fade-scale")];
+}
+
+#[allow(dead_code)]
+/// Slide + fade show animation without scaling to avoid clipping.
+pub unsafe fn slide_fade_show(view: id, duration: f64, slide_distance: f64) {
+    if view.is_null() {
+        return;
+    }
+    let layer: id = msg_send![view, layer];
+    let layer = if layer == nil {
+        let _: () = msg_send![view, setWantsLayer: YES];
+        msg_send![view, layer]
+    } else {
+        layer
+    };
+    if layer == nil {
+        return;
+    }
+
+    let group: id = msg_send![class!(CAAnimationGroup), animation];
+
+    let slide_anim: id = msg_send![
+        class!(CABasicAnimation),
+        animationWithKeyPath: nsstring("transform.translation.y")
+    ];
+    let _: () = msg_send![slide_anim, setFromValue: nsnumber(-slide_distance)];
+    let _: () = msg_send![slide_anim, setToValue: nsnumber(0.0f64)];
+
+    let opacity_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
+    let _: () = msg_send![opacity_anim, setFromValue: nsnumber(0.0f64)];
+    let _: () = msg_send![opacity_anim, setToValue: nsnumber(1.0f64)];
+
+    let anims: id =
+        msg_send![class!(NSArray), arrayWithObjects:&[slide_anim, opacity_anim] count:2];
+    let _: () = msg_send![group, setAnimations: anims];
+    let _: () = msg_send![group, setDuration: duration];
+    let timing: id =
+        msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeOut")];
+    let _: () = msg_send![group, setTimingFunction: timing];
+
+    let _: () = msg_send![layer, addAnimation: group forKey: nsstring("show-slide-fade")];
+}
+
+/// Scale bounce show animation that never exceeds 1.0 to avoid clipping.
+pub unsafe fn scale_bounce_show(view: id, duration: f64, from_scale: f64) {
+    if view.is_null() {
+        return;
+    }
+    let layer: id = msg_send![view, layer];
+    let layer = if layer == nil {
+        let _: () = msg_send![view, setWantsLayer: YES];
+        msg_send![view, layer]
+    } else {
+        layer
+    };
+    if layer == nil {
+        return;
+    }
+
+    center_layer_for_scale(view, layer);
+
+    let group: id = msg_send![class!(CAAnimationGroup), animation];
+
+    let scale_anim: id =
+        msg_send![class!(CAKeyframeAnimation), animationWithKeyPath: nsstring("transform.scale")];
+    let values: id = msg_send![
+        class!(NSArray),
+        arrayWithObjects:&[nsnumber(from_scale), nsnumber(1.0f64)]
+        count:2
+    ];
+    let key_times: id = msg_send![
+        class!(NSArray),
+        arrayWithObjects:&[nsnumber(0.0f64), nsnumber(1.0f64)]
+        count:2
+    ];
+    let _: () = msg_send![scale_anim, setValues: values];
+    let _: () = msg_send![scale_anim, setKeyTimes: key_times];
+    let ease_out: id =
+        msg_send![class!(CAMediaTimingFunction), functionWithName: nsstring("easeOut")];
+    let timing_funcs: id = msg_send![
+        class!(NSArray),
+        arrayWithObjects:&[ease_out]
+        count:1
+    ];
+    let _: () = msg_send![scale_anim, setTimingFunctions: timing_funcs];
+    let _: () = msg_send![scale_anim, setCalculationMode: nsstring("linear")];
+
+    let opacity_anim: id =
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: nsstring("opacity")];
+    let _: () = msg_send![opacity_anim, setFromValue: nsnumber(0.0f64)];
+    let _: () = msg_send![opacity_anim, setToValue: nsnumber(1.0f64)];
+
+    let anims: id =
+        msg_send![class!(NSArray), arrayWithObjects:&[scale_anim, opacity_anim] count:2];
+    let _: () = msg_send![group, setAnimations: anims];
+    let _: () = msg_send![group, setDuration: duration];
+    let _: () = msg_send![group, setTimingFunction: ease_out];
+
+    let _: () = msg_send![layer, addAnimation: group forKey: nsstring("show-scale-bounce")];
+}
+
+unsafe fn center_layer_for_scale(view: id, layer: id) {
+    let bounds: NSRect = msg_send![view, bounds];
+    let centered_bounds = NSRect::new(NSPoint::new(0.0, 0.0), bounds.size);
+    let center = NSPoint::new(bounds.size.width * 0.5, bounds.size.height * 0.5);
+    let _: () = msg_send![class!(CATransaction), begin];
+    let _: () = msg_send![class!(CATransaction), setDisableActions: YES];
+    let _: () = msg_send![layer, setBounds: centered_bounds];
+    let _: () = msg_send![layer, setAnchorPoint: NSPoint::new(0.5, 0.5)];
+    let _: () = msg_send![layer, setPosition: center];
+    let _: () = msg_send![class!(CATransaction), commit];
 }
 
 unsafe fn nsstring(s: &str) -> id {

@@ -32,7 +32,7 @@ use ui::clipboard_view::{
     apply_clipboard_history_state, build_clipboard_history_payload, create_clipboard_preview_view,
     show_clipboard_history_view, update_clipboard_preview_selection,
 };
-use ui::helpers::{bounce_spring_view, fade_in_view, run_on_main, style};
+use ui::helpers::{run_on_main, scale_bounce_show, style};
 use ui::settings_view;
 use ui::state::*;
 use ui::table;
@@ -1574,11 +1574,10 @@ unsafe fn bring_window_to_front_only(window: id) {
 
     let _: () = msg_send![window, makeKeyAndOrderFront: nil];
 
-    // Lightweight fade-in + spring bounce to avoid abrupt pop-in.
+    // Snappy scale pop without exceeding 1.0 to avoid clipping.
     let content: id = msg_send![window, contentView];
     if content != nil {
-        unsafe { fade_in_view(content, 0.12) };
-        unsafe { bounce_spring_view(content, 0.9, 1.0, 0.45) };
+        unsafe { scale_bounce_show(content, 0.18, 0.94) };
     }
 }
 
