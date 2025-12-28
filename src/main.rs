@@ -236,44 +236,20 @@ impl AppDelegate for ViceroyApp {
                                     unsafe {
                                         if should_show {
                                             dispatch::Queue::main().exec_async(move || {
-                                                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                                                let app: id = msg_send![
+                                                    class!(NSApplication),
+                                                    sharedApplication
+                                                ];
                                                 let windows: id = msg_send![app, windows];
                                                 let count: usize = msg_send![windows, count];
 
                                                 if count > 0 {
-                                                    let window: id = msg_send![windows, objectAtIndex: 0];
-                                                    let _: () = msg_send![app, activateIgnoringOtherApps: YES];
-                                                    let _: () = msg_send![window, makeKeyAndOrderFront: nil];
-
-                                                    // Focus and reset search field on each hotkey show
-                                                    if let Some(search_field) = find_search_field() {
-                                                        // Clear previous query text and any existing results
-                                                        let empty: id = NSString::alloc(nil).init_str("");
-                                                        let _: () = msg_send![search_field, setStringValue: empty];
-
-                                                        if let Ok(mut mode) = TABLE_MODE.lock() {
-                                                            *mode = TableMode::Search;
-                                                        }
-                                                        update_clipboard_preview_selection(None);
-                                                        table::update_preview_layout(false);
-
-                                                        if let Ok(mut tr) = TABLE_RESULTS.lock() {
-                                                            tr.clear();
-                                                        }
-                                                        if let Ok(mut td) = TABLE_DATA.lock() {
-                                                            td.clear();
-                                                        }
-                                                        table::schedule_table_update_next_tick();
-
-                                                        // Ensure white insertion point before typing
-                                                        let field_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
-                                                        if field_editor != nil {
-                                                            let white: id = msg_send![class!(NSColor), whiteColor];
-                                                            let _: () = msg_send![field_editor, setInsertionPointColor: white];
-                                                        }
-
-                                                        let _: () = msg_send![window, makeFirstResponder: search_field];
-                                                    }
+                                                    let window: id =
+                                                        msg_send![windows, objectAtIndex: 0];
+                                                    // Reset state before showing to avoid a stale flash.
+                                                    reset_search_state();
+                                                    bring_window_to_front_only(window);
+                                                    focus_search_field(window);
                                                 }
                                             });
                                         } else {
@@ -505,7 +481,7 @@ unsafe fn register_escape_textfield_class() {
                     } else {
                         false
                     };
-                    
+
                     // Dispatch UI updates to avoid deadlocks
                     if should_show_clipboard {
                         show_clipboard_history_view();
@@ -1607,35 +1583,44 @@ unsafe fn bring_window_to_front_only(window: id) {
 }
 
 unsafe fn bring_window_to_front_with_search_reset(window: id) {
+    reset_search_state();
     bring_window_to_front_only(window);
+    focus_search_field(window);
+}
+
+unsafe fn reset_search_state() {
     if let Ok(mut mode) = TABLE_MODE.lock() {
         *mode = TableMode::Search;
     }
     update_clipboard_preview_selection(None);
     table::update_preview_layout(false);
 
+    if let Ok(mut tr) = TABLE_RESULTS.lock() {
+        tr.clear();
+    } else {
+        eprintln!("WARNING: TABLE_RESULTS lock poisoned in menu action");
+    }
+    if let Ok(mut td) = TABLE_DATA.lock() {
+        td.clear();
+    } else {
+        eprintln!("WARNING: TABLE_DATA lock poisoned in menu action");
+    }
     if let Some(search_field) = find_search_field() {
         let empty: id = NSString::alloc(nil).init_str("");
         let _: () = msg_send![search_field, setStringValue: empty];
+    }
+    table::reload_table();
+    table::schedule_table_update_next_tick();
+}
 
-        if let Ok(mut tr) = TABLE_RESULTS.lock() {
-            tr.clear();
-        } else {
-            eprintln!("WARNING: TABLE_RESULTS lock poisoned in menu action");
-        }
-        if let Ok(mut td) = TABLE_DATA.lock() {
-            td.clear();
-        } else {
-            eprintln!("WARNING: TABLE_DATA lock poisoned in menu action");
-        }
-        table::reload_table();
-
+unsafe fn focus_search_field(window: id) {
+    if let Some(search_field) = find_search_field() {
+        // Ensure white insertion point before typing
         let field_editor: id = msg_send![window, fieldEditor:YES forObject:search_field];
         if field_editor != nil {
             let white: id = msg_send![class!(NSColor), whiteColor];
             let _: () = msg_send![field_editor, setInsertionPointColor: white];
         }
-
         let _: () = msg_send![window, makeFirstResponder: search_field];
     }
 }
