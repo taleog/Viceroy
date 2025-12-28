@@ -100,7 +100,7 @@ async fn run_search(
         return Ok(Vec::new());
     }
 
-    let matcher = SkimMatcherV2::default();
+    let matcher = SkimMatcherV2::default().ignore_case();
 
     // Mode-specific filtering or emoji mode
     if mode == SearchMode::Emoji || (query.starts_with(':') && query.len() > 1) {
@@ -161,7 +161,7 @@ async fn run_search(
         let mut results = Vec::new();
         if mode_clone == SearchMode::All || mode_clone == SearchMode::Apps {
             if let Ok(apps) = app_launcher::search_apps(&query_clone) {
-                let matcher = SkimMatcherV2::default();
+                let matcher = SkimMatcherV2::default().ignore_case();
                 for app in apps {
                     if let Some(score) = matcher.fuzzy_match(&app.name, &query_clone) {
                         results.push(SearchResult::App {
@@ -196,7 +196,7 @@ async fn run_search(
                 .await;
 
                 if let Ok(Ok(files)) = files_result {
-                    let matcher = SkimMatcherV2::default();
+                    let matcher = SkimMatcherV2::default().ignore_case();
                     for file in files {
                         if let Some(score) = matcher.fuzzy_match(&file.name, &query_clone) {
                             results.push(SearchResult::File {
@@ -224,7 +224,7 @@ async fn run_search(
                 10
             };
             if let Ok(clipboard_results) = clipboard::search_history(&query_clone).await {
-                let matcher = SkimMatcherV2::default();
+                let matcher = SkimMatcherV2::default().ignore_case();
                 for entry in clipboard_results.iter().take(clip_limit) {
                     let is_image = entry.content_type == "image";
                     let custom_name = entry
@@ -273,7 +273,7 @@ async fn run_search(
         let mut results = Vec::new();
         if mode_clone == SearchMode::All {
             let commands = system_commands::search_commands(&query_clone);
-            let matcher = SkimMatcherV2::default();
+            let matcher = SkimMatcherV2::default().ignore_case();
             for cmd in commands {
                 if let Some(score) = matcher.fuzzy_match(&cmd.name, &query_clone) {
                     results.push(SearchResult::Command {
@@ -843,7 +843,7 @@ mod tests {
 
     #[test]
     fn short_queries_prefer_apps() {
-        let matcher = SkimMatcherV2::default();
+        let matcher = SkimMatcherV2::default().ignore_case();
         let query = "sa";
         let ctx = context_for(query, false, false, true);
         let app = SearchResult::App {
@@ -865,7 +865,7 @@ mod tests {
 
     #[test]
     fn file_queries_prefer_files() {
-        let matcher = SkimMatcherV2::default();
+        let matcher = SkimMatcherV2::default().ignore_case();
         let query = "report.pdf";
         let ctx = context_for(query, true, false, false);
         let app = SearchResult::App {
@@ -887,7 +887,7 @@ mod tests {
 
     #[test]
     fn url_queries_favor_clipboard_entries() {
-        let matcher = SkimMatcherV2::default();
+        let matcher = SkimMatcherV2::default().ignore_case();
         let query = "https://example.com";
         let ctx = context_for(query, false, true, false);
         let clipboard = SearchResult::Clipboard {
