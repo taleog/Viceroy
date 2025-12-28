@@ -367,7 +367,11 @@ pub unsafe fn sync_window_height_with_state() {
     update_preview_layout(preview_visible);
 }
 
-pub fn update_preview_layout(preview_visible: bool) {
+fn should_show_preview_for_mode(mode: TableMode) -> bool {
+    matches!(mode, TableMode::ClipboardHistory | TableMode::Search)
+}
+
+pub fn update_preview_layout(_preview_visible: bool) {
     let scroll_ptr = match TABLE_SCROLL_VIEW.get() {
         Some(ptr) => *ptr,
         None => return,
@@ -387,6 +391,11 @@ pub fn update_preview_layout(preview_visible: bool) {
         let horizontal_margin = style::CONTENT_SIDE_INSET + style::LIST_EXTRA_MARGIN;
         let available_width =
             (bounds.size.width - horizontal_margin * 2.0).max(style::LIST_MIN_WIDTH);
+        let mode = match TABLE_MODE.lock() {
+            Ok(m) => *m,
+            Err(_) => TableMode::Search,
+        };
+        let preview_visible = should_show_preview_for_mode(mode);
         let list_width = if preview_visible {
             (available_width * style::LIST_WIDTH_RATIO).max(style::LIST_MIN_WIDTH)
         } else {

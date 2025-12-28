@@ -17,10 +17,14 @@ use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use std::fmt::Write;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 const MAX_PREVIEW_CHARS: usize = 5000;
+const MAX_FILE_PREVIEW_BYTES: u64 = 64 * 1024;
 const PREVIEW_HEADER_HEIGHT: f64 = 86.0;
 const PREVIEW_ACTION_BAR_HEIGHT: f64 = 32.0;
 const PREVIEW_ACTION_GAP: f64 = 10.0;
@@ -34,6 +38,7 @@ const PREVIEW_ACTION_CANCEL_WIDTH: f64 = 84.0;
 
 static PREVIEW_HOVERED: AtomicBool = AtomicBool::new(false);
 static PREVIEW_SELECTED_ROW: AtomicI64 = AtomicI64::new(-1);
+static PREVIEW_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 static EDIT_ENTRY_ID: AtomicI64 = AtomicI64::new(-1);
 static EDIT_IS_TEXT: AtomicBool = AtomicBool::new(false);
 static EDIT_MODE: AtomicBool = AtomicBool::new(false);
@@ -198,7 +203,8 @@ unsafe fn set_button_title(button: id, title: &str, font: id, color: id) {
 fn placeholder_text_for_mode(mode: TableMode) -> &'static str {
     match mode {
         TableMode::ClipboardHistory => "Select a clipboard entry to preview",
-        TableMode::Search | TableMode::Settings => "Open clipboard history (Tab) to see previews",
+        TableMode::Search => "Select a file or clipboard item to preview",
+        TableMode::Settings => "Preview unavailable in Settings",
     }
 }
 
@@ -726,7 +732,7 @@ fn set_placeholder_for_mode(mode: TableMode) {
         unsafe {
             let root = id_from(refs.root);
             let action_bar = id_from(refs.action_bar);
-            if mode != TableMode::ClipboardHistory {
+            if mode == TableMode::Settings {
                 set_hidden(root, true);
                 set_hidden(action_bar, true);
                 return;
@@ -803,6 +809,131 @@ fn show_image_preview(title: &str, subtitle: &str, image: id) {
     }
 }
 
+fn show_preview_message(title: &str, subtitle: &str, message: &str) {
+    if let Some(refs) = preview_refs() {
+        unsafe {
+            let title_field = id_from(refs.title_field);
+            let detail_field = id_from(refs.detail_field);
+            let placeholder = id_from(refs.placeholder_field);
+            let text_scroll = id_from(refs.text_scroll);
+            let image_view = id_from(refs.image_view);
+            let text_background = id_from(refs.text_background);
+
+            set_hidden(text_scroll, true);
+            set_hidden(image_view, true);
+            set_hidden(text_background, true);
+            set_hidden(title_field, false);
+            set_hidden(detail_field, false);
+            set_hidden(placeholder, false);
+
+            set_string(title_field, title);
+            set_string(detail_field, subtitle);
+            set_string(placeholder, message);
+        }
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    let units = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < units.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, units[unit])
+    } else {
+        format!("{:.1} {}", size, units[unit])
+    }
+}
+
+fn is_image_extension(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let lower = ext.to_ascii_lowercase();
+            matches!(
+                lower.as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "bmp" | "tiff" | "tif" | "heic" | "heif" | "webp"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn load_text_preview(path: &str, size: Option<u64>) -> Option<String> {
+    let file = File::open(path).ok()?;
+    let mut buf = Vec::new();
+    let mut reader = file.take(MAX_FILE_PREVIEW_BYTES);
+    reader.read_to_end(&mut buf).ok()?;
+    if buf.contains(&0) {
+        return None;
+    }
+    let mut text = String::from_utf8_lossy(&buf).to_string();
+    if size.map(|s| s > MAX_FILE_PREVIEW_BYTES).unwrap_or(false) {
+        let _ = write!(
+            text,
+            "\n… (showing first {} of {} bytes)",
+            MAX_FILE_PREVIEW_BYTES,
+            size.unwrap_or(MAX_FILE_PREVIEW_BYTES)
+        );
+    }
+    Some(text)
+}
+
+fn file_preview_subtitle(path: &str, size: Option<u64>) -> String {
+    match size {
+        Some(bytes) => format!("{} · {}", path, format_bytes(bytes)),
+        None => path.to_string(),
+    }
+}
+
+enum FilePreviewKind {
+    Image(String),
+    Text(String),
+    Message(String),
+}
+
+fn start_file_preview(title: String, path: String, request_id: u64) {
+    show_preview_message(&title, &path, "Loading preview...");
+    SEARCH_RT.spawn_blocking(move || {
+        let metadata = std::fs::metadata(&path).ok();
+        let size = metadata.as_ref().map(|meta| meta.len());
+        let subtitle = file_preview_subtitle(&path, size);
+        let is_image = is_image_extension(&path);
+
+        let preview = if is_image {
+            FilePreviewKind::Image(path.clone())
+        } else if let Some(text) = load_text_preview(&path, size) {
+            FilePreviewKind::Text(text)
+        } else {
+            FilePreviewKind::Message("No preview available".to_string())
+        };
+
+        run_on_main(move || {
+            if PREVIEW_REQUEST_ID.load(Ordering::SeqCst) != request_id {
+                return;
+            }
+            match preview {
+                FilePreviewKind::Image(path) => {
+                    if let Some(image) = image_from_path(&path) {
+                        show_image_preview(&title, &subtitle, image);
+                    } else {
+                        show_preview_message(&title, &subtitle, "No preview available");
+                    }
+                }
+                FilePreviewKind::Text(body) => {
+                    show_text_preview(&title, &subtitle, &body);
+                }
+                FilePreviewKind::Message(message) => {
+                    show_preview_message(&title, &subtitle, &message);
+                }
+            }
+        });
+    });
+}
+
 pub fn update_clipboard_preview_selection(row: Option<usize>) {
     let mode = match TABLE_MODE.lock() {
         Ok(m) => *m,
@@ -810,6 +941,7 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
     };
     let selected_row = row.map(|r| r as i64).unwrap_or(-1);
     PREVIEW_SELECTED_ROW.store(selected_row, Ordering::SeqCst);
+    let request_id = PREVIEW_REQUEST_ID.fetch_add(1, Ordering::SeqCst) + 1;
     if EDIT_MODE.load(Ordering::SeqCst) {
         if mode == TableMode::ClipboardHistory {
             if let Some(selected_row) = row {
@@ -830,34 +962,72 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
         set_placeholder_for_mode(mode);
         return;
     }
-    if mode != TableMode::ClipboardHistory {
-        set_placeholder_for_mode(mode);
-        return;
-    }
     let selected_row = row.unwrap();
-    if let Some(entry) = preview_data_for_row(selected_row) {
-        if let Some((title, subtitle, maybe_text)) = detail_label_for_entry(&entry) {
-            if let search_engine::SearchResult::Clipboard {
-                content,
-                content_type,
-                ..
-            } = entry
-            {
-                if content_type == "image" {
-                    let placeholder = placeholder_image_icon();
-                    show_image_preview(&title, &subtitle, placeholder);
-                    if let Some(image) = image_from_clipboard_content(&content) {
-                        show_image_preview(&title, &subtitle, image);
+    match mode {
+        TableMode::ClipboardHistory => {
+            if let Some(entry) = preview_data_for_row(selected_row) {
+                if let Some((title, subtitle, maybe_text)) = detail_label_for_entry(&entry) {
+                    if let search_engine::SearchResult::Clipboard {
+                        content,
+                        content_type,
+                        ..
+                    } = entry
+                    {
+                        if content_type == "image" {
+                            let placeholder = placeholder_image_icon();
+                            show_image_preview(&title, &subtitle, placeholder);
+                            if let Some(image) = image_from_clipboard_content(&content) {
+                                show_image_preview(&title, &subtitle, image);
+                            }
+                            return;
+                        } else if let Some(text_body) = maybe_text {
+                            show_text_preview(&title, &subtitle, &text_body);
+                            return;
+                        }
                     }
-                    return;
-                } else if let Some(text_body) = maybe_text {
-                    show_text_preview(&title, &subtitle, &text_body);
-                    return;
                 }
             }
+            set_placeholder_for_mode(mode);
+        }
+        TableMode::Search => {
+            if let Some(entry) = preview_data_for_row(selected_row) {
+                match entry {
+                    search_engine::SearchResult::File { name, path, .. } => {
+                        start_file_preview(name, path, request_id);
+                        return;
+                    }
+                    search_engine::SearchResult::Clipboard { .. } => {
+                        if let Some((title, subtitle, maybe_text)) = detail_label_for_entry(&entry)
+                        {
+                            if let search_engine::SearchResult::Clipboard {
+                                content,
+                                content_type,
+                                ..
+                            } = entry
+                            {
+                                if content_type == "image" {
+                                    let placeholder = placeholder_image_icon();
+                                    show_image_preview(&title, &subtitle, placeholder);
+                                    if let Some(image) = image_from_clipboard_content(&content) {
+                                        show_image_preview(&title, &subtitle, image);
+                                    }
+                                    return;
+                                } else if let Some(text_body) = maybe_text {
+                                    show_text_preview(&title, &subtitle, &text_body);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            set_placeholder_for_mode(mode);
+        }
+        TableMode::Settings => {
+            set_placeholder_for_mode(mode);
         }
     }
-    set_placeholder_for_mode(mode);
 }
 
 fn reset_text_scroll_position(text_scroll: id, text_view: id) {
@@ -1314,6 +1484,19 @@ fn image_from_clipboard_content(content: &str) -> Option<id> {
         }
     } else {
         None
+    }
+}
+
+fn image_from_path(path: &str) -> Option<id> {
+    unsafe {
+        let ns_path = NSString::alloc(nil).init_str(path);
+        let image: id = msg_send![class!(NSImage), alloc];
+        let image: id = msg_send![image, initWithContentsOfFile: ns_path];
+        if image == nil {
+            None
+        } else {
+            Some(image)
+        }
     }
 }
 
