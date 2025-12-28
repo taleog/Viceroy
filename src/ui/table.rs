@@ -166,6 +166,121 @@ pub unsafe fn activate_selected_row_or_first() {
     perform_result_action(row as usize);
 }
 
+pub unsafe fn delete_selected_clipboard_entry() {
+    let mode = match TABLE_MODE.lock() {
+        Ok(m) => *m,
+        Err(_) => TableMode::Search,
+    };
+    if mode != TableMode::ClipboardHistory {
+        return;
+    }
+
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let content: id = msg_send![window, contentView];
+    let subviews: id = msg_send![content, subviews];
+    let sv_count: usize = msg_send![subviews, count];
+    if sv_count < 3 {
+        return;
+    }
+    let scroll: id = msg_send![subviews, objectAtIndex:2];
+    let table: id = msg_send![scroll, documentView];
+
+    let row: isize = msg_send![table, selectedRow];
+    if row < 0 {
+        return;
+    }
+
+    let entry_id = {
+        let mut results = match TABLE_RESULTS.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if row as usize >= results.len() {
+            return;
+        }
+        match &results[row as usize] {
+            crate::search_engine::SearchResult::Clipboard { id, .. } => {
+                let entry_id = *id;
+                results.remove(row as usize);
+                if let Ok(mut td) = TABLE_DATA.lock() {
+                    if row as usize <= td.len().saturating_sub(1) {
+                        td.remove(row as usize);
+                    }
+                }
+                entry_id
+            }
+            _ => return,
+        }
+    };
+
+    SEARCH_RT.spawn(async move {
+        let _ = crate::clipboard::delete_entry(entry_id).await;
+    });
+
+    let _: () = msg_send![table, reloadData];
+    let num_rows: isize = msg_send![table, numberOfRows];
+    if num_rows > 0 {
+        let new_row = if row < num_rows { row } else { num_rows - 1 };
+        let index_set: id = msg_send![class!(NSIndexSet), indexSetWithIndex:new_row as usize];
+        let _: () = msg_send![table, selectRowIndexes:index_set byExtendingSelection:NO];
+        let _: () = msg_send![table, scrollRowToVisible:new_row];
+        crate::ui::clipboard_view::update_clipboard_preview_selection(Some(new_row as usize));
+    } else {
+        crate::ui::clipboard_view::update_clipboard_preview_selection(None);
+    }
+    sync_window_height_with_state();
+}
+
+pub unsafe fn edit_selected_clipboard_entry() {
+    let mode = match TABLE_MODE.lock() {
+        Ok(m) => *m,
+        Err(_) => TableMode::Search,
+    };
+    if mode != TableMode::ClipboardHistory {
+        return;
+    }
+
+    let app: id = msg_send![class!(NSApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let count: usize = msg_send![windows, count];
+    if count == 0 {
+        return;
+    }
+    let window: id = msg_send![windows, objectAtIndex:0];
+    let content: id = msg_send![window, contentView];
+    let subviews: id = msg_send![content, subviews];
+    let sv_count: usize = msg_send![subviews, count];
+    if sv_count < 3 {
+        return;
+    }
+    let scroll: id = msg_send![subviews, objectAtIndex:2];
+    let table: id = msg_send![scroll, documentView];
+
+    let row: isize = msg_send![table, selectedRow];
+    if row < 0 {
+        return;
+    }
+
+    let entry = {
+        let results = match TABLE_RESULTS.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if row as usize >= results.len() {
+            return;
+        }
+        results[row as usize].clone()
+    };
+
+    crate::ui::clipboard_view::begin_inline_edit(entry);
+}
+
 pub unsafe fn reload_table() {
     let app: id = msg_send![class!(NSApplication), sharedApplication];
     let windows: id = msg_send![app, windows];

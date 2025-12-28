@@ -95,7 +95,7 @@ async fn run_search(
     include_clipboard: bool,
 ) -> Result<Vec<SearchResult>> {
     let start_time = Instant::now();
-    
+
     if query.is_empty() {
         return Ok(Vec::new());
     }
@@ -226,8 +226,28 @@ async fn run_search(
             if let Ok(clipboard_results) = clipboard::search_history(&query_clone).await {
                 let matcher = SkimMatcherV2::default();
                 for entry in clipboard_results.iter().take(clip_limit) {
-                    let preview = entry.content.chars().take(100).collect::<String>();
-                    if let Some(score) = matcher.fuzzy_match(&entry.content, &query_clone) {
+                    let is_image = entry.content_type == "image";
+                    let custom_name = entry
+                        .custom_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty());
+                    if is_image && custom_name.is_none() {
+                        continue;
+                    }
+
+                    let match_target = if is_image {
+                        custom_name.unwrap()
+                    } else {
+                        entry.content.as_str()
+                    };
+
+                    if let Some(score) = matcher.fuzzy_match(match_target, &query_clone) {
+                        let preview = if is_image {
+                            custom_name.unwrap().to_string()
+                        } else {
+                            entry.content.chars().take(100).collect::<String>()
+                        };
                         results.push(SearchResult::Clipboard {
                             id: entry.id,
                             content: entry.content.clone(),

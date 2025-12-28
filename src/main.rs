@@ -1112,12 +1112,24 @@ fn build_search_rows(results: &[search_engine::SearchResult]) -> Vec<(String, St
                 content,
                 preview,
                 custom_name,
+                content_type,
+                image_width,
+                image_height,
                 ..
             } => {
-                let title = custom_name
-                    .clone()
-                    .unwrap_or_else(|| content.chars().take(40).collect());
-                rows.push((title, preview.chars().take(80).collect()));
+                if content_type == "image" {
+                    let title = custom_name.clone().unwrap_or_else(|| "Image".to_string());
+                    let subtitle = match (image_width, image_height) {
+                        (Some(width), Some(height)) => format!("Image · {}x{} px", width, height),
+                        _ => "Image".to_string(),
+                    };
+                    rows.push((title, subtitle));
+                } else {
+                    let title = custom_name
+                        .clone()
+                        .unwrap_or_else(|| content.chars().take(40).collect());
+                    rows.push((title, preview.chars().take(80).collect()));
+                }
             }
             search_engine::SearchResult::Command {
                 name, description, ..
@@ -1223,6 +1235,7 @@ unsafe fn find_search_field() -> Option<id> {
     Some(search_field)
 }
 
+#[allow(dead_code)]
 unsafe fn get_current_search_query() -> Option<String> {
     if let Some(field) = find_search_field() {
         let value: id = msg_send![field, stringValue];

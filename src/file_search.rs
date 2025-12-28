@@ -139,14 +139,14 @@ fn build_fallback_index() -> Vec<FileInfo> {
     // Build fallback index from user directories (Documents, Downloads, Desktop)
     // Only called when VICEROY_FALLBACK_FS=1 is explicitly set
     let mut results = Vec::new();
-    
+
     if let Some(home) = dirs::home_dir() {
         for subdir in &["Documents", "Downloads", "Desktop"] {
             let root = home.join(subdir);
             if !root.exists() {
                 continue;
             }
-            
+
             for entry in WalkDir::new(&root)
                 .max_depth(FALLBACK_MAX_DEPTH)
                 .follow_links(false)

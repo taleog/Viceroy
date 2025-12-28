@@ -79,6 +79,7 @@ where
     Queue::main().exec_async(task);
 }
 
+#[allow(dead_code)]
 /// Quick fade-in helper for lightweight transitions.
 pub unsafe fn fade_in_view(view: id, duration: f64) {
     if view.is_null() {

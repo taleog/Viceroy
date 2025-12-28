@@ -183,7 +183,7 @@ fn should_skip_duplicate_text(
         let normalized_prev = normalize_text(&prev_content);
         let _same_app = prev_app == *app_name;
         let close_in_time = timestamp.saturating_sub(prev_ts) <= 120; // 2-minute window
-        // Check both same-app and app-agnostic duplicates
+                                                                      // Check both same-app and app-agnostic duplicates
         if normalized_prev == normalized_new && close_in_time {
             return Ok(true);
         }
@@ -287,6 +287,24 @@ pub async fn search_history(query: &str) -> Result<Vec<ClipboardEntry>> {
         .map_err(|e| anyhow!("clipboard search task failed: {e}"))?
 }
 
+pub async fn delete_entry(id: i64) -> Result<()> {
+    task::spawn_blocking(move || delete_entry_blocking(id))
+        .await
+        .map_err(|e| anyhow!("clipboard delete task failed: {e}"))?
+}
+
+pub async fn update_entry(id: i64, content: String, custom_name: Option<String>) -> Result<()> {
+    task::spawn_blocking(move || update_entry_blocking(id, content, custom_name))
+        .await
+        .map_err(|e| anyhow!("clipboard update task failed: {e}"))?
+}
+
+pub async fn update_custom_name(id: i64, name: Option<String>) -> Result<()> {
+    task::spawn_blocking(move || update_custom_name_blocking(id, name))
+        .await
+        .map_err(|e| anyhow!("clipboard update task failed: {e}"))?
+}
+
 fn search_history_blocking(query: &str) -> Result<Vec<ClipboardEntry>> {
     let conn = database::get_connection()?;
     let search_pattern = format!("%{}%", query);
@@ -319,26 +337,50 @@ fn search_history_blocking(query: &str) -> Result<Vec<ClipboardEntry>> {
     Ok(entries)
 }
 
+fn delete_entry_blocking(id: i64) -> Result<()> {
+    let conn = database::get_connection()?;
+    conn.execute("DELETE FROM clipboard_history WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+fn update_entry_blocking(id: i64, content: String, custom_name: Option<String>) -> Result<()> {
+    let conn = database::get_connection()?;
+    conn.execute(
+        "UPDATE clipboard_history SET content = ?1, custom_name = ?2 WHERE id = ?3",
+        params![content, custom_name, id],
+    )?;
+    Ok(())
+}
+
+fn update_custom_name_blocking(id: i64, name: Option<String>) -> Result<()> {
+    let conn = database::get_connection()?;
+    conn.execute(
+        "UPDATE clipboard_history SET custom_name = ?1 WHERE id = ?2",
+        params![name, id],
+    )?;
+    Ok(())
+}
+
 pub async fn paste_to_active_app(content: &str) -> Result<()> {
     let _guard = ClipboardMonitorPauseGuard::new();
     // Store the frontmost app BEFORE modifying clipboard
     let previous_app = app_launcher::get_frontmost_app_name();
-    
+
     // Copy to clipboard
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(content)?;
     if let Ok(mut guard) = LAST_PROGRAMMATIC_TEXT.lock() {
         *guard = Some((normalize_text(content), Utc::now().timestamp()));
     }
-    
+
     // Delay to ensure clipboard is updated
     sleep(Duration::from_millis(100)).await;
-    
+
     // Explicitly activate the previous app to ensure focus is correct before paste
     if let Some(app_name) = previous_app {
         activate_app(&app_name)?;
     }
-    
+
     // Longer pause to ensure focus is returned and app is ready
     sleep(Duration::from_millis(200)).await;
     send_paste_keystroke()?;
@@ -367,7 +409,7 @@ async fn paste_image_to_active_app(content: &str) -> Result<()> {
     let _guard = ClipboardMonitorPauseGuard::new();
     // Store the frontmost app BEFORE modifying clipboard
     let previous_app = app_launcher::get_frontmost_app_name();
-    
+
     let image = decode_history_image(content)?;
     let mut clipboard = Clipboard::new()?;
     let hash = blake3::hash(&image.bytes);
@@ -375,15 +417,15 @@ async fn paste_image_to_active_app(content: &str) -> Result<()> {
     if let Ok(mut guard) = LAST_PROGRAMMATIC_IMAGE.lock() {
         guard.replace((hash, Utc::now().timestamp()));
     }
-    
+
     // Delay to ensure clipboard is updated
     sleep(Duration::from_millis(100)).await;
-    
+
     // Explicitly activate the previous app
     if let Some(app_name) = previous_app {
         activate_app(&app_name)?;
     }
-    
+
     // Longer pause to ensure focus is returned
     sleep(Duration::from_millis(200)).await;
     send_paste_keystroke()?;

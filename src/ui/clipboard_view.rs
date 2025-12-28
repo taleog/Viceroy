@@ -17,9 +17,26 @@ use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use std::fmt::Write;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::OnceLock;
 
 const MAX_PREVIEW_CHARS: usize = 5000;
 const PREVIEW_HEADER_HEIGHT: f64 = 86.0;
+const PREVIEW_ACTION_BAR_HEIGHT: f64 = 32.0;
+const PREVIEW_ACTION_GAP: f64 = 10.0;
+const PREVIEW_ACTION_BUTTON_HEIGHT: f64 = 26.0;
+const PREVIEW_ACTION_BUTTON_SPACING: f64 = 8.0;
+const PREVIEW_ACTION_BUTTON_PADDING: f64 = 10.0;
+const PREVIEW_ACTION_EDIT_WIDTH: f64 = 64.0;
+const PREVIEW_ACTION_REMOVE_WIDTH: f64 = 82.0;
+const PREVIEW_ACTION_SAVE_WIDTH: f64 = 70.0;
+const PREVIEW_ACTION_CANCEL_WIDTH: f64 = 84.0;
+
+static PREVIEW_HOVERED: AtomicBool = AtomicBool::new(false);
+static PREVIEW_SELECTED_ROW: AtomicI64 = AtomicI64::new(-1);
+static EDIT_ENTRY_ID: AtomicI64 = AtomicI64::new(-1);
+static EDIT_IS_TEXT: AtomicBool = AtomicBool::new(false);
+static EDIT_MODE: AtomicBool = AtomicBool::new(false);
 
 pub fn format_clipboard_relative_time(timestamp: i64, now: i64) -> String {
     let delta = (now - timestamp).max(0);
@@ -168,11 +185,467 @@ unsafe fn set_string(view: id, value: &str) {
     let _: () = msg_send![view, setStringValue: ns_string];
 }
 
+unsafe fn set_button_title(button: id, title: &str, font: id, color: id) {
+    let title_ns = NSString::alloc(nil).init_str(title);
+    let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
+    let _: () = msg_send![attrs, setObject:color forKey:NSString::alloc(nil).init_str("NSColor")];
+    let _: () = msg_send![attrs, setObject:font forKey:NSString::alloc(nil).init_str("NSFont")];
+    let attributed: id = msg_send![class!(NSAttributedString), alloc];
+    let attributed: id = msg_send![attributed, initWithString:title_ns attributes:attrs];
+    let _: () = msg_send![button, setAttributedTitle: attributed];
+}
+
 fn placeholder_text_for_mode(mode: TableMode) -> &'static str {
     match mode {
         TableMode::ClipboardHistory => "Select a clipboard entry to preview",
         TableMode::Search | TableMode::Settings => "Open clipboard history (Tab) to see previews",
     }
+}
+
+fn refresh_action_bar_visibility() {
+    let mode = match TABLE_MODE.lock() {
+        Ok(m) => *m,
+        Err(_) => TableMode::Search,
+    };
+    let hovered = PREVIEW_HOVERED.load(Ordering::SeqCst);
+    let selected = PREVIEW_SELECTED_ROW.load(Ordering::SeqCst) >= 0;
+    let editing = EDIT_MODE.load(Ordering::SeqCst);
+    let show = mode == TableMode::ClipboardHistory && selected && (hovered || editing);
+    if let Some(refs) = preview_refs() {
+        unsafe {
+            let bar = id_from(refs.action_bar);
+            set_hidden(bar, !show);
+        }
+    }
+}
+
+fn preview_actions() -> id {
+    static ACTIONS: OnceLock<usize> = OnceLock::new();
+    if let Some(ptr) = ACTIONS.get() {
+        return *ptr as id;
+    }
+    let target = unsafe { register_preview_action_class() };
+    let _ = ACTIONS.set(target as usize);
+    target
+}
+
+fn apply_edit_mode(enabled: bool, is_text: bool) {
+    if let Some(refs) = preview_refs() {
+        unsafe {
+            let title_field = id_from(refs.title_field);
+            let edit_button = id_from(refs.edit_button);
+            let remove_button = id_from(refs.remove_button);
+            let save_button = id_from(refs.save_button);
+            let cancel_button = id_from(refs.cancel_button);
+            let text_view = id_from(refs.text_view);
+
+            let _: () = msg_send![title_field, setEditable: if enabled { YES } else { NO }];
+            let _: () = msg_send![title_field, setSelectable: if enabled { YES } else { NO }];
+            let _: () = msg_send![title_field, setBezeled: if enabled { YES } else { NO }];
+            let _: () = msg_send![title_field, setBordered: if enabled { YES } else { NO }];
+            let _: () = msg_send![title_field, setDrawsBackground: if enabled { YES } else { NO }];
+            if enabled {
+                let bg: id =
+                    msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+                let _: () = msg_send![title_field, setBackgroundColor: bg];
+            }
+
+            let editable = enabled && is_text;
+            let _: () = msg_send![text_view, setEditable: if editable { YES } else { NO }];
+            let _: () = msg_send![text_view, setSelectable: YES];
+
+            set_hidden(edit_button, enabled);
+            set_hidden(remove_button, enabled);
+            set_hidden(save_button, !enabled);
+            set_hidden(cancel_button, !enabled);
+        }
+    }
+}
+
+fn exit_edit_mode() {
+    let was_text = EDIT_IS_TEXT.load(Ordering::SeqCst);
+    EDIT_MODE.store(false, Ordering::SeqCst);
+    EDIT_ENTRY_ID.store(-1, Ordering::SeqCst);
+    EDIT_IS_TEXT.store(false, Ordering::SeqCst);
+    apply_edit_mode(false, was_text);
+    refresh_action_bar_visibility();
+}
+
+pub fn begin_inline_edit(entry: search_engine::SearchResult) {
+    let mode = match TABLE_MODE.lock() {
+        Ok(m) => *m,
+        Err(_) => TableMode::Search,
+    };
+    if mode != TableMode::ClipboardHistory {
+        return;
+    }
+
+    if let search_engine::SearchResult::Clipboard {
+        id,
+        content,
+        content_type,
+        app_name,
+        timestamp,
+        custom_name,
+        image_width,
+        image_height,
+        ..
+    } = entry
+    {
+        let is_text = content_type == "text";
+        let current_id = EDIT_ENTRY_ID.load(Ordering::SeqCst);
+        if EDIT_MODE.load(Ordering::SeqCst) && current_id == id {
+            return;
+        }
+        if EDIT_MODE.load(Ordering::SeqCst) && current_id != id {
+            exit_edit_mode();
+        }
+
+        EDIT_ENTRY_ID.store(id, Ordering::SeqCst);
+        EDIT_IS_TEXT.store(is_text, Ordering::SeqCst);
+        EDIT_MODE.store(true, Ordering::SeqCst);
+
+        if let Some(refs) = preview_refs() {
+            unsafe {
+                let preview_root = id_from(refs.root);
+                let title_field = id_from(refs.title_field);
+                let detail_field = id_from(refs.detail_field);
+                let placeholder = id_from(refs.placeholder_field);
+                let text_scroll = id_from(refs.text_scroll);
+                let text_view = id_from(refs.text_view);
+                let image_view = id_from(refs.image_view);
+                let text_background = id_from(refs.text_background);
+
+                let (default_title, subtitle, _) = labels_for_clipboard_entry(
+                    &content,
+                    &content_type,
+                    &app_name,
+                    timestamp,
+                    custom_name.as_ref(),
+                    image_width,
+                    image_height,
+                );
+
+                set_hidden(placeholder, true);
+                set_hidden(title_field, false);
+                set_hidden(detail_field, false);
+                set_string(detail_field, &subtitle);
+
+                let placeholder_value = NSString::alloc(nil).init_str(&default_title);
+                let _: () = msg_send![title_field, setPlaceholderString: placeholder_value];
+                if let Some(name) = custom_name.as_ref() {
+                    set_string(title_field, name);
+                } else {
+                    set_string(title_field, "");
+                }
+
+                if is_text {
+                    set_hidden(text_scroll, false);
+                    set_hidden(text_background, false);
+                    set_hidden(image_view, true);
+                    let ns_content = NSString::alloc(nil).init_str(&content);
+                    let _: () = msg_send![text_view, setString: ns_content];
+                    reset_text_scroll_position(text_scroll, text_view);
+                } else {
+                    set_hidden(text_scroll, true);
+                    set_hidden(text_background, true);
+                    set_hidden(image_view, false);
+                    if let Some(image) = image_from_clipboard_content(&content) {
+                        layout_image_preview(preview_root, image_view, image);
+                        let _: () = msg_send![image_view, setImage: image];
+                    }
+                }
+
+                apply_edit_mode(true, is_text);
+                refresh_action_bar_visibility();
+
+                let window: id = msg_send![title_field, window];
+                if window != nil {
+                    let responder = if is_text { text_view } else { title_field };
+                    let _: () = msg_send![window, makeFirstResponder: responder];
+                }
+            }
+        }
+    }
+}
+
+unsafe fn read_text_field_value(field: id) -> String {
+    let value: id = msg_send![field, stringValue];
+    let cstr: *const std::os::raw::c_char = msg_send![value, UTF8String];
+    if cstr.is_null() {
+        String::new()
+    } else {
+        std::ffi::CStr::from_ptr(cstr).to_string_lossy().to_string()
+    }
+}
+
+unsafe fn read_text_view_value(view: id) -> String {
+    let value: id = msg_send![view, string];
+    let cstr: *const std::os::raw::c_char = msg_send![value, UTF8String];
+    if cstr.is_null() {
+        String::new()
+    } else {
+        std::ffi::CStr::from_ptr(cstr).to_string_lossy().to_string()
+    }
+}
+
+unsafe fn save_inline_edit() {
+    let entry_id = EDIT_ENTRY_ID.load(Ordering::SeqCst);
+    if entry_id < 0 {
+        return;
+    }
+
+    let refs = match preview_refs() {
+        Some(r) => r,
+        None => return,
+    };
+    let title_field = id_from(refs.title_field);
+    let text_view = id_from(refs.text_view);
+
+    let title = read_text_field_value(title_field);
+    let title_trim = title.trim();
+    let new_custom_name = if title_trim.is_empty() {
+        None
+    } else {
+        Some(title_trim.to_string())
+    };
+
+    let is_text = EDIT_IS_TEXT.load(Ordering::SeqCst);
+    let new_content = if is_text {
+        read_text_view_value(text_view)
+    } else {
+        String::new()
+    };
+
+    exit_edit_mode();
+
+    let updated_row = update_clipboard_entry_in_ui(
+        entry_id,
+        if is_text {
+            Some(new_content.clone())
+        } else {
+            None
+        },
+        new_custom_name.clone(),
+    );
+
+    if let Some(row) = updated_row {
+        crate::ui::clipboard_view::update_clipboard_preview_selection(Some(row));
+    }
+
+    SEARCH_RT.spawn(async move {
+        if is_text {
+            let _ = crate::clipboard::update_entry(entry_id, new_content, new_custom_name).await;
+        } else {
+            let _ = crate::clipboard::update_custom_name(entry_id, new_custom_name).await;
+        }
+    });
+}
+
+unsafe fn cancel_inline_edit() {
+    let row = PREVIEW_SELECTED_ROW.load(Ordering::SeqCst);
+    exit_edit_mode();
+    if row >= 0 {
+        update_clipboard_preview_selection(Some(row as usize));
+    } else {
+        update_clipboard_preview_selection(None);
+    }
+}
+
+fn update_clipboard_entry_in_ui(
+    entry_id: i64,
+    new_content: Option<String>,
+    new_custom_name: Option<String>,
+) -> Option<usize> {
+    let mut row_index = None;
+    if let Ok(mut results) = TABLE_RESULTS.lock() {
+        for (idx, result) in results.iter_mut().enumerate() {
+            if let search_engine::SearchResult::Clipboard {
+                id,
+                content,
+                content_type,
+                app_name,
+                timestamp,
+                custom_name,
+                image_width,
+                image_height,
+                preview,
+                ..
+            } = result
+            {
+                if *id != entry_id {
+                    continue;
+                }
+                if let Some(new_value) = &new_content {
+                    *content = new_value.clone();
+                }
+                *custom_name = new_custom_name.clone();
+
+                let (title, subtitle, preview_value) = labels_for_clipboard_entry(
+                    content,
+                    content_type,
+                    app_name,
+                    *timestamp,
+                    custom_name.as_ref(),
+                    *image_width,
+                    *image_height,
+                );
+                *preview = preview_value;
+                if let Ok(mut td) = TABLE_DATA.lock() {
+                    if let Some(row) = td.get_mut(idx) {
+                        row.0 = title;
+                        row.1 = subtitle;
+                    }
+                }
+                row_index = Some(idx);
+                break;
+            }
+        }
+    }
+    if let Some(row) = row_index {
+        unsafe {
+            reload_table();
+            schedule_table_update_next_tick();
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let windows: id = msg_send![app, windows];
+            let count: usize = msg_send![windows, count];
+            if count > 0 {
+                let window: id = msg_send![windows, objectAtIndex:0];
+                let content: id = msg_send![window, contentView];
+                let subviews: id = msg_send![content, subviews];
+                let scroll: id = msg_send![subviews, objectAtIndex:2];
+                let table: id = msg_send![scroll, documentView];
+                let index_set: id = msg_send![class!(NSIndexSet), indexSetWithIndex:row];
+                let _: () = msg_send![table, selectRowIndexes:index_set byExtendingSelection:NO];
+                let _: () = msg_send![table, scrollRowToVisible:row as isize];
+            }
+        }
+    }
+    row_index
+}
+
+fn labels_for_clipboard_entry(
+    content: &str,
+    content_type: &str,
+    app_name: &Option<String>,
+    timestamp: i64,
+    custom_name: Option<&String>,
+    image_width: Option<i64>,
+    image_height: Option<i64>,
+) -> (String, String, String) {
+    let now = Utc::now().timestamp();
+    let app_label = app_name
+        .clone()
+        .unwrap_or_else(|| "Unknown App".to_string());
+    let time_label = format_clipboard_relative_time(timestamp, now);
+    let detail_label = if content_type == "image" {
+        if let (Some(width), Some(height)) = (image_width, image_height) {
+            format!("{}×{} px", width, height)
+        } else {
+            "Image".to_string()
+        }
+    } else {
+        format!("{} chars", content.chars().count())
+    };
+    let subtitle = format!("{} · {} · {}", app_label, time_label, detail_label);
+
+    let image_title = if content_type == "image" {
+        if detail_label == "Image" {
+            "Image".to_string()
+        } else {
+            format!("Image · {}", detail_label)
+        }
+    } else {
+        String::new()
+    };
+
+    let preview = if content_type == "image" {
+        custom_name.cloned().unwrap_or_else(|| image_title.clone())
+    } else {
+        truncate_text(content, 100)
+    };
+
+    let title = custom_name.cloned().unwrap_or_else(|| {
+        if content_type == "image" {
+            image_title.clone()
+        } else {
+            truncate_text(content, 60)
+        }
+    });
+
+    (title, subtitle, preview)
+}
+
+unsafe fn register_preview_action_class() -> id {
+    if objc::runtime::Class::get("MKClipboardPreviewActions").is_none() {
+        let superclass = class!(NSObject);
+        let mut decl = ClassDecl::new("MKClipboardPreviewActions", superclass).unwrap();
+
+        extern "C" fn edit_clipboard_entry(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                crate::ui::table::edit_selected_clipboard_entry();
+            }
+        }
+
+        extern "C" fn delete_clipboard_entry(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                crate::ui::table::delete_selected_clipboard_entry();
+            }
+        }
+
+        extern "C" fn save_clipboard_edit(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                save_inline_edit();
+            }
+        }
+
+        extern "C" fn cancel_clipboard_edit(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                cancel_inline_edit();
+            }
+        }
+
+        extern "C" fn mouse_entered(_this: &Object, _cmd: Sel, _event: id) {
+            PREVIEW_HOVERED.store(true, Ordering::SeqCst);
+            refresh_action_bar_visibility();
+        }
+
+        extern "C" fn mouse_exited(_this: &Object, _cmd: Sel, _event: id) {
+            PREVIEW_HOVERED.store(false, Ordering::SeqCst);
+            refresh_action_bar_visibility();
+        }
+
+        decl.add_method(
+            sel!(editClipboardEntry:),
+            edit_clipboard_entry as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(deleteClipboardEntry:),
+            delete_clipboard_entry as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(saveClipboardEdit:),
+            save_clipboard_edit as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(cancelClipboardEdit:),
+            cancel_clipboard_edit as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(mouseEntered:),
+            mouse_entered as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(mouseExited:),
+            mouse_exited as extern "C" fn(&Object, Sel, id),
+        );
+        decl.register();
+    }
+
+    let cls = class!(MKClipboardPreviewActions);
+    let target: id = msg_send![cls, new];
+    let _: id = msg_send![target, retain];
+    target
 }
 
 fn preview_data_for_row(row: usize) -> Option<search_engine::SearchResult> {
@@ -252,8 +725,10 @@ fn set_placeholder_for_mode(mode: TableMode) {
     if let Some(refs) = preview_refs() {
         unsafe {
             let root = id_from(refs.root);
+            let action_bar = id_from(refs.action_bar);
             if mode != TableMode::ClipboardHistory {
                 set_hidden(root, true);
+                set_hidden(action_bar, true);
                 return;
             }
             set_hidden(root, false);
@@ -268,6 +743,7 @@ fn set_placeholder_for_mode(mode: TableMode) {
             set_hidden(text_scroll, true);
             set_hidden(image_view, true);
             set_hidden(text_background, true);
+            set_hidden(action_bar, true);
             set_hidden(placeholder, false);
             set_string(placeholder, placeholder_text_for_mode(mode));
         }
@@ -332,6 +808,24 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
         Ok(m) => *m,
         Err(_) => TableMode::Search,
     };
+    let selected_row = row.map(|r| r as i64).unwrap_or(-1);
+    PREVIEW_SELECTED_ROW.store(selected_row, Ordering::SeqCst);
+    if EDIT_MODE.load(Ordering::SeqCst) {
+        if mode == TableMode::ClipboardHistory {
+            if let Some(selected_row) = row {
+                if let Some(search_engine::SearchResult::Clipboard { id, .. }) =
+                    preview_data_for_row(selected_row)
+                {
+                    if id == EDIT_ENTRY_ID.load(Ordering::SeqCst) {
+                        refresh_action_bar_visibility();
+                        return;
+                    }
+                }
+            }
+        }
+        exit_edit_mode();
+    }
+    refresh_action_bar_visibility();
     if row.is_none() {
         set_placeholder_for_mode(mode);
         return;
@@ -350,10 +844,12 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
             } = entry
             {
                 if content_type == "image" {
+                    let placeholder = placeholder_image_icon();
+                    show_image_preview(&title, &subtitle, placeholder);
                     if let Some(image) = image_from_clipboard_content(&content) {
                         show_image_preview(&title, &subtitle, image);
-                        return;
                     }
+                    return;
                 } else if let Some(text_body) = maybe_text {
                     show_text_preview(&title, &subtitle, &text_body);
                     return;
@@ -388,11 +884,42 @@ fn reset_text_scroll_position(text_scroll: id, text_view: id) {
 
 fn preview_content_frame(bounds: NSRect) -> NSRect {
     let content_inset = style::PREVIEW_CONTENT_INSET;
+    let action_frame = preview_action_frame(bounds);
     let width = (bounds.size.width - content_inset * 2.0).max(120.0);
-    let height = (bounds.size.height - PREVIEW_HEADER_HEIGHT - content_inset).max(140.0);
+    let height = (bounds.size.height
+        - PREVIEW_HEADER_HEIGHT
+        - content_inset
+        - action_frame.size.height
+        - PREVIEW_ACTION_GAP)
+        .max(140.0);
     NSRect::new(
-        NSPoint::new(content_inset, content_inset),
+        NSPoint::new(
+            content_inset,
+            content_inset + action_frame.size.height + PREVIEW_ACTION_GAP,
+        ),
         NSSize::new(width, height),
+    )
+}
+
+fn action_bar_width() -> f64 {
+    let edit_group = PREVIEW_ACTION_BUTTON_PADDING * 2.0
+        + PREVIEW_ACTION_EDIT_WIDTH
+        + PREVIEW_ACTION_BUTTON_SPACING
+        + PREVIEW_ACTION_REMOVE_WIDTH;
+    let save_group = PREVIEW_ACTION_BUTTON_PADDING * 2.0
+        + PREVIEW_ACTION_CANCEL_WIDTH
+        + PREVIEW_ACTION_BUTTON_SPACING
+        + PREVIEW_ACTION_SAVE_WIDTH;
+    edit_group.max(save_group)
+}
+
+fn preview_action_frame(bounds: NSRect) -> NSRect {
+    let content_inset = style::PREVIEW_CONTENT_INSET;
+    let max_width = (bounds.size.width - content_inset * 2.0).max(120.0);
+    let width = action_bar_width().min(max_width);
+    NSRect::new(
+        NSPoint::new(bounds.size.width - content_inset - width, content_inset),
+        NSSize::new(width, PREVIEW_ACTION_BAR_HEIGHT),
     )
 }
 
@@ -400,6 +927,11 @@ unsafe fn apply_preview_subview_layout(bounds: NSRect, refs: &ClipboardPreviewRe
     let text_area_frame = preview_content_frame(bounds);
     let title_field = id_from(refs.title_field);
     let detail_field = id_from(refs.detail_field);
+    let action_bar = id_from(refs.action_bar);
+    let edit_button = id_from(refs.edit_button);
+    let remove_button = id_from(refs.remove_button);
+    let save_button = id_from(refs.save_button);
+    let cancel_button = id_from(refs.cancel_button);
     let placeholder = id_from(refs.placeholder_field);
     let text_scroll = id_from(refs.text_scroll);
     let text_view = id_from(refs.text_view);
@@ -426,6 +958,36 @@ unsafe fn apply_preview_subview_layout(bounds: NSRect, refs: &ClipboardPreviewRe
         NSPoint::new(content_inset, detail_origin_y),
         NSSize::new(label_width, detail_height),
     );
+    let action_frame = preview_action_frame(bounds);
+    let button_y = (action_frame.size.height - PREVIEW_ACTION_BUTTON_HEIGHT) / 2.0;
+    let remove_width = PREVIEW_ACTION_REMOVE_WIDTH;
+    let edit_width = PREVIEW_ACTION_EDIT_WIDTH;
+    let save_width = PREVIEW_ACTION_SAVE_WIDTH;
+    let cancel_width = PREVIEW_ACTION_CANCEL_WIDTH;
+    let remove_x = (action_frame.size.width - PREVIEW_ACTION_BUTTON_PADDING - remove_width)
+        .max(PREVIEW_ACTION_BUTTON_PADDING);
+    let edit_x =
+        (remove_x - PREVIEW_ACTION_BUTTON_SPACING - edit_width).max(PREVIEW_ACTION_BUTTON_PADDING);
+    let save_x = (action_frame.size.width - PREVIEW_ACTION_BUTTON_PADDING - save_width)
+        .max(PREVIEW_ACTION_BUTTON_PADDING);
+    let cancel_x =
+        (save_x - PREVIEW_ACTION_BUTTON_SPACING - cancel_width).max(PREVIEW_ACTION_BUTTON_PADDING);
+    let edit_frame = NSRect::new(
+        NSPoint::new(edit_x, button_y),
+        NSSize::new(edit_width, PREVIEW_ACTION_BUTTON_HEIGHT),
+    );
+    let remove_frame = NSRect::new(
+        NSPoint::new(remove_x, button_y),
+        NSSize::new(remove_width, PREVIEW_ACTION_BUTTON_HEIGHT),
+    );
+    let save_frame = NSRect::new(
+        NSPoint::new(save_x, button_y),
+        NSSize::new(save_width, PREVIEW_ACTION_BUTTON_HEIGHT),
+    );
+    let cancel_frame = NSRect::new(
+        NSPoint::new(cancel_x, button_y),
+        NSSize::new(cancel_width, PREVIEW_ACTION_BUTTON_HEIGHT),
+    );
     let placeholder_frame = NSRect::new(
         NSPoint::new(text_area_frame.origin.x, placeholder_origin_y),
         NSSize::new(text_area_frame.size.width, placeholder_height),
@@ -438,6 +1000,11 @@ unsafe fn apply_preview_subview_layout(bounds: NSRect, refs: &ClipboardPreviewRe
     let _: () = msg_send![placeholder, setFrame: placeholder_frame];
     let _: () = msg_send![title_field, setFrame: title_frame];
     let _: () = msg_send![detail_field, setFrame: detail_frame];
+    let _: () = msg_send![action_bar, setFrame: action_frame];
+    let _: () = msg_send![edit_button, setFrame: edit_frame];
+    let _: () = msg_send![remove_button, setFrame: remove_frame];
+    let _: () = msg_send![save_button, setFrame: save_frame];
+    let _: () = msg_send![cancel_button, setFrame: cancel_frame];
 }
 
 pub fn refresh_clipboard_preview_layout() {
@@ -512,11 +1079,7 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let _: () = msg_send![layer, setBorderWidth: 0.0f64];
     let _: () = msg_send![preview, setAutoresizingMask: 16]; // height only
     let content_inset = style::PREVIEW_CONTENT_INSET;
-    let text_area_height = (frame.size.height - content_inset - PREVIEW_HEADER_HEIGHT).max(140.0);
-    let text_area_frame = NSRect::new(
-        NSPoint::new(content_inset, content_inset),
-        NSSize::new(frame.size.width - content_inset * 2.0, text_area_height),
-    );
+    let text_area_frame = preview_content_frame(frame);
     let text_bg: id = msg_send![class!(NSVisualEffectView), alloc];
     let text_bg: id = msg_send![text_bg, initWithFrame: text_area_frame];
     let _: () = msg_send![text_bg, setMaterial: 12];
@@ -561,6 +1124,76 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let _: () = msg_send![detail_field, setFont: detail_font];
     let _: () = msg_send![detail_field, setHidden: YES];
     let _: () = msg_send![preview, addSubview: detail_field];
+
+    // Action bar (Edit / Remove / Save / Cancel), shown on hover when a row is selected
+    let action_frame = preview_action_frame(frame);
+    let action_bar: id = msg_send![class!(NSView), alloc];
+    let action_bar: id = msg_send![action_bar, initWithFrame: action_frame];
+    let _: () = msg_send![action_bar, setWantsLayer: YES];
+    let action_layer: id = msg_send![action_bar, layer];
+    let action_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.16f64 alpha:0.35f64];
+    let action_bg_cg: id = msg_send![action_bg, CGColor];
+    let _: () = msg_send![action_layer, setBackgroundColor: action_bg_cg];
+    let _: () = msg_send![action_layer, setCornerRadius: 12.0f64];
+    let _: () = msg_send![action_bar, setHidden: YES];
+
+    let actions_target = preview_actions();
+
+    let edit_button: id = msg_send![class!(NSButton), alloc];
+    let edit_button: id = msg_send![edit_button, initWithFrame:NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PREVIEW_ACTION_EDIT_WIDTH, PREVIEW_ACTION_BUTTON_HEIGHT))];
+    let _: () = msg_send![edit_button, setBezelStyle: 1];
+    let _: () = msg_send![edit_button, setBordered: YES];
+    let _: () = msg_send![edit_button, setTitle: NSString::alloc(nil).init_str("Edit")];
+    let edit_font: id = msg_send![class!(NSFont), systemFontOfSize:12.0 weight:0.4];
+    let edit_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.85f64];
+    set_button_title(edit_button, "Edit", edit_font, edit_color);
+    let _: () = msg_send![edit_button, setContentTintColor: edit_color];
+    let _: () = msg_send![edit_button, setTarget: actions_target];
+    let _: () = msg_send![edit_button, setAction: sel!(editClipboardEntry:)];
+
+    let remove_button: id = msg_send![class!(NSButton), alloc];
+    let remove_button: id = msg_send![remove_button, initWithFrame:NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PREVIEW_ACTION_REMOVE_WIDTH, PREVIEW_ACTION_BUTTON_HEIGHT))];
+    let _: () = msg_send![remove_button, setBezelStyle: 1];
+    let _: () = msg_send![remove_button, setBordered: YES];
+    let _: () = msg_send![remove_button, setTitle: NSString::alloc(nil).init_str("Remove")];
+    let remove_font: id = msg_send![class!(NSFont), systemFontOfSize:12.0 weight:0.45];
+    let remove_color: id = msg_send![class!(NSColor), colorWithCalibratedRed:0.95f64 green:0.25f64 blue:0.28f64 alpha:0.95f64];
+    set_button_title(remove_button, "Remove", remove_font, remove_color);
+    let _: () = msg_send![remove_button, setContentTintColor: remove_color];
+    let _: () = msg_send![remove_button, setTarget: actions_target];
+    let _: () = msg_send![remove_button, setAction: sel!(deleteClipboardEntry:)];
+
+    let save_button: id = msg_send![class!(NSButton), alloc];
+    let save_button: id = msg_send![save_button, initWithFrame:NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PREVIEW_ACTION_SAVE_WIDTH, PREVIEW_ACTION_BUTTON_HEIGHT))];
+    let _: () = msg_send![save_button, setBezelStyle: 1];
+    let _: () = msg_send![save_button, setBordered: YES];
+    let _: () = msg_send![save_button, setTitle: NSString::alloc(nil).init_str("Save")];
+    let save_font: id = msg_send![class!(NSFont), systemFontOfSize:12.0 weight:0.5];
+    let save_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.9f64];
+    set_button_title(save_button, "Save", save_font, save_color);
+    let _: () = msg_send![save_button, setContentTintColor: save_color];
+    let _: () = msg_send![save_button, setTarget: actions_target];
+    let _: () = msg_send![save_button, setAction: sel!(saveClipboardEdit:)];
+    let _: () = msg_send![save_button, setHidden: YES];
+
+    let cancel_button: id = msg_send![class!(NSButton), alloc];
+    let cancel_button: id = msg_send![cancel_button, initWithFrame:NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PREVIEW_ACTION_CANCEL_WIDTH, PREVIEW_ACTION_BUTTON_HEIGHT))];
+    let _: () = msg_send![cancel_button, setBezelStyle: 1];
+    let _: () = msg_send![cancel_button, setBordered: YES];
+    let _: () = msg_send![cancel_button, setTitle: NSString::alloc(nil).init_str("Cancel")];
+    let cancel_font: id = msg_send![class!(NSFont), systemFontOfSize:12.0 weight:0.4];
+    let cancel_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.8f64];
+    set_button_title(cancel_button, "Cancel", cancel_font, cancel_color);
+    let _: () = msg_send![cancel_button, setContentTintColor: cancel_color];
+    let _: () = msg_send![cancel_button, setTarget: actions_target];
+    let _: () = msg_send![cancel_button, setAction: sel!(cancelClipboardEdit:)];
+    let _: () = msg_send![cancel_button, setHidden: YES];
+
+    let _: () = msg_send![action_bar, addSubview: edit_button];
+    let _: () = msg_send![action_bar, addSubview: remove_button];
+    let _: () = msg_send![action_bar, addSubview: cancel_button];
+    let _: () = msg_send![action_bar, addSubview: save_button];
+    let _: () = msg_send![preview, addSubview: action_bar];
 
     // Text scroll + view
     let text_scroll: id = msg_send![class!(NSScrollView), alloc];
@@ -614,12 +1247,29 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let _: () = msg_send![placeholder, setStringValue: NSString::alloc(nil).init_str("Clipboard preview\nSelect an entry to view details")];
     let _: () = msg_send![preview, addSubview: placeholder];
 
+    // Hover tracking for action bar
+    let tracking_opts: u64 = 0x01 | 0x80 | 0x200; // entered/exited + active always + in visible rect
+    let tracking: id = msg_send![class!(NSTrackingArea), alloc];
+    let tracking: id = msg_send![
+        tracking,
+        initWithRect:NSRect::new(NSPoint::new(0.0, 0.0), frame.size)
+        options:tracking_opts
+        owner:actions_target
+        userInfo:nil
+    ];
+    let _: () = msg_send![preview, addTrackingArea: tracking];
+
     let _: () = msg_send![content_view, addSubview: preview];
 
     let _ = CLIPBOARD_PREVIEW.set(ClipboardPreviewRefs {
         root: preview as usize,
         title_field: title_field as usize,
         detail_field: detail_field as usize,
+        action_bar: action_bar as usize,
+        edit_button: edit_button as usize,
+        remove_button: remove_button as usize,
+        save_button: save_button as usize,
+        cancel_button: cancel_button as usize,
         placeholder_field: placeholder as usize,
         text_scroll: text_scroll as usize,
         text_view: text_view as usize,
