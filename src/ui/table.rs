@@ -514,7 +514,7 @@ pub fn schedule_table_update_next_tick() {
                     Ok(m) => *m,
                     Err(_) => TableMode::Search,
                 };
-                if mode == TableMode::ClipboardHistory {
+                if should_show_preview_for_mode(mode) {
                     update_clipboard_preview_selection(Some(0));
                 } else {
                     update_clipboard_preview_selection(None);
@@ -993,7 +993,7 @@ pub unsafe fn register_table_delegate_class() {
                 Err(_) => TableMode::Search,
             };
             let clipboard_mode = mode == TableMode::ClipboardHistory;
-            if mode == TableMode::ClipboardHistory {
+            if should_show_preview_for_mode(mode) {
                 update_clipboard_preview_selection(row_option);
             } else {
                 update_clipboard_preview_selection(None);

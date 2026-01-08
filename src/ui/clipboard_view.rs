@@ -659,6 +659,11 @@ fn preview_data_for_row(row: usize) -> Option<search_engine::SearchResult> {
     results.get(row).cloned()
 }
 
+fn table_labels_for_row(row: usize) -> Option<(String, String)> {
+    let rows = TABLE_DATA.lock().ok()?;
+    rows.get(row).cloned()
+}
+
 fn detail_label_for_entry(
     entry: &search_engine::SearchResult,
 ) -> Option<(String, String, Option<String>)> {
@@ -1022,7 +1027,11 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
                     _ => {}
                 }
             }
-            set_placeholder_for_mode(mode);
+            if let Some((title, subtitle)) = table_labels_for_row(selected_row) {
+                show_preview_message(&title, &subtitle, "No preview available");
+            } else {
+                set_placeholder_for_mode(mode);
+            }
         }
         TableMode::Settings => {
             set_placeholder_for_mode(mode);
