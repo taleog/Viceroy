@@ -1,0 +1,19 @@
+# Build artifacts
+/target/
+/Viceroy.app/
+
+# macOS noise
+/.DS_Store
+
+# Local environment files
+/.env
+/.env.*
+/*.local
+
+# Local signing and secret material
+/*.key
+/*.pem
+/*.p12
+/*.mobileprovision
+/github
+/github.pub

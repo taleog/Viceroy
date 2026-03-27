@@ -1,11 +1,12 @@
 # App Bundle Build
 
 The `build_app.sh` script packages Viceroy into a proper macOS `.app` bundle.
+The generated `Viceroy.app` bundle is intentionally not tracked in git.
 
 ## Quick Start
 
 ```bash
-./build_app.sh
+make app
 ```
 
 This creates `Viceroy.app` in the project root.
@@ -24,12 +25,17 @@ cp -r Viceroy.app /Applications/
 
 ## Icon (Optional)
 
-To add a custom icon:
+The app bundle is built from tracked assets in `icons/`:
 
-1. Place a 1024x1024 PNG at `Viceroy.app/Contents/Resources/icon.png`
-2. Re-run `./build_app.sh`
+- `icons/icon.icns` is copied directly when present
+- `icons/icon.png` is used as a fallback and converted into `AppIcon.icns`
 
-The script will auto-generate the `.icns` file if `sips` and `iconutil` are available (standard on macOS).
+To customize the icon:
+
+1. Replace `icons/icon.icns` or `icons/icon.png`
+2. Re-run `make app`
+
+The PNG fallback path requires `sips` and `iconutil`, which ship with macOS.
 
 ## Distribution
 

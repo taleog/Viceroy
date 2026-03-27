@@ -4,6 +4,8 @@ set -e
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="Viceroy"
 BUNDLE_ID="com.viceroy.app"
+ICON_ICNS_SOURCE="$PROJECT_ROOT/icons/icon.icns"
+ICON_PNG_SOURCE="$PROJECT_ROOT/icons/icon.png"
 # Extract version from Cargo.toml
 VERSION=$(grep '^version = ' "$PROJECT_ROOT/Cargo.toml" | head -1 | sed 's/version = "\(.*\)"/\1/')
 
@@ -59,21 +61,25 @@ cat > "$CONTENTS_DIR/Info.plist" << EOF
 </plist>
 EOF
 
-# Create icon if imagemagick/sips available (optional)
-if [ -f "$RESOURCES_DIR/icon.png" ]; then
-    echo "🎨 Converting icon..."
+# Copy a tracked icon asset into the bundle so the generated app does not rely
+# on any files inside the ignored Viceroy.app directory.
+if [ -f "$ICON_ICNS_SOURCE" ]; then
+    echo "🎨 Copying app icon..."
+    cp "$ICON_ICNS_SOURCE" "$RESOURCES_DIR/AppIcon.icns"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string 'AppIcon'" "$CONTENTS_DIR/Info.plist" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile 'AppIcon'" "$CONTENTS_DIR/Info.plist"
+elif [ -f "$ICON_PNG_SOURCE" ]; then
+    echo "🎨 Converting PNG icon..."
     mkdir -p "$RESOURCES_DIR/AppIcon.iconset"
-    
-    # Generate iconset (requires source icon.png at 1024x1024)
+
     for size in 16 32 128 256 512; do
-        sips -z $size $size "$RESOURCES_DIR/icon.png" --out "$RESOURCES_DIR/AppIcon.iconset/icon_${size}x${size}.png" 2>/dev/null || true
-        [ $size -le 512 ] && sips -z $((size*2)) $((size*2)) "$RESOURCES_DIR/icon.png" --out "$RESOURCES_DIR/AppIcon.iconset/icon_${size}x${size}@2x.png" 2>/dev/null || true
+        sips -z $size $size "$ICON_PNG_SOURCE" --out "$RESOURCES_DIR/AppIcon.iconset/icon_${size}x${size}.png" 2>/dev/null || true
+        [ $size -le 512 ] && sips -z $((size*2)) $((size*2)) "$ICON_PNG_SOURCE" --out "$RESOURCES_DIR/AppIcon.iconset/icon_${size}x${size}@2x.png" 2>/dev/null || true
     done
-    
+
     iconutil -c icns "$RESOURCES_DIR/AppIcon.iconset" -o "$RESOURCES_DIR/AppIcon.icns" 2>/dev/null || true
     rm -rf "$RESOURCES_DIR/AppIcon.iconset"
-    
-    # Update plist with icon reference
+
     /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string 'AppIcon'" "$CONTENTS_DIR/Info.plist" 2>/dev/null || \
     /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile 'AppIcon'" "$CONTENTS_DIR/Info.plist"
 fi

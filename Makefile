@@ -14,7 +14,7 @@ MOCK_SERVER_LOG ?= /tmp/viceroy-mock-server.log
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup fmt lint test test-updater run release clean mock-server mock-update-check mock-e2e check version bump-version
+.PHONY: help setup fmt lint test test-updater run release app install-app clean mock-server mock-update-check mock-e2e check version bump-version
 
 help:
 	@echo "Viceroy Development Commands (v$(VERSION))"
@@ -29,6 +29,8 @@ help:
 	@echo ""
 	@echo "Build & Release:"
 	@echo "  make release                               # Build target/release/$(PACKAGE)"
+	@echo "  make app                                   # Build Viceroy.app in the repo root"
+	@echo "  make install-app                           # Build, copy to /Applications, and open it"
 	@echo "  make version                               # Show current version"
 	@echo "  make clean                                 # Remove target artifacts"
 	@echo ""
@@ -68,6 +70,12 @@ $(RELEASE_BIN):
 
 release: $(RELEASE_BIN)
 	@echo "Release binary ready at $(RELEASE_BIN)"
+
+app: $(RELEASE_BIN)
+	./build_app.sh
+
+install-app:
+	./install_and_open_viceroy.sh
 
 clean:
 	$(CARGO) clean

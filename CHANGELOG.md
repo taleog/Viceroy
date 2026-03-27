@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Version scheme updated to alpha release (0.1.0-alpha.1)
+- Repository cleanup for public development: generated `Viceroy.app` is no longer tracked, bundle assets now build from `icons/`, and setup docs now point contributors to source and release-based install paths
 
 ## [0.1.0-alpha.1] - 2024-12-04
 

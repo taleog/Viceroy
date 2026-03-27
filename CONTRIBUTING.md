@@ -4,8 +4,8 @@ Thank you for your interest in contributing to Viceroy! This document provides g
 
 ## Development Status
 
-Viceroy is currently in **private alpha** (version 0.1.0-alpha.x). This means:
-- The app is not publicly released
+Viceroy is currently in **early alpha** (version 0.1.0-alpha.x). This means:
+- The app is publicly visible but still evolving quickly
 - APIs and features may change without notice
 - We welcome contributions but expect rough edges
 
@@ -32,6 +32,9 @@ cargo test
 
 # Run the app
 cargo run
+
+# Build the macOS app bundle
+make app
 ```
 
 ## Development Workflow

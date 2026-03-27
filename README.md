@@ -7,7 +7,7 @@
 Viceroy is a lightweight **native macOS launcher** written in Rust.  
 It gives you a fast, Spotlight-style command palette for **apps, files, clipboard history, system commands, emoji, web search, and a calculator** — all in one place.
 
-> ⚠️ **Status: Private Alpha (0.1.0-alpha.x)** — Not publicly released. Expect rough edges and breaking changes.
+> ⚠️ **Status: Early alpha (0.1.0-alpha.x)**. Expect rough edges and breaking changes while the project matures in public.
 
 ---
 
@@ -84,12 +84,21 @@ It gives you a fast, Spotlight-style command palette for **apps, files, clipboar
 
 ## Getting Started
 
-### 1. Clone and build
+### Option 1: Download a release
 
 ```bash
-# Clone the repo
-git clone <your-repo-url> viceroy
-cd viceroy
+# Download the latest GitHub release, then unzip it
+# and move Viceroy.app into /Applications
+open https://github.com/taleog/Viceroy/releases
+```
+
+Releases are built in CI and include a generated macOS app bundle, so the repository does not track `Viceroy.app`.
+
+### Option 2: Build from source
+
+```bash
+git clone https://github.com/taleog/Viceroy.git
+cd Viceroy
 
 # Run in debug mode
 cargo run
@@ -98,12 +107,12 @@ cargo run
 This will start Viceroy and show the floating search window.  
 On first run, macOS may ask for **Accessibility** permission so the global hotkey can work.
 
-### 2. Build a `.app` bundle
+### Build a `.app` bundle locally
 
-There is a helper script to create a proper macOS app bundle:
+There is a helper command to create a proper macOS app bundle from the tracked source and icon assets:
 
 ```bash
-./build_app.sh
+make app
 ```
 
 This produces `Viceroy.app` in the project root.
@@ -114,6 +123,12 @@ You can then:
 # Install locally (optional)
 cp -r Viceroy.app /Applications/
 open /Applications/Viceroy.app
+```
+
+Or use the one-step helper:
+
+```bash
+make install-app
 ```
 
 For more details (DMG, signing, etc.), see [`APP_BUNDLE.md`](./APP_BUNDLE.md).
@@ -279,6 +294,8 @@ make help
 
 **Build & Release:**
 - `make release` — Build release binary at `target/release/viceroy`
+- `make app` — Build `Viceroy.app` in the repo root
+- `make install-app` — Build, install to `/Applications`, and open the app
 - `make version` — Show current version
 
 **Update System Testing:**
