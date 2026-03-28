@@ -400,7 +400,13 @@ impl ViceroyWindowsApp {
                         return;
                     }
                     match sync::normalize_server_url(input) {
-                        Ok(url) => url,
+                        Ok(url) => {
+                            if let Err(err) = sync::validate_server_url_for_local_device(&url) {
+                                self.sync_message = format!("Invalid sync server URL: {err:#}");
+                                return;
+                            }
+                            url
+                        }
                         Err(err) => {
                             self.sync_message = format!("Invalid sync server URL: {err:#}");
                             return;

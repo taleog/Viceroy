@@ -1,6 +1,6 @@
 # Viceroy Development Roadmap
 
-> Last updated: 2024-12-04
+> Last updated: 2026-03-28
 
 ## Release Status: v0.1.0-alpha.1 (Private Alpha)
 
@@ -16,6 +16,10 @@
 - [x] Tab navigation - toggle between search and clipboard history views
 - [x] Search latency metrics - performance logging for all sources
 - [x] Animation helpers - slide+spring show and fade+scale hide (defined, not yet integrated)
+- [x] Windows desktop app - native Windows shell sharing the Rust backend
+- [x] Self-hosted clipboard sync server - `viceroy-sync-server` with SQLite storage and WebSocket fan-out
+- [x] Cross-device sync settings - macOS and Windows settings UIs with persisted sync configuration
+- [x] Settings compatibility migration - older flat sync keys migrate into the nested `sync` config section
 
 ### ⏳ In Progress / Blocked
 - [ ] **Tab responsiveness optimization** - clipboard view loads slowly on first access
@@ -63,6 +67,7 @@
    - Target: Richer search results for power users
 
 6. **Settings UI improvements**
+   - Add sync connection test button
    - Add file search enable/disable toggle
    - Add keyboard shortcuts help panel
    - Add clipboard retention policy settings
@@ -95,7 +100,7 @@
 - [ ] Code snippet search and formatting
 - [ ] Web search engine switcher
 - [ ] Custom search plugins/extensions
-- [ ] Sync across devices (optional)
+- [ ] Shared/team sync auth model beyond a single bearer token
 
 ### Platform Support
 - [ ] iOS/iPadOS companion app
@@ -114,7 +119,7 @@
 3. **Animation integration** - helpers exist but not used
 4. **Error handling** - limited user-facing error messages
 5. **Testing** - minimal automated test coverage
-6. **Documentation** - API docs missing, usage guide needed
+6. **Documentation** - keep branch capabilities and setup docs aligned across platforms
 
 ## Success Metrics
 
@@ -130,7 +135,7 @@
 - Spotlight search doesn't work reliably (system limitation)
 - Clipboard monitoring limited to 200ms polling (system limitation)
 - No web-based UI (by design - native only)
-- No Linux/Windows ports (macOS-only app)
+- No polished Linux desktop UI yet (CLI fallback only outside macOS/Windows)
 - Clipboard history limited to ~10K items (storage/performance)
 
 ## Links & Resources

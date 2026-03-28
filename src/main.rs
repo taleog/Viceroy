@@ -19,6 +19,8 @@ mod search_engine;
 #[cfg(target_os = "macos")]
 mod settings;
 #[cfg(target_os = "macos")]
+mod sync;
+#[cfg(target_os = "macos")]
 mod system_commands;
 #[cfg(target_os = "macos")]
 mod ui;

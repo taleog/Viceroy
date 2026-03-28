@@ -8,9 +8,9 @@ use std::os::raw::c_char;
 use std::sync::OnceLock;
 
 use crate::settings;
+use crate::sync;
 use crate::ui::state::{TableMode, DISMISS_ON_CLICK_AWAY, DISMISS_ON_ESCAPE, TABLE_MODE};
 use crate::ui::table;
-use viceroy::sync;
 
 static SETTINGS_PANEL: OnceLock<usize> = OnceLock::new();
 static SETTINGS_ACTION_TARGET: OnceLock<usize> = OnceLock::new();
@@ -563,7 +563,13 @@ unsafe fn apply_settings_from_ui() {
                 return;
             }
             match sync::normalize_server_url(input) {
-                Ok(url) => url,
+                Ok(url) => {
+                    if let Err(err) = sync::validate_server_url_for_local_device(&url) {
+                        set_sync_message(&format!("Invalid sync server URL: {err:#}"));
+                        return;
+                    }
+                    url
+                }
                 Err(err) => {
                     set_sync_message(&format!("Invalid sync server URL: {err:#}"));
                     return;

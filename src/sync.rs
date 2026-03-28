@@ -6,9 +6,11 @@ use lazy_static::lazy_static;
 use reqwest::Url;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration as StdDuration;
 use tokio::runtime::Runtime;
 use tokio::sync::Notify;
 use tokio::time::{sleep, Duration};
@@ -135,6 +137,36 @@ pub fn normalize_server_url(input: &str) -> Result<String> {
     }
 
     Ok(url.to_string().trim_end_matches('/').to_string())
+}
+
+pub fn validate_server_url_for_local_device(server_url: &str) -> Result<()> {
+    let url = Url::parse(server_url).context("invalid sync server_url")?;
+    if !is_loopback_host(url.host_str()) {
+        return Ok(());
+    }
+
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| anyhow!("sync server URL must include a port or use http/https"))?;
+
+    let Some(host) = url.host_str() else {
+        return Ok(());
+    };
+
+    let mut resolved = (host, port)
+        .to_socket_addrs()
+        .with_context(|| format!("failed to resolve sync server host {host}"))?;
+
+    let timeout = StdDuration::from_millis(750);
+    let reachable = resolved.any(|addr| TcpStream::connect_timeout(&addr, timeout).is_ok());
+
+    if reachable {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "sync server URL points at this device ({host}:{port}), but no server is reachable there; if your sync server runs on another machine, use that machine's LAN IP or hostname instead"
+    ))
 }
 
 pub fn start_background_worker() -> Result<()> {
@@ -752,6 +784,10 @@ fn websocket_url(server_url: &str, device: &LocalDevice) -> Result<Url> {
     Ok(url)
 }
 
+fn is_loopback_host(host: Option<&str>) -> bool {
+    matches!(host, Some("127.0.0.1" | "localhost" | "::1"))
+}
+
 fn current_cursor() -> Result<Option<i64>> {
     let conn = database::get_connection()?;
     let value = conn
@@ -881,5 +917,15 @@ mod tests {
     fn normalize_server_url_rejects_unspecified_bind_host() {
         let err = normalize_server_url("0.0.0.0:8787").unwrap_err();
         assert!(format!("{err:#}").contains("reachable host"));
+    }
+
+    #[test]
+    fn loopback_host_detection_matches_local_hosts() {
+        assert!(is_loopback_host(Some("127.0.0.1")));
+        assert!(is_loopback_host(Some("localhost")));
+        assert!(is_loopback_host(Some("::1")));
+        assert!(!is_loopback_host(Some("192.168.1.50")));
+        assert!(!is_loopback_host(Some("sync.example.com")));
+        assert!(!is_loopback_host(None));
     }
 }

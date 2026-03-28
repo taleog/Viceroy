@@ -13,7 +13,8 @@ Viceroy is currently in **early alpha** (version 0.1.0-alpha.x). This means:
 
 ### Prerequisites
 
-- macOS (Intel or Apple Silicon)
+- macOS (Intel or Apple Silicon) for the native launcher
+- Windows for the Windows desktop app on this branch
 - Rust toolchain (2021 edition)
 - Git
 
@@ -30,11 +31,14 @@ cargo build
 # Run tests
 cargo test
 
-# Run the app
+# Run the app for your current platform
 cargo run
 
 # Build the macOS app bundle
 make app
+
+# Run the self-hosted sync server
+cargo run --bin viceroy-sync-server
 ```
 
 ## Development Workflow
@@ -113,6 +117,12 @@ All PRs require review before merging. Reviewers will check:
 - Use `msg_send!` for Objective-C interop, always wrapped in `unsafe`
 - Test on both Intel and Apple Silicon when possible
 
+### Windows / Cross-Platform Notes
+
+- Keep shared backend logic in platform-neutral modules when possible
+- When changing sync behavior, verify both `src/windows_app.rs` and the macOS settings/UI paths
+- If you change the sync protocol or settings shape, update [`docs/sync-server.md`](docs/sync-server.md) and the README in the same PR
+
 ## Testing
 
 ### Running Tests
@@ -150,7 +160,7 @@ Use the bug report issue template. Include:
 - Clear description of the issue
 - Steps to reproduce
 - Expected vs actual behavior
-- System information (macOS version, architecture)
+- System information (OS, version, architecture)
 - Logs if applicable
 
 ### Feature Requests

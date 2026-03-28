@@ -17,6 +17,7 @@ use crate::clipboard;
 use crate::database;
 use crate::search_engine;
 use crate::settings;
+use crate::sync;
 use crate::ui;
 use log::{error, info};
 use std::sync::atomic::Ordering;
@@ -277,10 +278,10 @@ impl AppDelegate for ViceroyApp {
         if let Err(e) = database::init() {
             eprintln!("Database init error: {}", e);
         }
-        if let Err(err) = viceroy::sync::init() {
+        if let Err(err) = sync::init() {
             eprintln!("Sync init error: {err:#}");
         }
-        if let Err(err) = viceroy::sync::start_background_worker() {
+        if let Err(err) = sync::start_background_worker() {
             eprintln!("Sync worker start error: {err:#}");
         }
 
