@@ -1,5 +1,6 @@
 use crate::app_launcher;
 use crate::database;
+use crate::sync;
 use anyhow::{anyhow, Context, Result};
 use arboard::{Clipboard, ImageData};
 use base64::engine::general_purpose::STANDARD;
@@ -166,6 +167,7 @@ fn should_skip_duplicate_text(
     let mut stmt = conn.prepare(
         "SELECT content, content_type, app_name, timestamp 
          FROM clipboard_history 
+         WHERE deleted_at IS NULL
          ORDER BY id DESC 
          LIMIT 5",
     )?;
@@ -211,6 +213,10 @@ async fn save_clipboard_entry(content: &str, app_name: &Option<String>) -> Resul
             Option::<i64>::None
         ],
     )?;
+    let entry_id = conn.last_insert_rowid();
+    if let Err(err) = sync::queue_local_clipboard_upsert(entry_id) {
+        eprintln!("Failed to queue clipboard sync for text entry {entry_id}: {err:#}");
+    }
     prune_old(&conn)?;
     Ok(())
 }
@@ -239,6 +245,10 @@ async fn save_clipboard_image(image: &ImageData<'_>, app_name: &Option<String>) 
             Some(image.height as i64)
         ],
     )?;
+    let entry_id = conn.last_insert_rowid();
+    if let Err(err) = sync::queue_local_clipboard_upsert(entry_id) {
+        eprintln!("Failed to queue clipboard sync for image entry {entry_id}: {err:#}");
+    }
     prune_old(&conn)?;
     Ok(())
 }
@@ -256,6 +266,7 @@ pub async fn get_history(limit: usize) -> Result<Vec<ClipboardEntry>> {
     let mut stmt = conn.prepare(
         "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned, image_width, image_height 
          FROM clipboard_history 
+         WHERE deleted_at IS NULL
          ORDER BY is_pinned DESC, timestamp DESC 
          LIMIT ?1"
     )?;
@@ -312,7 +323,8 @@ fn search_history_blocking(query: &str) -> Result<Vec<ClipboardEntry>> {
     let mut stmt = conn.prepare(
         "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned, image_width, image_height 
          FROM clipboard_history 
-         WHERE content LIKE ?1 OR custom_name LIKE ?1 OR app_name LIKE ?1
+         WHERE deleted_at IS NULL
+           AND (content LIKE ?1 OR custom_name LIKE ?1 OR app_name LIKE ?1)
          ORDER BY is_pinned DESC, timestamp DESC 
          LIMIT 100"
     )?;
@@ -339,25 +351,46 @@ fn search_history_blocking(query: &str) -> Result<Vec<ClipboardEntry>> {
 
 fn delete_entry_blocking(id: i64) -> Result<()> {
     let conn = database::get_connection()?;
-    conn.execute("DELETE FROM clipboard_history WHERE id = ?1", params![id])?;
+    let deleted_at = Utc::now().timestamp();
+    let rows_updated = conn.execute(
+        "UPDATE clipboard_history
+         SET deleted_at = ?1
+         WHERE id = ?2 AND deleted_at IS NULL",
+        params![deleted_at, id],
+    )?;
+    if rows_updated > 0 {
+        if let Err(err) = sync::queue_local_clipboard_delete(id) {
+            eprintln!("Failed to queue clipboard delete sync for entry {id}: {err:#}");
+        }
+    }
     Ok(())
 }
 
 fn update_entry_blocking(id: i64, content: String, custom_name: Option<String>) -> Result<()> {
     let conn = database::get_connection()?;
-    conn.execute(
+    let rows_updated = conn.execute(
         "UPDATE clipboard_history SET content = ?1, custom_name = ?2 WHERE id = ?3",
         params![content, custom_name, id],
     )?;
+    if rows_updated > 0 {
+        if let Err(err) = sync::queue_local_clipboard_upsert(id) {
+            eprintln!("Failed to queue clipboard sync for updated entry {id}: {err:#}");
+        }
+    }
     Ok(())
 }
 
 fn update_custom_name_blocking(id: i64, name: Option<String>) -> Result<()> {
     let conn = database::get_connection()?;
-    conn.execute(
+    let rows_updated = conn.execute(
         "UPDATE clipboard_history SET custom_name = ?1 WHERE id = ?2",
         params![name, id],
     )?;
+    if rows_updated > 0 {
+        if let Err(err) = sync::queue_local_clipboard_upsert(id) {
+            eprintln!("Failed to queue clipboard sync for renamed entry {id}: {err:#}");
+        }
+    }
     Ok(())
 }
 

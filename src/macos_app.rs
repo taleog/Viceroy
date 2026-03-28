@@ -277,6 +277,9 @@ impl AppDelegate for ViceroyApp {
         if let Err(e) = database::init() {
             eprintln!("Database init error: {}", e);
         }
+        if let Err(err) = viceroy::sync::init() {
+            eprintln!("Sync init error: {err:#}");
+        }
 
         // Monitor clipboard in a background thread so history stays populated
         std::thread::spawn(|| {

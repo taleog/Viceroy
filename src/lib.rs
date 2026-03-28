@@ -7,6 +7,7 @@ pub mod emoji;
 pub mod file_search;
 pub mod search_engine;
 pub mod settings;
+pub mod sync;
 pub mod system_commands;
 pub mod updater;
 pub mod usage;

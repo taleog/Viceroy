@@ -7,7 +7,8 @@ use std::thread;
 use tokio::runtime::Runtime;
 use viceroy::search_engine::{self, SearchResult};
 use viceroy::{
-    app_launcher, clipboard, database, dictionary, system_commands, updater, usage, web_search,
+    app_launcher, clipboard, database, dictionary, sync, system_commands, updater, usage,
+    web_search,
 };
 
 pub fn run() {
@@ -24,6 +25,9 @@ pub fn run() {
     if let Err(err) = database::init() {
         eprintln!("Database init error: {err}");
         return;
+    }
+    if let Err(err) = sync::init() {
+        eprintln!("Sync init error: {err:#}");
     }
 
     start_clipboard_monitor();
