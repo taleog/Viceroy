@@ -1,1 +1,13 @@
+pub mod app_launcher;
+pub mod calculator;
+pub mod clipboard;
+pub mod database;
+pub mod dictionary;
+pub mod emoji;
+pub mod file_search;
+pub mod search_engine;
+pub mod settings;
+pub mod system_commands;
 pub mod updater;
+pub mod usage;
+pub mod web_search;

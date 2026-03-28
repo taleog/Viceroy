@@ -2,6 +2,7 @@ use anyhow::Result;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -38,10 +39,10 @@ pub fn search_files(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
         return Ok(cached);
     }
 
-    // Prefer Spotlight (mdfind) for fast, indexed file results.
-    let mut files = spotlight_search(query, CACHE_STORE_LIMIT).unwrap_or_default();
+    let mut files = native_search(query, CACHE_STORE_LIMIT).unwrap_or_default();
 
-    // Fall back to a lightweight index walk only when explicitly enabled.
+    // Fall back to a lightweight index walk when native search is unavailable
+    // or when users explicitly opt in on macOS.
     if files.is_empty() && fallback_enabled() {
         files = fallback_walk(query, CACHE_STORE_LIMIT);
     }
@@ -61,6 +62,17 @@ pub fn search_files(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
     Ok(files)
 }
 
+#[cfg(target_os = "macos")]
+fn native_search(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
+    spotlight_search(query, limit)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_search(_query: &str, _limit: usize) -> Result<Vec<FileInfo>> {
+    Ok(Vec::new())
+}
+
+#[cfg(target_os = "macos")]
 fn spotlight_search(query: &str, limit: usize) -> Result<Vec<FileInfo>> {
     let mut cmd = Command::new("mdfind");
     cmd.arg("-name").arg(query);
@@ -124,8 +136,11 @@ fn should_skip_path(path: &Path) -> bool {
 }
 
 fn fallback_enabled() -> bool {
-    // Disabled by default to prevent privacy prompts; users can opt-in via env var
-    // Set VICEROY_FALLBACK_FS=1 to enable
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+
+    // Disabled by default on macOS to prevent privacy prompts; users can opt-in via env var.
     std::env::var(FALLBACK_ENV)
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
         .unwrap_or(false)
@@ -165,37 +180,51 @@ fn get_fallback_index() -> Vec<FileInfo> {
 }
 
 fn build_fallback_index() -> Vec<FileInfo> {
-    // Build fallback index from user directories (Documents, Downloads, Desktop)
-    // Only called when VICEROY_FALLBACK_FS=1 is explicitly set
     let mut results = Vec::new();
 
-    if let Some(home) = dirs::home_dir() {
-        for subdir in &["Documents", "Downloads", "Desktop"] {
-            let root = home.join(subdir);
-            if !root.exists() {
+    for root in fallback_roots() {
+        if !root.exists() {
+            continue;
+        }
+
+        for entry in WalkDir::new(&root)
+            .max_depth(FALLBACK_MAX_DEPTH)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if results.len() >= FALLBACK_INDEX_LIMIT || results.len() >= FALLBACK_SCAN_LIMIT {
+                break;
+            }
+            let path = entry.path();
+            if should_skip_path(path) {
                 continue;
             }
-
-            for entry in WalkDir::new(&root)
-                .max_depth(FALLBACK_MAX_DEPTH)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                if results.len() >= FALLBACK_INDEX_LIMIT || results.len() >= FALLBACK_SCAN_LIMIT {
-                    break;
-                }
-                let path = entry.path();
-                if should_skip_path(path) {
-                    continue;
-                }
-                if let Some(info) = path_to_info(path.to_string_lossy().as_ref()) {
-                    results.push(info);
-                }
+            if let Some(info) = path_to_info(path.to_string_lossy().as_ref()) {
+                results.push(info);
             }
         }
     }
     results
+}
+
+fn fallback_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Some(path) = dirs::document_dir() {
+        roots.push(path);
+    }
+    if let Some(path) = dirs::download_dir() {
+        roots.push(path);
+    }
+    if let Some(path) = dirs::desktop_dir() {
+        roots.push(path);
+    }
+    if let Some(path) = dirs::picture_dir() {
+        roots.push(path);
+    }
+
+    roots
 }
 
 fn try_cached_results(query: &str) -> Option<Vec<FileInfo>> {

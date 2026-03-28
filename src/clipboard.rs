@@ -362,54 +362,82 @@ fn update_custom_name_blocking(id: i64, name: Option<String>) -> Result<()> {
 }
 
 pub async fn paste_to_active_app(content: &str) -> Result<()> {
-    let _guard = ClipboardMonitorPauseGuard::new();
-    // Store the frontmost app BEFORE modifying clipboard
     let previous_app = app_launcher::get_frontmost_app_name();
+    set_text_clipboard(content).await?;
 
-    // Copy to clipboard
-    let mut clipboard = Clipboard::new()?;
-    clipboard.set_text(content)?;
-    if let Ok(mut guard) = LAST_PROGRAMMATIC_TEXT.lock() {
-        *guard = Some((normalize_text(content), Utc::now().timestamp()));
-    }
-
-    // Delay to ensure clipboard is updated
-    sleep(Duration::from_millis(100)).await;
-
-    // Explicitly activate the previous app to ensure focus is correct before paste
     if let Some(app_name) = previous_app {
         activate_app(&app_name)?;
     }
 
-    // Longer pause to ensure focus is returned and app is ready
     sleep(Duration::from_millis(200)).await;
     send_paste_keystroke()?;
+    Ok(())
+}
+
+pub async fn restore_history_entry_to_clipboard(
+    content: &str,
+    content_type: &str,
+    _image_width: Option<i64>,
+    _image_height: Option<i64>,
+) -> Result<()> {
+    if content_type == "image" {
+        set_image_clipboard(content).await?;
+    } else {
+        set_text_clipboard(content).await?;
+    }
     Ok(())
 }
 
 pub async fn paste_history_entry(
     content: &str,
     content_type: &str,
-    _image_width: Option<i64>,
-    _image_height: Option<i64>,
+    image_width: Option<i64>,
+    image_height: Option<i64>,
 ) -> Result<()> {
-    // Pause monitor so we don't re-ingest the same entry after paste.
-    let _guard = ClipboardMonitorPauseGuard::new();
     if content_type == "image" {
+        let _ = (image_width, image_height);
         paste_image_to_active_app(content).await?;
     } else {
-        paste_to_active_app(content).await?;
+        restore_history_entry_to_clipboard(content, content_type, image_width, image_height)
+            .await?;
+        let previous_app = app_launcher::get_frontmost_app_name();
+        if let Some(app_name) = previous_app {
+            activate_app(&app_name)?;
+        }
+        sleep(Duration::from_millis(200)).await;
+        send_paste_keystroke()?;
     }
-    // Hold pause longer to ensure monitor doesn't capture the paste result
     sleep(Duration::from_millis(300)).await;
     Ok(())
 }
 
 async fn paste_image_to_active_app(content: &str) -> Result<()> {
-    let _guard = ClipboardMonitorPauseGuard::new();
-    // Store the frontmost app BEFORE modifying clipboard
     let previous_app = app_launcher::get_frontmost_app_name();
 
+    set_image_clipboard(content).await?;
+
+    if let Some(app_name) = previous_app {
+        activate_app(&app_name)?;
+    }
+
+    sleep(Duration::from_millis(200)).await;
+    send_paste_keystroke()?;
+    Ok(())
+}
+
+async fn set_text_clipboard(content: &str) -> Result<()> {
+    let _guard = ClipboardMonitorPauseGuard::new();
+    let mut clipboard = Clipboard::new()?;
+    clipboard.set_text(content)?;
+    if let Ok(mut guard) = LAST_PROGRAMMATIC_TEXT.lock() {
+        *guard = Some((normalize_text(content), Utc::now().timestamp()));
+    }
+    sleep(Duration::from_millis(100)).await;
+    Ok(())
+}
+
+async fn set_image_clipboard(content: &str) -> Result<()> {
+    let _guard = ClipboardMonitorPauseGuard::new();
     let image = decode_history_image(content)?;
     let mut clipboard = Clipboard::new()?;
     let hash = blake3::hash(&image.bytes);
@@ -417,18 +445,7 @@ async fn paste_image_to_active_app(content: &str) -> Result<()> {
     if let Ok(mut guard) = LAST_PROGRAMMATIC_IMAGE.lock() {
         guard.replace((hash, Utc::now().timestamp()));
     }
-
-    // Delay to ensure clipboard is updated
     sleep(Duration::from_millis(100)).await;
-
-    // Explicitly activate the previous app
-    if let Some(app_name) = previous_app {
-        activate_app(&app_name)?;
-    }
-
-    // Longer pause to ensure focus is returned
-    sleep(Duration::from_millis(200)).await;
-    send_paste_keystroke()?;
     Ok(())
 }
 
@@ -454,31 +471,69 @@ fn decode_history_image(content: &str) -> Result<ImageData<'static>> {
 }
 
 fn activate_app(app_name: &str) -> Result<()> {
-    let script = format!(
-        r#"tell application "{}" to activate"#,
-        app_name.replace('\"', "\\\"")
-    );
-    let status = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .status()
-        .context("failed to activate app")?;
-    if status.success() {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            r#"tell application "{}" to activate"#,
+            app_name.replace('\"', "\\\"")
+        );
+        let status = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .status()
+            .context("failed to activate app")?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(anyhow!("failed to activate app: {}", app_name));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app_name;
         Ok(())
-    } else {
-        Err(anyhow!("failed to activate app: {}", app_name))
     }
 }
 
 fn send_paste_keystroke() -> Result<()> {
-    let status = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(r#"tell application "System Events" to keystroke "v" using command down"#)
-        .status()
-        .context("failed to trigger paste keystroke")?;
-    if status.success() {
-        Ok(())
-    } else {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(r#"tell application "System Events" to keystroke "v" using command down"#)
+            .status()
+            .context("failed to trigger paste keystroke")?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(anyhow!("paste keystroke command failed"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')",
+            ])
+            .status()
+            .context("failed to trigger paste keystroke")?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(anyhow!("paste keystroke command failed"));
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let status = std::process::Command::new("xdotool")
+            .args(["key", "--clearmodifiers", "ctrl+v"])
+            .status()
+            .context("failed to trigger paste keystroke")?;
+        if status.success() {
+            return Ok(());
+        }
         Err(anyhow!("paste keystroke command failed"))
     }
 }

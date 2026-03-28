@@ -41,7 +41,21 @@ pub fn search_web(query: &str, engine: Option<&str>) -> Result<WebSearch> {
 }
 
 pub fn open_web_search(url: &str) -> Result<()> {
-    Command::new("open").arg(url).spawn()?;
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn()?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd").args(["/C", "start", "", url]).spawn()?;
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        Command::new("xdg-open").arg(url).spawn()?;
+    }
+
     Ok(())
 }
 
