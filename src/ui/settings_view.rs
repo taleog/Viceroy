@@ -28,7 +28,6 @@ struct SettingsControls {
     sync_server_url_field: usize,
     sync_auth_token_field: usize,
     sync_status_label: usize,
-    sync_pending_label: usize,
     sync_message_label: usize,
 }
 
@@ -266,7 +265,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
 
     // Sync card
     top_anchor = behavior_card_y - 24.0;
-    let sync_card_height = 240.0;
+    let sync_card_height = 320.0;
     let sync_card_y = (top_anchor - sync_card_height).max(card_margin);
     let sync_card: id = msg_send![class!(NSView), alloc];
     let sync_card: id = msg_send![sync_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, sync_card_y), NSSize::new(card_width, sync_card_height))];
@@ -375,16 +374,18 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_auth_token_field, setBordered: YES];
 
     let sync_status_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_status_label: id = msg_send![sync_status_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 94.0), NSSize::new(240.0, 32.0))];
+    let sync_status_label: id = msg_send![sync_status_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 82.0), NSSize::new(240.0, 130.0))];
     let _: () = msg_send![sync_status_label, setBezeled: NO];
     let _: () = msg_send![sync_status_label, setEditable: NO];
     let _: () = msg_send![sync_status_label, setDrawsBackground: NO];
     let _: () = msg_send![sync_status_label, setBordered: NO];
+    let _: () = msg_send![sync_status_label, setUsesSingleLineMode: NO];
+    let _: () = msg_send![sync_status_label, setLineBreakMode: 4];
     let _: () = msg_send![sync_status_label, setFont: caption_font];
     let _: () = msg_send![sync_status_label, setTextColor: caption_color];
 
     let sync_device_id_field: id = msg_send![class!(NSTextField), alloc];
-    let sync_device_id_field: id = msg_send![sync_device_id_field, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 66.0), NSSize::new(240.0, 24.0))];
+    let sync_device_id_field: id = msg_send![sync_device_id_field, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 52.0), NSSize::new(240.0, 24.0))];
     let _: () = msg_send![sync_device_id_field, setBezeled: NO];
     let _: () = msg_send![sync_device_id_field, setEditable: NO];
     let _: () = msg_send![sync_device_id_field, setDrawsBackground: NO];
@@ -393,17 +394,8 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_device_id_field, setFont: caption_font];
     let _: () = msg_send![sync_device_id_field, setTextColor: caption_color];
 
-    let sync_pending_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_pending_label: id = msg_send![sync_pending_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 42.0), NSSize::new(240.0, 22.0))];
-    let _: () = msg_send![sync_pending_label, setBezeled: NO];
-    let _: () = msg_send![sync_pending_label, setEditable: NO];
-    let _: () = msg_send![sync_pending_label, setDrawsBackground: NO];
-    let _: () = msg_send![sync_pending_label, setBordered: NO];
-    let _: () = msg_send![sync_pending_label, setFont: caption_font];
-    let _: () = msg_send![sync_pending_label, setTextColor: caption_color];
-
     let sync_message_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_message_label: id = msg_send![sync_message_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 10.0), NSSize::new(240.0, 28.0))];
+    let sync_message_label: id = msg_send![sync_message_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 14.0), NSSize::new(240.0, 28.0))];
     let _: () = msg_send![sync_message_label, setBezeled: NO];
     let _: () = msg_send![sync_message_label, setEditable: NO];
     let _: () = msg_send![sync_message_label, setDrawsBackground: NO];
@@ -425,7 +417,6 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_card, addSubview: sync_auth_token_field];
     let _: () = msg_send![sync_card, addSubview: sync_status_label];
     let _: () = msg_send![sync_card, addSubview: sync_device_id_field];
-    let _: () = msg_send![sync_card, addSubview: sync_pending_label];
     let _: () = msg_send![sync_card, addSubview: sync_message_label];
 
     let save_button_frame = NSRect::new(
@@ -473,7 +464,6 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
         sync_server_url_field: sync_server_url_field as usize,
         sync_auth_token_field: sync_auth_token_field as usize,
         sync_status_label: sync_status_label as usize,
-        sync_pending_label: sync_pending_label as usize,
         sync_message_label: sync_message_label as usize,
     };
     let _ = SETTINGS_CONTROLS.set(controls);
@@ -511,7 +501,7 @@ fn populate_controls_from_settings() {
                 );
                 set_string(
                     id_from(controls.sync_device_id_field),
-                    &format_device_id(&settings.sync.device_id),
+                    &settings.sync.device_id,
                 );
                 set_string(
                     id_from(controls.sync_server_url_field),
@@ -521,9 +511,26 @@ fn populate_controls_from_settings() {
                     id_from(controls.sync_auth_token_field),
                     settings.sync.auth_token.as_deref().unwrap_or(""),
                 );
-                refresh_sync_status_controls(Some(
+                let summary = build_sync_summary(&sync::SyncStatus {
+                    device: sync::LocalDevice {
+                        device_id: settings.sync.device_id.clone(),
+                        device_name: settings.sync.device_name.clone(),
+                        platform: std::env::consts::OS.to_string(),
+                    },
+                    server_url: settings.sync.server_url.clone(),
+                    connection_state: if settings.sync.enabled {
+                        sync::SyncConnectionState::Disconnected
+                    } else {
+                        sync::SyncConnectionState::Disabled
+                    },
+                    last_successful_sync_at: None,
+                    last_error: None,
+                    pending_operations: 0,
+                });
+                set_string(id_from(controls.sync_status_label), &summary);
+                set_sync_message(
                     "Sync status loaded. Save settings after changing server details.",
-                ));
+                );
             }
         }
     }
@@ -603,9 +610,10 @@ unsafe fn apply_settings_from_ui() {
         );
         match sync::init() {
             Ok(status) => {
+                set_sync_summary(&status);
                 set_string(
                     id_from(controls.sync_device_id_field),
-                    &format_device_id(&status.device.device_id),
+                    &status.device.device_id,
                 );
             }
             Err(err) => {
@@ -636,7 +644,10 @@ unsafe fn apply_settings_from_ui() {
         } else {
             "Sync settings saved."
         };
-        refresh_sync_status_controls(Some(sync_message));
+        if let Ok(status) = sync::status() {
+            set_sync_summary(&status);
+        }
+        set_sync_message(sync_message);
         slider_value_changed(id_from(controls.max_slider));
     }
 }
@@ -648,20 +659,10 @@ unsafe fn refresh_sync_status_controls(message: Option<&str>) {
 
     match sync::status() {
         Ok(status) => {
+            set_sync_summary(&status);
             set_string(
                 id_from(controls.sync_device_id_field),
-                &format_device_id(&status.device.device_id),
-            );
-            set_string(
-                id_from(controls.sync_status_label),
-                &format!(
-                    "Current device: {} ({})",
-                    status.device.device_name, status.device.platform
-                ),
-            );
-            set_string(
-                id_from(controls.sync_pending_label),
-                &format!("Pending outbox operations: {}", status.pending_operations),
+                &status.device.device_id,
             );
             set_sync_message(
                 message
@@ -673,7 +674,6 @@ unsafe fn refresh_sync_status_controls(message: Option<&str>) {
                 id_from(controls.sync_status_label),
                 "Sync status is not available yet.",
             );
-            set_string(id_from(controls.sync_pending_label), "");
             if let Some(message) = message {
                 set_sync_message(message);
             } else {
@@ -718,12 +718,24 @@ fn non_empty(value: &str) -> Option<String> {
     }
 }
 
-fn format_device_id(device_id: &str) -> String {
-    if device_id.trim().is_empty() {
-        "Device ID: not assigned yet".to_string()
-    } else {
-        format!("Device ID: {device_id}")
+unsafe fn set_sync_summary(status: &sync::SyncStatus) {
+    if let Some(controls) = SETTINGS_CONTROLS.get() {
+        set_string(
+            id_from(controls.sync_status_label),
+            &build_sync_summary(status),
+        );
     }
+}
+
+fn build_sync_summary(status: &sync::SyncStatus) -> String {
+    format!(
+        "Connection: {}\nServer: {}\nLast sync: {}\nQueued: {}\nLast error: {}",
+        status.connection_state.display_label(),
+        status.server_url.as_deref().unwrap_or("Not configured"),
+        sync::format_timestamp(status.last_successful_sync_at),
+        status.pending_operations,
+        status.last_error.as_deref().unwrap_or("None"),
+    )
 }
 
 unsafe fn register_action_class() -> id {

@@ -371,6 +371,9 @@ impl ViceroyWindowsApp {
                 if self.sync_device_name.trim().is_empty() {
                     self.sync_device_name = status.device.device_name.clone();
                 }
+                if self.sync_server_url.trim().is_empty() {
+                    self.sync_server_url = status.server_url.clone().unwrap_or_default();
+                }
                 self.sync_status = Some(status);
                 if self.sync_message.is_empty() {
                     self.sync_message =
@@ -577,10 +580,42 @@ impl eframe::App for ViceroyWindowsApp {
                         );
                         ui.label(
                             RichText::new(format!(
+                                "Connection: {}",
+                                status.connection_state.display_label()
+                            ))
+                            .color(Color32::from_gray(190)),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "Server: {}",
+                                status.server_url.as_deref().unwrap_or("Not configured")
+                            ))
+                            .color(Color32::from_gray(190)),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "Last successful sync: {}",
+                                sync::format_timestamp(status.last_successful_sync_at)
+                            ))
+                            .color(Color32::from_gray(190)),
+                        );
+                        ui.label(
+                            RichText::new(format!(
                                 "Pending outbox operations: {}",
                                 status.pending_operations
                             ))
                             .color(Color32::from_gray(190)),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "Last error: {}",
+                                status.last_error.as_deref().unwrap_or("None")
+                            ))
+                            .color(if status.last_error.is_some() {
+                                Color32::from_rgb(255, 145, 145)
+                            } else {
+                                Color32::from_gray(190)
+                            }),
                         );
                     } else {
                         ui.label(

@@ -1,6 +1,6 @@
 use crate::{database, settings};
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
+use chrono::{Local, LocalResult, TimeZone, Utc};
 use futures_util::StreamExt;
 use lazy_static::lazy_static;
 use reqwest::Url;
@@ -28,6 +28,9 @@ static SYNC_WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 const OUTBOX_BATCH_SIZE: usize = 100;
 const RECONNECT_DELAY_SECONDS: u64 = 5;
 const CURSOR_KEY: &str = "clipboard_cursor";
+const STATE_CONNECTION_KEY: &str = "connection_state";
+const STATE_LAST_SUCCESS_KEY: &str = "last_successful_sync_at";
+const STATE_LAST_ERROR_KEY: &str = "last_error";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalDevice {
@@ -75,7 +78,40 @@ pub struct PendingSyncOperation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncStatus {
     pub device: LocalDevice,
+    pub server_url: Option<String>,
+    pub connection_state: SyncConnectionState,
+    pub last_successful_sync_at: Option<i64>,
+    pub last_error: Option<String>,
     pub pending_operations: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncConnectionState {
+    Disabled,
+    Disconnected,
+    Reconnecting,
+    Connected,
+}
+
+impl SyncConnectionState {
+    pub fn storage_value(&self) -> &'static str {
+        match self {
+            SyncConnectionState::Disabled => "disabled",
+            SyncConnectionState::Disconnected => "disconnected",
+            SyncConnectionState::Reconnecting => "reconnecting",
+            SyncConnectionState::Connected => "connected",
+        }
+    }
+
+    pub fn display_label(&self) -> &'static str {
+        match self {
+            SyncConnectionState::Disabled => "Disabled",
+            SyncConnectionState::Disconnected => "Disconnected",
+            SyncConnectionState::Reconnecting => "Reconnecting",
+            SyncConnectionState::Connected => "Connected",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +213,8 @@ pub fn start_background_worker() -> Result<()> {
     if SYNC_WORKER_STARTED.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
+
+    let _ = set_connection_state(SyncConnectionState::Reconnecting);
 
     thread::spawn(move || {
         let runtime = Runtime::new().expect("failed to create sync runtime");
@@ -406,9 +444,26 @@ fn status_with_connection(conn: &Connection, device: LocalDevice) -> Result<Sync
         [],
         |row| row.get(0),
     )?;
+    let app_settings = settings::load()?;
+    let server_url = app_settings
+        .sync
+        .server_url
+        .clone()
+        .filter(|value| !value.trim().is_empty());
+    let connection_state = if !app_settings.sync.enabled {
+        SyncConnectionState::Disabled
+    } else if server_url.is_none() {
+        SyncConnectionState::Disconnected
+    } else {
+        read_connection_state(conn)?.unwrap_or(SyncConnectionState::Disconnected)
+    };
 
     Ok(SyncStatus {
         device,
+        server_url,
+        connection_state,
+        last_successful_sync_at: read_state_i64(conn, STATE_LAST_SUCCESS_KEY)?,
+        last_error: read_state_string(conn, STATE_LAST_ERROR_KEY)?,
         pending_operations: pending_operations as usize,
     })
 }
@@ -419,7 +474,10 @@ async fn run_background_loop(config: SyncRuntimeConfig) -> Result<()> {
         .context("failed to create sync HTTP client")?;
 
     loop {
+        let _ = set_connection_state(SyncConnectionState::Reconnecting);
         if let Err(err) = run_sync_session(&client, &config).await {
+            let error_message = format!("{err:#}");
+            let _ = record_sync_error(&error_message);
             log::error!("Sync session failed: {err:#}");
         }
         sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
@@ -428,7 +486,9 @@ async fn run_background_loop(config: SyncRuntimeConfig) -> Result<()> {
 
 async fn run_sync_session(client: &reqwest::Client, config: &SyncRuntimeConfig) -> Result<()> {
     catch_up_once(client, config).await?;
+    mark_sync_success()?;
     process_outbox(client, config).await?;
+    mark_sync_success()?;
 
     let ws_url = websocket_url(&config.server_url, &config.device)?;
     let mut ws_request = ws_url
@@ -446,18 +506,21 @@ async fn run_sync_session(client: &reqwest::Client, config: &SyncRuntimeConfig) 
     let (ws_stream, _) = connect_async(ws_request)
         .await
         .context("failed to connect websocket")?;
+    mark_sync_success()?;
     let (_write, mut read) = ws_stream.split();
 
     loop {
         tokio::select! {
             _ = SYNC_NOTIFY.notified() => {
                 process_outbox(client, config).await?;
+                mark_sync_success()?;
             }
             next_message = read.next() => {
                 match next_message {
                     Some(Ok(message)) => {
                         if let Some(cursor) = handle_ws_message(message).await? {
                             update_cursor(cursor)?;
+                            mark_sync_success()?;
                         }
                     }
                     Some(Err(err)) => return Err(err).context("websocket receive failed"),
@@ -800,6 +863,76 @@ fn current_cursor() -> Result<Option<i64>> {
     Ok(value.and_then(|value| value.parse::<i64>().ok()))
 }
 
+fn read_state_string(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let value = conn
+        .query_row(
+            "SELECT value FROM sync_state WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(value.filter(|text| !text.trim().is_empty()))
+}
+
+fn read_state_i64(conn: &Connection, key: &str) -> Result<Option<i64>> {
+    Ok(read_state_string(conn, key)?.and_then(|value| value.parse::<i64>().ok()))
+}
+
+fn write_state_value(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO sync_state (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn delete_state_value(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM sync_state WHERE key = ?1", params![key])?;
+    Ok(())
+}
+
+fn set_connection_state(state: SyncConnectionState) -> Result<()> {
+    let conn = database::get_connection()?;
+    write_state_value(&conn, STATE_CONNECTION_KEY, state.storage_value())
+}
+
+fn read_connection_state(conn: &Connection) -> Result<Option<SyncConnectionState>> {
+    Ok(
+        read_state_string(conn, STATE_CONNECTION_KEY)?.and_then(|value| match value.as_str() {
+            "disabled" => Some(SyncConnectionState::Disabled),
+            "disconnected" => Some(SyncConnectionState::Disconnected),
+            "reconnecting" => Some(SyncConnectionState::Reconnecting),
+            "connected" => Some(SyncConnectionState::Connected),
+            _ => None,
+        }),
+    )
+}
+
+fn mark_sync_success() -> Result<()> {
+    let conn = database::get_connection()?;
+    let now = now_ts();
+    write_state_value(
+        &conn,
+        STATE_CONNECTION_KEY,
+        SyncConnectionState::Connected.storage_value(),
+    )?;
+    write_state_value(&conn, STATE_LAST_SUCCESS_KEY, &now.to_string())?;
+    delete_state_value(&conn, STATE_LAST_ERROR_KEY)?;
+    Ok(())
+}
+
+fn record_sync_error(error: &str) -> Result<()> {
+    let conn = database::get_connection()?;
+    write_state_value(
+        &conn,
+        STATE_CONNECTION_KEY,
+        SyncConnectionState::Disconnected.storage_value(),
+    )?;
+    write_state_value(&conn, STATE_LAST_ERROR_KEY, error)?;
+    Ok(())
+}
+
 fn update_cursor(cursor: i64) -> Result<()> {
     let conn = database::get_connection()?;
     conn.execute(
@@ -872,6 +1005,18 @@ fn now_ts() -> i64 {
     Utc::now().timestamp()
 }
 
+pub fn format_timestamp(timestamp: Option<i64>) -> String {
+    let Some(timestamp) = timestamp else {
+        return "Never".to_string();
+    };
+
+    let dt = match Local.timestamp_opt(timestamp, 0) {
+        LocalResult::Single(dt) => dt,
+        _ => return "Never".to_string(),
+    };
+    dt.format("%Y-%m-%d %H:%M:%S %Z").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -917,6 +1062,17 @@ mod tests {
     fn normalize_server_url_rejects_unspecified_bind_host() {
         let err = normalize_server_url("0.0.0.0:8787").unwrap_err();
         assert!(format!("{err:#}").contains("reachable host"));
+    }
+
+    #[test]
+    fn connection_state_labels_round_trip_for_storage() {
+        assert_eq!(SyncConnectionState::Disabled.storage_value(), "disabled");
+        assert_eq!(SyncConnectionState::Connected.display_label(), "Connected");
+    }
+
+    #[test]
+    fn timestamp_formatter_handles_missing_values() {
+        assert_eq!(format_timestamp(None), "Never");
     }
 
     #[test]

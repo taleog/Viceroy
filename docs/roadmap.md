@@ -92,6 +92,7 @@
 - [ ] Performance benchmarking framework
 - [ ] Crash logging and error reporting
 - [ ] User analytics (opt-in)
+- [ ] Sync device revocation and last_seen metadata
 
 ## Long-Term Vision (3+ Months)
 
@@ -120,6 +121,7 @@
 4. **Error handling** - limited user-facing error messages
 5. **Testing** - minimal automated test coverage
 6. **Documentation** - keep branch capabilities and setup docs aligned across platforms
+7. **Sync auth model** - current personal setup uses a shared bearer token; per-device revocation is still future work
 
 ## Success Metrics
 
@@ -137,6 +139,7 @@
 - No web-based UI (by design - native only)
 - No polished Linux desktop UI yet (CLI fallback only outside macOS/Windows)
 - Clipboard history limited to ~10K items (storage/performance)
+- Sync is currently personal/self-hosted first; multi-tenant auth and revocation are future work
 
 ## Links & Resources
 

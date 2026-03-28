@@ -11,6 +11,7 @@ fn main() {
         println!("  VICEROY_SYNC_SERVER_BIND        Bind address, default 0.0.0.0:8787");
         println!("  VICEROY_SYNC_SERVER_DATABASE    SQLite path, default ./viceroy-sync-server.db");
         println!("  VICEROY_SYNC_SERVER_AUTH_TOKEN  Optional bearer token");
+        println!("  VICEROY_SYNC_SERVER_ADMIN_TOKEN Optional admin bearer token");
         return;
     }
 
