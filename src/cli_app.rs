@@ -26,6 +26,9 @@ pub fn run() {
     if let Err(err) = sync::init() {
         eprintln!("Sync init error: {err:#}");
     }
+    if let Err(err) = sync::start_background_worker() {
+        eprintln!("Sync worker start error: {err:#}");
+    }
 
     start_clipboard_monitor();
 

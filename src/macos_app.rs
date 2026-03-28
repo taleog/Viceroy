@@ -280,6 +280,9 @@ impl AppDelegate for ViceroyApp {
         if let Err(err) = viceroy::sync::init() {
             eprintln!("Sync init error: {err:#}");
         }
+        if let Err(err) = viceroy::sync::start_background_worker() {
+            eprintln!("Sync worker start error: {err:#}");
+        }
 
         // Monitor clipboard in a background thread so history stays populated
         std::thread::spawn(|| {

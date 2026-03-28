@@ -94,6 +94,14 @@ pub fn init() -> Result<()> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sync_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )",
+        [],
+    )?;
+
     // Create index for faster searches
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_clipboard_timestamp ON clipboard_history(timestamp DESC)",

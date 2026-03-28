@@ -1,8 +1,31 @@
 use crate::{database, settings};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
+use futures_util::StreamExt;
+use lazy_static::lazy_static;
+use reqwest::Url;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use tokio::runtime::Runtime;
+use tokio::sync::Notify;
+use tokio::time::{sleep, Duration};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::header::{HeaderValue, AUTHORIZATION};
+use tokio_tungstenite::tungstenite::Message;
+
+lazy_static! {
+    static ref SYNC_NOTIFY: Arc<Notify> = Arc::new(Notify::new());
+}
+
+static SYNC_WORKER_STARTED: AtomicBool = AtomicBool::new(false);
+
+const OUTBOX_BATCH_SIZE: usize = 100;
+const RECONNECT_DELAY_SECONDS: u64 = 5;
+const CURSOR_KEY: &str = "clipboard_cursor";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalDevice {
@@ -53,10 +76,56 @@ pub struct SyncStatus {
     pub pending_operations: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SyncEnvelope {
+    operation: SyncOperationKind,
+    record: ClipboardSyncRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PushEventsRequest {
+    device: LocalDevice,
+    events: Vec<SyncEnvelope>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CatchUpResponse {
+    cursor: Option<i64>,
+    events: Vec<SyncEnvelope>,
+}
+
+#[derive(Debug, Clone)]
+struct SyncRuntimeConfig {
+    device: LocalDevice,
+    server_url: String,
+    auth_token: Option<String>,
+}
+
 pub fn init() -> Result<SyncStatus> {
     let conn = database::get_connection()?;
     let device = ensure_local_device(&conn)?;
     status_with_connection(&conn, device)
+}
+
+pub fn start_background_worker() -> Result<()> {
+    if SYNC_WORKER_STARTED.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    let Some(config) = runtime_config()? else {
+        return Ok(());
+    };
+
+    thread::spawn(move || {
+        let runtime = Runtime::new().expect("failed to create sync runtime");
+        runtime.block_on(async move {
+            if let Err(err) = run_background_loop(config).await {
+                log::error!("Sync worker exited: {err:#}");
+            }
+        });
+    });
+
+    Ok(())
 }
 
 pub fn status() -> Result<SyncStatus> {
@@ -88,6 +157,7 @@ pub fn queue_local_clipboard_upsert(entry_id: i64) -> Result<()> {
         &payload,
         now,
     )?;
+    notify_worker();
     Ok(())
 }
 
@@ -114,6 +184,7 @@ pub fn queue_local_clipboard_delete(entry_id: i64) -> Result<()> {
         &payload,
         now,
     )?;
+    notify_worker();
     Ok(())
 }
 
@@ -279,6 +350,178 @@ fn status_with_connection(conn: &Connection, device: LocalDevice) -> Result<Sync
     })
 }
 
+async fn run_background_loop(config: SyncRuntimeConfig) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .build()
+        .context("failed to create sync HTTP client")?;
+
+    loop {
+        if let Err(err) = run_sync_session(&client, &config).await {
+            log::error!("Sync session failed: {err:#}");
+        }
+        sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
+    }
+}
+
+async fn run_sync_session(client: &reqwest::Client, config: &SyncRuntimeConfig) -> Result<()> {
+    catch_up_once(client, config).await?;
+    process_outbox(client, config).await?;
+
+    let ws_url = websocket_url(&config.server_url, &config.device)?;
+    let mut ws_request = ws_url
+        .as_str()
+        .into_client_request()
+        .context("failed to build websocket request")?;
+    if let Some(token) = &config.auth_token {
+        ws_request.headers_mut().insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}"))
+                .context("invalid sync auth token header")?,
+        );
+    }
+
+    let (ws_stream, _) = connect_async(ws_request)
+        .await
+        .context("failed to connect websocket")?;
+    let (_write, mut read) = ws_stream.split();
+
+    loop {
+        tokio::select! {
+            _ = SYNC_NOTIFY.notified() => {
+                process_outbox(client, config).await?;
+            }
+            next_message = read.next() => {
+                match next_message {
+                    Some(Ok(message)) => {
+                        if let Some(cursor) = handle_ws_message(message).await? {
+                            update_cursor(cursor)?;
+                        }
+                    }
+                    Some(Err(err)) => return Err(err).context("websocket receive failed"),
+                    None => return Err(anyhow!("websocket closed")),
+                }
+            }
+        }
+    }
+}
+
+async fn process_outbox(client: &reqwest::Client, config: &SyncRuntimeConfig) -> Result<()> {
+    let pending = pending_operations(OUTBOX_BATCH_SIZE)?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let request = PushEventsRequest {
+        device: config.device.clone(),
+        events: pending
+            .iter()
+            .map(|operation| SyncEnvelope {
+                operation: operation.operation.clone(),
+                record: operation.payload.clone(),
+            })
+            .collect(),
+    };
+
+    let url = api_base_url(&config.server_url)?.join("clipboard/events")?;
+    let response = authorized_request(client.post(url), config)
+        .json(&request)
+        .send()
+        .await;
+
+    match response {
+        Ok(response) => {
+            response
+                .error_for_status()
+                .context("sync event upload failed")?;
+            for operation in pending {
+                mark_operation_sent(operation.id)?;
+            }
+            Ok(())
+        }
+        Err(err) => {
+            let message = format!("{err:#}");
+            for operation in pending {
+                let _ = mark_operation_failed(operation.id, &message);
+            }
+            Err(err).context("failed to upload pending sync events")
+        }
+    }
+}
+
+async fn catch_up_once(client: &reqwest::Client, config: &SyncRuntimeConfig) -> Result<()> {
+    let cursor = current_cursor()?.unwrap_or(0);
+    let mut url = api_base_url(&config.server_url)?.join("clipboard/changes")?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("since", &cursor.to_string());
+        pairs.append_pair("device_id", &config.device.device_id);
+        pairs.append_pair("limit", &OUTBOX_BATCH_SIZE.to_string());
+    }
+
+    let response = authorized_request(client.get(url), config)
+        .send()
+        .await
+        .context("failed to request catch-up sync")?
+        .error_for_status()
+        .context("catch-up sync request failed")?;
+
+    let body: CatchUpResponse = response
+        .json()
+        .await
+        .context("failed to parse catch-up sync response")?;
+
+    let mut newest_cursor = body.cursor.unwrap_or(cursor);
+    for event in body.events {
+        apply_remote_clipboard_record(&event.record)?;
+        newest_cursor = newest_cursor.max(event.record.updated_at);
+    }
+    update_cursor(newest_cursor)?;
+    Ok(())
+}
+
+async fn handle_ws_message(message: Message) -> Result<Option<i64>> {
+    match message {
+        Message::Text(text) => {
+            let event: SyncEnvelope =
+                serde_json::from_str(&text).context("failed to decode websocket sync payload")?;
+            apply_remote_clipboard_record(&event.record)?;
+            Ok(Some(event.record.updated_at))
+        }
+        Message::Binary(bytes) => {
+            let event: SyncEnvelope = serde_json::from_slice(&bytes)
+                .context("failed to decode binary websocket sync payload")?;
+            apply_remote_clipboard_record(&event.record)?;
+            Ok(Some(event.record.updated_at))
+        }
+        Message::Close(_) => Err(anyhow!("websocket closed by remote peer")),
+        _ => Ok(None),
+    }
+}
+
+fn runtime_config() -> Result<Option<SyncRuntimeConfig>> {
+    let conn = database::get_connection()?;
+    let device = ensure_local_device(&conn)?;
+    let app_settings = settings::load()?;
+    let Some(server_url) = app_settings
+        .sync
+        .server_url
+        .clone()
+        .filter(|url| !url.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+
+    if !app_settings.sync.enabled {
+        return Ok(None);
+    }
+
+    Ok(Some(SyncRuntimeConfig {
+        device,
+        server_url,
+        auth_token: app_settings.sync.auth_token.clone(),
+    }))
+}
+
 fn ensure_local_device(conn: &Connection) -> Result<LocalDevice> {
     let mut app_settings = settings::load()?;
     let mut changed = false;
@@ -430,6 +673,74 @@ fn load_clipboard_payload(conn: &Connection, entry_id: i64) -> Result<ClipboardS
     .context("failed to load clipboard sync payload")
 }
 
+fn authorized_request(
+    builder: reqwest::RequestBuilder,
+    config: &SyncRuntimeConfig,
+) -> reqwest::RequestBuilder {
+    let builder = builder
+        .header("X-Viceroy-Device-Id", &config.device.device_id)
+        .header("X-Viceroy-Device-Name", &config.device.device_name)
+        .header("X-Viceroy-Platform", &config.device.platform);
+
+    if let Some(token) = &config.auth_token {
+        builder.bearer_auth(token)
+    } else {
+        builder
+    }
+}
+
+fn api_base_url(server_url: &str) -> Result<Url> {
+    let mut url = Url::parse(server_url).context("invalid sync server_url")?;
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path().trim_end_matches('/'));
+        url.set_path(&path);
+    }
+    url.join("api/v1/sync/")
+        .context("failed to build sync API base URL")
+}
+
+fn websocket_url(server_url: &str, device: &LocalDevice) -> Result<Url> {
+    let mut url = api_base_url(server_url)?
+        .join("clipboard/ws")
+        .context("failed to build websocket URL")?;
+    match url.scheme() {
+        "https" => url
+            .set_scheme("wss")
+            .map_err(|_| anyhow!("failed to convert https URL to wss"))?,
+        "http" => url
+            .set_scheme("ws")
+            .map_err(|_| anyhow!("failed to convert http URL to ws"))?,
+        "wss" | "ws" => {}
+        other => return Err(anyhow!("unsupported sync server scheme: {other}")),
+    }
+    url.query_pairs_mut()
+        .append_pair("device_id", &device.device_id)
+        .append_pair("device_name", &device.device_name);
+    Ok(url)
+}
+
+fn current_cursor() -> Result<Option<i64>> {
+    let conn = database::get_connection()?;
+    let value = conn
+        .query_row(
+            "SELECT value FROM sync_state WHERE key = ?1",
+            params![CURSOR_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(value.and_then(|value| value.parse::<i64>().ok()))
+}
+
+fn update_cursor(cursor: i64) -> Result<()> {
+    let conn = database::get_connection()?;
+    conn.execute(
+        "INSERT INTO sync_state (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![CURSOR_KEY, cursor.to_string()],
+    )?;
+    Ok(())
+}
+
 fn operation_name(operation: &SyncOperationKind) -> &'static str {
     match operation {
         SyncOperationKind::UpsertClipboardEntry => "upsert_clipboard_entry",
@@ -442,6 +753,10 @@ fn parse_operation(value: &str) -> SyncOperationKind {
         "delete_clipboard_entry" => SyncOperationKind::DeleteClipboardEntry,
         _ => SyncOperationKind::UpsertClipboardEntry,
     }
+}
+
+fn notify_worker() {
+    SYNC_NOTIFY.notify_one();
 }
 
 fn generate_device_id(device_name: &str) -> String {
@@ -509,5 +824,17 @@ mod tests {
         };
         assert!(!generate_device_id("Laptop").is_empty());
         assert!(!generate_entry_sync_id(42, &device, 100).is_empty());
+    }
+
+    #[test]
+    fn websocket_url_uses_ws_scheme_and_sync_path() {
+        let device = LocalDevice {
+            device_id: "device-a".to_string(),
+            device_name: "Laptop".to_string(),
+            platform: "windows".to_string(),
+        };
+        let url = websocket_url("https://sync.example.com", &device).unwrap();
+        assert_eq!(url.scheme(), "wss");
+        assert_eq!(url.path(), "/api/v1/sync/clipboard/ws");
     }
 }
