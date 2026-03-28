@@ -27,15 +27,22 @@ mod usage;
 #[cfg(target_os = "macos")]
 mod web_search;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 mod cli_app;
+#[cfg(target_os = "windows")]
+mod windows_app;
 
 #[cfg(target_os = "macos")]
 fn main() {
     macos_app::run();
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn main() {
+    windows_app::run();
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn main() {
     cli_app::run();
 }
