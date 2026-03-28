@@ -102,6 +102,7 @@ pub unsafe fn install_constrained_clip_view(scroll: id, initial_bounds: NSRect) 
 
 const COLLAPSED_RESULT_AREA_HEIGHT: f64 = 0.0;
 const OPEN_RESULT_AREA_HEIGHT: f64 = 420.0;
+const SETTINGS_WINDOW_HEIGHT: f64 = 850.0;
 const WINDOW_HEIGHT_OPEN: f64 =
     style::TABLE_TOP_OFFSET + style::TABLE_FOOTER_HEIGHT + OPEN_RESULT_AREA_HEIGHT;
 const WINDOW_HEIGHT_COLLAPSED: f64 =
@@ -322,18 +323,12 @@ pub unsafe fn sync_window_height_with_state() {
         Err(_) => TableMode::Search,
     };
     let open = should_window_open_for_mode(mode);
-    let target_height = if open {
-        WINDOW_HEIGHT_OPEN
-    } else {
-        WINDOW_HEIGHT_COLLAPSED
+    let target_height = match mode {
+        TableMode::Settings => SETTINGS_WINDOW_HEIGHT,
+        _ if open => WINDOW_HEIGHT_OPEN,
+        _ => WINDOW_HEIGHT_COLLAPSED,
     };
     let preview_visible = mode == TableMode::ClipboardHistory;
-    let previously_open = WINDOW_IS_OPEN.load(Ordering::SeqCst);
-    if previously_open == open {
-        update_preview_layout(preview_visible);
-        return;
-    }
-    WINDOW_IS_OPEN.store(open, Ordering::SeqCst);
 
     let app: id = msg_send![class!(NSApplication), sharedApplication];
     let windows: id = msg_send![app, windows];
@@ -343,6 +338,12 @@ pub unsafe fn sync_window_height_with_state() {
     }
     let window: id = msg_send![windows, objectAtIndex:0];
     let current_frame: NSRect = msg_send![window, frame];
+    let previously_open = WINDOW_IS_OPEN.load(Ordering::SeqCst);
+    if previously_open == open && (current_frame.size.height - target_height).abs() < 0.5 {
+        update_preview_layout(preview_visible);
+        return;
+    }
+    WINDOW_IS_OPEN.store(open, Ordering::SeqCst);
     let new_origin_y = current_frame.origin.y + (current_frame.size.height - target_height);
     let new_frame = NSRect::new(
         NSPoint::new(current_frame.origin.x, new_origin_y),

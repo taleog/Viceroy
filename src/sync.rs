@@ -138,13 +138,13 @@ pub fn normalize_server_url(input: &str) -> Result<String> {
 }
 
 pub fn start_background_worker() -> Result<()> {
-    if SYNC_WORKER_STARTED.swap(true, Ordering::SeqCst) {
-        return Ok(());
-    }
-
     let Some(config) = runtime_config()? else {
         return Ok(());
     };
+
+    if SYNC_WORKER_STARTED.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
 
     thread::spawn(move || {
         let runtime = Runtime::new().expect("failed to create sync runtime");
@@ -153,6 +153,7 @@ pub fn start_background_worker() -> Result<()> {
                 log::error!("Sync worker exited: {err:#}");
             }
         });
+        SYNC_WORKER_STARTED.store(false, Ordering::SeqCst);
     });
 
     Ok(())
