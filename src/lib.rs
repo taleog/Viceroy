@@ -8,6 +8,7 @@ pub mod file_search;
 pub mod search_engine;
 pub mod settings;
 pub mod sync;
+pub mod sync_server;
 pub mod system_commands;
 pub mod updater;
 pub mod usage;

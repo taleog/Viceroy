@@ -77,21 +77,21 @@ pub struct SyncStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SyncEnvelope {
-    operation: SyncOperationKind,
-    record: ClipboardSyncRecord,
+pub struct SyncEnvelope {
+    pub operation: SyncOperationKind,
+    pub record: ClipboardSyncRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PushEventsRequest {
-    device: LocalDevice,
-    events: Vec<SyncEnvelope>,
+pub struct PushEventsRequest {
+    pub device: LocalDevice,
+    pub events: Vec<SyncEnvelope>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CatchUpResponse {
-    cursor: Option<i64>,
-    events: Vec<SyncEnvelope>,
+pub struct CatchUpResponse {
+    pub cursor: Option<i64>,
+    pub events: Vec<SyncEnvelope>,
 }
 
 #[derive(Debug, Clone)]
