@@ -107,6 +107,36 @@ pub fn init() -> Result<SyncStatus> {
     status_with_connection(&conn, device)
 }
 
+pub fn normalize_server_url(input: &str) -> Result<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("sync server URL cannot be empty"));
+    }
+
+    let candidate = if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    };
+
+    let url = Url::parse(&candidate).context("invalid sync server_url")?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => return Err(anyhow!("unsupported sync server scheme: {other}")),
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("sync server URL must include a host"))?;
+    if matches!(host, "0.0.0.0" | "::" | "[::]") {
+        return Err(anyhow!(
+            "sync server URL must use a reachable host, not {host}; use 127.0.0.1, localhost, a LAN IP, or a hostname"
+        ));
+    }
+
+    Ok(url.to_string().trim_end_matches('/').to_string())
+}
+
 pub fn start_background_worker() -> Result<()> {
     if SYNC_WORKER_STARTED.swap(true, Ordering::SeqCst) {
         return Ok(());
@@ -515,6 +545,8 @@ fn runtime_config() -> Result<Option<SyncRuntimeConfig>> {
         return Ok(None);
     }
 
+    let server_url = normalize_server_url(&server_url)?;
+
     Ok(Some(SyncRuntimeConfig {
         device,
         server_url,
@@ -836,5 +868,17 @@ mod tests {
         let url = websocket_url("https://sync.example.com", &device).unwrap();
         assert_eq!(url.scheme(), "wss");
         assert_eq!(url.path(), "/api/v1/sync/clipboard/ws");
+    }
+
+    #[test]
+    fn normalize_server_url_adds_http_scheme() {
+        let normalized = normalize_server_url("127.0.0.1:8787").unwrap();
+        assert_eq!(normalized, "http://127.0.0.1:8787");
+    }
+
+    #[test]
+    fn normalize_server_url_rejects_unspecified_bind_host() {
+        let err = normalize_server_url("0.0.0.0:8787").unwrap_err();
+        assert!(format!("{err:#}").contains("reachable host"));
     }
 }

@@ -392,10 +392,29 @@ impl ViceroyWindowsApp {
                 let old_server_url = app_settings.sync.server_url.clone().unwrap_or_default();
                 let old_auth_token = app_settings.sync.auth_token.clone().unwrap_or_default();
 
+                let normalized_server_url = if self.sync_enabled {
+                    let input = self.sync_server_url.trim();
+                    if input.is_empty() {
+                        self.sync_message =
+                            "Enter a sync server URL before enabling sync.".to_string();
+                        return;
+                    }
+                    match sync::normalize_server_url(input) {
+                        Ok(url) => url,
+                        Err(err) => {
+                            self.sync_message = format!("Invalid sync server URL: {err:#}");
+                            return;
+                        }
+                    }
+                } else {
+                    self.sync_server_url.trim().to_string()
+                };
+
                 app_settings.sync.enabled = self.sync_enabled;
                 app_settings.sync.device_name = self.sync_device_name.trim().to_string();
-                app_settings.sync.server_url = non_empty(self.sync_server_url.trim());
+                app_settings.sync.server_url = non_empty(normalized_server_url.trim());
                 app_settings.sync.auth_token = non_empty(self.sync_auth_token.trim());
+                self.sync_server_url = normalized_server_url;
 
                 if let Err(err) = settings::save(&app_settings) {
                     self.sync_message = format!("Failed to save sync settings: {err:#}");

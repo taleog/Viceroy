@@ -53,6 +53,13 @@ pub fn metadata_url() -> String {
 
 pub async fn check_for_updates(silent: bool) -> Result<()> {
     let url = metadata_url();
+    if using_placeholder_metadata_url(&url) {
+        info!(
+            "Skipping update check because no real release metadata URL is configured. Set {} to enable it.",
+            UPDATE_METADATA_URL_ENV
+        );
+        return Ok(());
+    }
     info!("Checking for updates from {url}");
 
     let response = reqwest::get(&url).await?.error_for_status()?;
@@ -78,6 +85,10 @@ pub async fn check_for_updates(silent: bool) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn using_placeholder_metadata_url(url: &str) -> bool {
+    url == RELEASE_METADATA_URL && url.contains("example.com")
 }
 
 fn prompt_for_consent(version: &str) -> bool {
@@ -192,5 +203,13 @@ mod tests {
         let expected = format!("{:x}", Sha256::digest(b"test-bytes"));
         assert_eq!(hash, expected);
         assert!(checksums_match(&hash, &expected));
+    }
+
+    #[test]
+    fn detects_placeholder_metadata_url() {
+        assert!(using_placeholder_metadata_url(RELEASE_METADATA_URL));
+        assert!(!using_placeholder_metadata_url(
+            "https://updates.example.org/latest.json"
+        ));
     }
 }
