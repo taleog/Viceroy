@@ -7,7 +7,7 @@ use std::thread;
 use tokio::runtime::Runtime;
 use viceroy::search_engine::{self, SearchResult};
 use viceroy::{
-    app_launcher, clipboard, database, dictionary, sync, system_commands, updater, usage,
+    app_launcher, clipboard, database, dictionary, settings, sync, system_commands, updater, usage,
     web_search,
 };
 
@@ -223,11 +223,36 @@ struct ViceroyWindowsApp {
     last_loaded_query: String,
     last_loaded_history: bool,
     status: String,
+    sync_enabled: bool,
+    sync_device_name: String,
+    sync_device_id: String,
+    sync_server_url: String,
+    sync_auth_token: String,
+    sync_status: Option<sync::SyncStatus>,
+    sync_message: String,
 }
 
 impl ViceroyWindowsApp {
     fn new(cc: &eframe::CreationContext<'_>, runtime: Arc<Runtime>, initial_query: String) -> Self {
         apply_theme(&cc.egui_ctx);
+
+        let (sync_enabled, sync_device_name, sync_device_id, sync_server_url, sync_auth_token) =
+            match settings::load() {
+                Ok(app_settings) => (
+                    app_settings.sync.enabled,
+                    app_settings.sync.device_name,
+                    app_settings.sync.device_id,
+                    app_settings.sync.server_url.unwrap_or_default(),
+                    app_settings.sync.auth_token.unwrap_or_default(),
+                ),
+                Err(_) => (
+                    false,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
+            };
 
         let mut app = Self {
             runtime,
@@ -239,8 +264,16 @@ impl ViceroyWindowsApp {
             last_loaded_history: false,
             status: "Type to search apps, files, clipboard history, commands, and the web."
                 .to_string(),
+            sync_enabled,
+            sync_device_name,
+            sync_device_id,
+            sync_server_url,
+            sync_auth_token,
+            sync_status: None,
+            sync_message: String::new(),
         };
         app.reload_items(true);
+        app.refresh_sync_status();
         app
     }
 
@@ -330,6 +363,88 @@ impl ViceroyWindowsApp {
             Err(err) => format!("Copy failed: {err:#}"),
         };
     }
+
+    fn refresh_sync_status(&mut self) {
+        match sync::status() {
+            Ok(status) => {
+                self.sync_device_id = status.device.device_id.clone();
+                if self.sync_device_name.trim().is_empty() {
+                    self.sync_device_name = status.device.device_name.clone();
+                }
+                self.sync_status = Some(status);
+                if self.sync_message.is_empty() {
+                    self.sync_message =
+                        "Sync status loaded. Save settings after changing server details."
+                            .to_string();
+                }
+            }
+            Err(err) => {
+                self.sync_status = None;
+                self.sync_message = format!("Failed to load sync status: {err:#}");
+            }
+        }
+    }
+
+    fn save_sync_settings(&mut self) {
+        match settings::load() {
+            Ok(mut app_settings) => {
+                let old_enabled = app_settings.sync.enabled;
+                let old_server_url = app_settings.sync.server_url.clone().unwrap_or_default();
+                let old_auth_token = app_settings.sync.auth_token.clone().unwrap_or_default();
+
+                app_settings.sync.enabled = self.sync_enabled;
+                app_settings.sync.device_name = self.sync_device_name.trim().to_string();
+                app_settings.sync.server_url = non_empty(self.sync_server_url.trim());
+                app_settings.sync.auth_token = non_empty(self.sync_auth_token.trim());
+
+                if let Err(err) = settings::save(&app_settings) {
+                    self.sync_message = format!("Failed to save sync settings: {err:#}");
+                    return;
+                }
+
+                match sync::init() {
+                    Ok(status) => {
+                        self.sync_status = Some(status.clone());
+                        self.sync_device_id = status.device.device_id.clone();
+                        self.sync_device_name = status.device.device_name.clone();
+                    }
+                    Err(err) => {
+                        self.sync_message =
+                            format!("Settings saved, but sync init failed: {err:#}");
+                        return;
+                    }
+                }
+
+                if self.sync_enabled {
+                    if let Err(err) = sync::start_background_worker() {
+                        self.sync_message =
+                            format!("Settings saved, but sync worker failed to start: {err:#}");
+                        return;
+                    }
+                }
+
+                let connection_changed = old_enabled
+                    && self.sync_enabled
+                    && (old_server_url != self.sync_server_url.trim()
+                        || old_auth_token != self.sync_auth_token.trim());
+
+                self.sync_message = if connection_changed {
+                    "Sync settings saved. Restart Viceroy to apply server URL or token changes."
+                        .to_string()
+                } else if self.sync_enabled && !old_enabled {
+                    "Sync enabled. The background worker will use this server for new uploads."
+                        .to_string()
+                } else if !self.sync_enabled {
+                    "Sync settings saved. Sync is disabled until you re-enable it.".to_string()
+                } else {
+                    "Sync settings saved.".to_string()
+                };
+            }
+            Err(err) => {
+                self.sync_message = format!("Failed to load current settings: {err:#}");
+            }
+        }
+    }
 }
 
 impl eframe::App for ViceroyWindowsApp {
@@ -378,6 +493,84 @@ impl eframe::App for ViceroyWindowsApp {
                 RichText::new("A simple Windows GUI for the shared Viceroy backend.")
                     .color(Color32::from_gray(180)),
             );
+            ui.add_space(14.0);
+
+            egui::CollapsingHeader::new("Sync Settings")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.sync_enabled, "Enable sync");
+                        if ui.button("Refresh Status").clicked() {
+                            self.refresh_sync_status();
+                        }
+                    });
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Device name");
+                        ui.add_sized(
+                            [260.0, 28.0],
+                            TextEdit::singleline(&mut self.sync_device_name),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Device id");
+                        ui.add_sized(
+                            [460.0, 28.0],
+                            TextEdit::singleline(&mut self.sync_device_id).interactive(false),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Server URL");
+                        ui.add_sized(
+                            [460.0, 28.0],
+                            TextEdit::singleline(&mut self.sync_server_url)
+                                .hint_text("https://sync.example.com"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Auth token");
+                        ui.add_sized(
+                            [460.0, 28.0],
+                            TextEdit::singleline(&mut self.sync_auth_token).password(true),
+                        );
+                    });
+
+                    ui.add_space(8.0);
+                    if ui.button("Save Sync Settings").clicked() {
+                        self.save_sync_settings();
+                    }
+
+                    ui.add_space(8.0);
+                    if let Some(status) = &self.sync_status {
+                        ui.label(
+                            RichText::new(format!(
+                                "Current device: {} ({})",
+                                status.device.device_name, status.device.platform
+                            ))
+                            .color(Color32::from_gray(190)),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "Pending outbox operations: {}",
+                                status.pending_operations
+                            ))
+                            .color(Color32::from_gray(190)),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("Sync status is not available yet.")
+                                .color(Color32::from_gray(190)),
+                        );
+                    }
+                    if !self.sync_message.is_empty() {
+                        ui.label(
+                            RichText::new(&self.sync_message)
+                                .color(Color32::from_rgb(130, 195, 255)),
+                        );
+                    }
+                });
+
             ui.add_space(14.0);
 
             let search = ui.add_sized(
@@ -664,4 +857,12 @@ fn copy_text(value: &str) -> anyhow::Result<()> {
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(value.to_string())?;
     Ok(())
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
