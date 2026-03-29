@@ -47,7 +47,7 @@ pub fn get_all_commands() -> Vec<SystemCommand> {
 
     #[cfg(target_os = "windows")]
     {
-        return vec![
+        vec![
             command("Lock Screen", "Lock the workstation", "lock"),
             command("Sleep", "Put the computer to sleep", "sleep"),
             command("Restart", "Restart Windows", "restart"),
@@ -55,7 +55,7 @@ pub fn get_all_commands() -> Vec<SystemCommand> {
             command("Screenshot", "Open Snipping Tool", "screenshot"),
             command("Settings", "Open Windows Settings", "system_settings"),
             command("Recycle Bin", "Open the Recycle Bin", "recycle_bin"),
-        ];
+        ]
     }
 
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
@@ -82,7 +82,7 @@ pub async fn execute(command: &str) -> Result<String> {
 
     #[cfg(target_os = "windows")]
     {
-        return execute_windows(command);
+        execute_windows(command)
     }
 
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]

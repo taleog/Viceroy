@@ -555,7 +555,7 @@ fn send_paste_keystroke() -> Result<()> {
         if status.success() {
             return Ok(());
         }
-        return Err(anyhow!("paste keystroke command failed"));
+        Err(anyhow!("paste keystroke command failed"))
     }
 
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
