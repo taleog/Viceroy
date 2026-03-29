@@ -195,6 +195,7 @@ impl AppDelegate for ViceroyApp {
                                                     if count > 0 {
                                                         let window: id =
                                                             msg_send![windows, objectAtIndex:0];
+                                                        settings_view::hide_settings_panel();
                                                         let _: () =
                                                             msg_send![window, orderOut: nil];
                                                     }
@@ -257,6 +258,7 @@ impl AppDelegate for ViceroyApp {
                                                 if count > 0 {
                                                     let window: id =
                                                         msg_send![windows, objectAtIndex: 0];
+                                                    settings_view::hide_settings_panel();
                                                     let _: () = msg_send![window, orderOut: nil];
                                                 }
                                             });
@@ -424,6 +426,7 @@ unsafe fn register_escape_textfield_class() {
                     let count: usize = msg_send![windows, count];
                     if count > 0 {
                         let window: id = msg_send![windows, objectAtIndex:0];
+                        settings_view::hide_settings_panel();
                         let _: () = msg_send![window, orderOut: nil];
                     }
                 }
@@ -465,6 +468,14 @@ unsafe fn register_escape_textfield_class() {
                     NO
                 }
                 "insertTab:" => {
+                    let current_mode = match TABLE_MODE.lock() {
+                        Ok(mode) => *mode,
+                        Err(_) => TableMode::Search,
+                    };
+                    if current_mode == TableMode::Settings {
+                        return NO;
+                    }
+
                     // Tab toggles between Search and Clipboard History views
                     let should_show_clipboard = if let Ok(mut mode) = TABLE_MODE.lock() {
                         match *mode {
@@ -1600,6 +1611,7 @@ unsafe fn bring_window_to_front_with_search_reset(window: id) {
 }
 
 unsafe fn reset_search_state() {
+    settings_view::hide_settings_panel();
     if let Ok(mut mode) = TABLE_MODE.lock() {
         *mode = TableMode::Search;
     }
@@ -1666,6 +1678,7 @@ unsafe fn setup_app_observer(_ns_window: id) {
                 let count: usize = msg_send![windows, count];
                 if count > 0 {
                     let window: id = msg_send![windows, objectAtIndex:0];
+                    settings_view::hide_settings_panel();
                     let _: () = msg_send![window, orderOut: nil];
                     if let Ok(mut w) = WINDOW_SHOWING.lock() {
                         *w = false;
@@ -1706,13 +1719,19 @@ unsafe fn setup_window_delegate(ns_window: id) {
 
     extern "C" fn window_did_become_key(_this: &Object, _cmd: Sel, _notification: id) {
         unsafe {
-            // Ensure search field has focus when window becomes key
+            // Restore focus to the active surface instead of always forcing search.
             let app: id = msg_send![class!(NSApplication), sharedApplication];
             let windows: id = msg_send![app, windows];
             let count: usize = msg_send![windows, count];
             if count > 0 {
                 let window: id = msg_send![windows, objectAtIndex:0];
-                if let Some(search_field) = find_search_field() {
+                let mode = match TABLE_MODE.lock() {
+                    Ok(mode) => *mode,
+                    Err(_) => TableMode::Search,
+                };
+                if mode == TableMode::Settings {
+                    settings_view::focus_active_settings_control(window);
+                } else if let Some(search_field) = find_search_field() {
                     let _: () = msg_send![window, makeFirstResponder: search_field];
                 }
             }
@@ -1745,6 +1764,7 @@ unsafe fn setup_window_delegate(ns_window: id) {
                         if let Ok(mut w) = WINDOW_SHOWING.lock() {
                             *w = false;
                         }
+                        settings_view::hide_settings_panel();
                         let _: () = msg_send![window, orderOut: nil];
                     }
                 }

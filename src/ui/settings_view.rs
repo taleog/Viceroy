@@ -5,6 +5,7 @@ use objc::runtime::{Class, Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use crate::settings;
@@ -15,8 +16,17 @@ use crate::ui::table;
 static SETTINGS_PANEL: OnceLock<usize> = OnceLock::new();
 static SETTINGS_ACTION_TARGET: OnceLock<usize> = OnceLock::new();
 static SETTINGS_CONTROLS: OnceLock<SettingsControls> = OnceLock::new();
+static SETTINGS_ACTIVE_TAB: AtomicUsize = AtomicUsize::new(0);
+
+const SETTINGS_TAB_GENERAL: usize = 0;
+const SETTINGS_TAB_BEHAVIOR: usize = 1;
+const SETTINGS_TAB_SYNC: usize = 2;
 
 struct SettingsControls {
+    tab_control: usize,
+    general_card: usize,
+    behavior_card: usize,
+    sync_card: usize,
     hotkey_field: usize,
     max_slider: usize,
     max_label: usize,
@@ -44,19 +54,24 @@ pub unsafe fn show_settings_panel() {
         return;
     }
 
-    let bounds: NSRect = msg_send![content_view, bounds];
-    let panel = ensure_panel(content_view, bounds);
-    let _: () = msg_send![panel, removeFromSuperview];
-    let _: () = msg_send![content_view, addSubview: panel];
-    let _: () = msg_send![panel, setHidden: NO];
-    let _: () = msg_send![panel, setNeedsDisplay: YES];
     if let Ok(mut mode) = TABLE_MODE.lock() {
         *mode = TableMode::Settings;
     }
     unsafe {
         table::sync_window_height_with_state();
     }
+    let bounds: NSRect = msg_send![content_view, bounds];
+    let panel = ensure_panel(content_view, bounds);
+    let _: () = msg_send![panel, removeFromSuperview];
+    let _: () = msg_send![content_view, addSubview: panel];
+    let _: () = msg_send![panel, setHidden: NO];
+    let _: () = msg_send![panel, setNeedsDisplay: YES];
     populate_controls_from_settings();
+    apply_active_settings_tab();
+    let window: id = msg_send![content_view, window];
+    if window != nil {
+        focus_active_settings_control(window);
+    }
 }
 
 pub unsafe fn hide_settings_panel() {
@@ -89,12 +104,12 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let panel: id = msg_send![panel, initWithFrame: bounds];
     let _: () = msg_send![panel, setWantsLayer: YES];
     let layer: id = msg_send![panel, layer];
-    let bg_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.08f64 alpha:0.9f64];
+    let bg_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.08f64 alpha:1.0f64];
     let bg_cg: id = msg_send![bg_color, CGColor];
     let _: () = msg_send![layer, setBackgroundColor: bg_cg];
     let _: () = msg_send![layer, setCornerRadius: 26.0f64];
     let _: () = msg_send![panel, setHidden: YES];
-    let _: () = msg_send![panel, setAutoresizingMask: 3];
+    let _: () = msg_send![panel, setAutoresizingMask: 18];
 
     let height = bounds.size.height;
     let title_frame = NSRect::new(NSPoint::new(36.0, height - 76.0), NSSize::new(320.0, 34.0));
@@ -128,11 +143,36 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let card_margin = 36.0;
     let card_inset = 20.0;
     let card_width = bounds.size.width - card_margin * 2.0;
-    let mut top_anchor = height - 170.0;
+    let card_top = height - 208.0;
+
+    let tab_control_frame =
+        NSRect::new(NSPoint::new(36.0, height - 156.0), NSSize::new(290.0, 28.0));
+    let tab_control: id = msg_send![class!(NSSegmentedControl), alloc];
+    let tab_control: id = msg_send![tab_control, initWithFrame: tab_control_frame];
+    let _: () = msg_send![tab_control, setSegmentCount: 3];
+    let _: () = msg_send![
+        tab_control,
+        setLabel: NSString::alloc(nil).init_str("General")
+        forSegment: 0
+    ];
+    let _: () = msg_send![
+        tab_control,
+        setLabel: NSString::alloc(nil).init_str("Behavior")
+        forSegment: 1
+    ];
+    let _: () = msg_send![
+        tab_control,
+        setLabel: NSString::alloc(nil).init_str("Sync")
+        forSegment: 2
+    ];
+    let _: () = msg_send![tab_control, setTrackingMode: 1];
+    let _: () = msg_send![tab_control, setSelectedSegment: SETTINGS_ACTIVE_TAB.load(Ordering::SeqCst) as isize];
+    let _: () = msg_send![tab_control, setTarget: target];
+    let _: () = msg_send![tab_control, setAction: sel!(changeSettingsTab:)];
 
     // General card for hotkey
-    let general_card_height = 136.0;
-    let general_card_y = (top_anchor - general_card_height).max(card_margin);
+    let general_card_height = 150.0;
+    let general_card_y = (card_top - general_card_height).max(card_margin);
     let general_card: id = msg_send![class!(NSView), alloc];
     let general_card: id = msg_send![general_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, general_card_y), NSSize::new(card_width, general_card_height))];
     let _: () = msg_send![general_card, setWantsLayer: YES];
@@ -189,9 +229,8 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![general_card, addSubview: hotkey_field];
 
     // Behavior card
-    top_anchor = general_card_y - 24.0;
     let behavior_card_height = 220.0;
-    let behavior_card_y = (top_anchor - behavior_card_height).max(card_margin);
+    let behavior_card_y = (card_top - behavior_card_height).max(card_margin);
     let behavior_card: id = msg_send![class!(NSView), alloc];
     let behavior_card: id = msg_send![behavior_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, behavior_card_y), NSSize::new(card_width, behavior_card_height))];
     let _: () = msg_send![behavior_card, setWantsLayer: YES];
@@ -237,7 +276,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let max_slider: id = msg_send![max_slider, initWithFrame: slider_frame];
     let _: () = msg_send![max_slider, setMinValue: 10.0];
     let _: () = msg_send![max_slider, setMaxValue: 200.0];
-    let _: () = msg_send![max_slider, setAllowsTickMarkValues: YES];
+    let _: () = msg_send![max_slider, setAllowsTickMarkValuesOnly: YES];
     let _: () = msg_send![max_slider, setNumberOfTickMarks: 10];
     let _: () = msg_send![max_slider, setTarget: target];
     let _: () = msg_send![max_slider, setAction: sel!(maxResultsSliderChanged:)];
@@ -264,9 +303,8 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![behavior_card, addSubview: click_toggle];
 
     // Sync card
-    top_anchor = behavior_card_y - 24.0;
-    let sync_card_height = 320.0;
-    let sync_card_y = (top_anchor - sync_card_height).max(card_margin);
+    let sync_card_height = 340.0;
+    let sync_card_y = (card_top - sync_card_height).max(card_margin);
     let sync_card: id = msg_send![class!(NSView), alloc];
     let sync_card: id = msg_send![sync_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, sync_card_y), NSSize::new(card_width, sync_card_height))];
     let _: () = msg_send![sync_card, setWantsLayer: YES];
@@ -307,7 +345,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let field_width = left_column_width - left_label_width - 12.0;
 
     let sync_enabled_toggle: id = msg_send![class!(NSButton), alloc];
-    let sync_enabled_toggle: id = msg_send![sync_enabled_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 132.0), NSSize::new(160.0, 28.0))];
+    let sync_enabled_toggle: id = msg_send![sync_enabled_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 222.0), NSSize::new(160.0, 28.0))];
     let _: () = msg_send![sync_enabled_toggle, setButtonType: 3];
     let _: () =
         msg_send![sync_enabled_toggle, setTitle: NSString::alloc(nil).init_str("Enable sync")];
@@ -315,7 +353,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_enabled_toggle, setAction: sel!(toggleSetting:)];
 
     let refresh_button: id = msg_send![class!(NSButton), alloc];
-    let refresh_button: id = msg_send![refresh_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 130.0), NSSize::new(120.0, 30.0))];
+    let refresh_button: id = msg_send![refresh_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 126.0), NSSize::new(120.0, 30.0))];
     let _: () = msg_send![refresh_button, setBezelStyle: 1];
     let _: () =
         msg_send![refresh_button, setTitle: NSString::alloc(nil).init_str("Refresh status")];
@@ -323,7 +361,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![refresh_button, setAction: sel!(refreshSyncStatus:)];
 
     let device_name_label: id = msg_send![class!(NSTextField), alloc];
-    let device_name_label: id = msg_send![device_name_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 98.0), NSSize::new(left_label_width, 22.0))];
+    let device_name_label: id = msg_send![device_name_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 180.0), NSSize::new(left_label_width, 22.0))];
     let _: () = msg_send![device_name_label, setBezeled: NO];
     let _: () = msg_send![device_name_label, setEditable: NO];
     let _: () = msg_send![device_name_label, setDrawsBackground: NO];
@@ -333,14 +371,14 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     set_string(device_name_label, "Device");
 
     let sync_device_name_field: id = msg_send![class!(NSTextField), alloc];
-    let sync_device_name_field: id = msg_send![sync_device_name_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 92.0), NSSize::new(field_width, 30.0))];
+    let sync_device_name_field: id = msg_send![sync_device_name_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 174.0), NSSize::new(field_width, 30.0))];
     let _: () = msg_send![sync_device_name_field, setBezeled: YES];
     let _: () = msg_send![sync_device_name_field, setEditable: YES];
     let _: () = msg_send![sync_device_name_field, setDrawsBackground: YES];
     let _: () = msg_send![sync_device_name_field, setBordered: YES];
 
     let server_url_label: id = msg_send![class!(NSTextField), alloc];
-    let server_url_label: id = msg_send![server_url_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 62.0), NSSize::new(left_label_width, 22.0))];
+    let server_url_label: id = msg_send![server_url_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 132.0), NSSize::new(left_label_width, 22.0))];
     let _: () = msg_send![server_url_label, setBezeled: NO];
     let _: () = msg_send![server_url_label, setEditable: NO];
     let _: () = msg_send![server_url_label, setDrawsBackground: NO];
@@ -350,14 +388,14 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     set_string(server_url_label, "Server");
 
     let sync_server_url_field: id = msg_send![class!(NSTextField), alloc];
-    let sync_server_url_field: id = msg_send![sync_server_url_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 56.0), NSSize::new(field_width, 30.0))];
+    let sync_server_url_field: id = msg_send![sync_server_url_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 126.0), NSSize::new(field_width, 30.0))];
     let _: () = msg_send![sync_server_url_field, setBezeled: YES];
     let _: () = msg_send![sync_server_url_field, setEditable: YES];
     let _: () = msg_send![sync_server_url_field, setDrawsBackground: YES];
     let _: () = msg_send![sync_server_url_field, setBordered: YES];
 
     let auth_token_label: id = msg_send![class!(NSTextField), alloc];
-    let auth_token_label: id = msg_send![auth_token_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 26.0), NSSize::new(left_label_width, 22.0))];
+    let auth_token_label: id = msg_send![auth_token_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 84.0), NSSize::new(left_label_width, 22.0))];
     let _: () = msg_send![auth_token_label, setBezeled: NO];
     let _: () = msg_send![auth_token_label, setEditable: NO];
     let _: () = msg_send![auth_token_label, setDrawsBackground: NO];
@@ -367,14 +405,14 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     set_string(auth_token_label, "Token");
 
     let sync_auth_token_field: id = msg_send![class!(NSSecureTextField), alloc];
-    let sync_auth_token_field: id = msg_send![sync_auth_token_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 20.0), NSSize::new(field_width, 30.0))];
+    let sync_auth_token_field: id = msg_send![sync_auth_token_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 78.0), NSSize::new(field_width, 30.0))];
     let _: () = msg_send![sync_auth_token_field, setBezeled: YES];
     let _: () = msg_send![sync_auth_token_field, setEditable: YES];
     let _: () = msg_send![sync_auth_token_field, setDrawsBackground: YES];
     let _: () = msg_send![sync_auth_token_field, setBordered: YES];
 
     let sync_status_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_status_label: id = msg_send![sync_status_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 82.0), NSSize::new(240.0, 130.0))];
+    let sync_status_label: id = msg_send![sync_status_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 176.0), NSSize::new(240.0, 78.0))];
     let _: () = msg_send![sync_status_label, setBezeled: NO];
     let _: () = msg_send![sync_status_label, setEditable: NO];
     let _: () = msg_send![sync_status_label, setDrawsBackground: NO];
@@ -385,7 +423,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_status_label, setTextColor: caption_color];
 
     let sync_device_id_field: id = msg_send![class!(NSTextField), alloc];
-    let sync_device_id_field: id = msg_send![sync_device_id_field, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 52.0), NSSize::new(240.0, 24.0))];
+    let sync_device_id_field: id = msg_send![sync_device_id_field, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 88.0), NSSize::new(240.0, 30.0))];
     let _: () = msg_send![sync_device_id_field, setBezeled: NO];
     let _: () = msg_send![sync_device_id_field, setEditable: NO];
     let _: () = msg_send![sync_device_id_field, setDrawsBackground: NO];
@@ -395,12 +433,14 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_device_id_field, setTextColor: caption_color];
 
     let sync_message_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_message_label: id = msg_send![sync_message_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 14.0), NSSize::new(240.0, 28.0))];
+    let sync_message_label: id = msg_send![sync_message_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 22.0), NSSize::new(240.0, 52.0))];
     let _: () = msg_send![sync_message_label, setBezeled: NO];
     let _: () = msg_send![sync_message_label, setEditable: NO];
     let _: () = msg_send![sync_message_label, setDrawsBackground: NO];
     let _: () = msg_send![sync_message_label, setBordered: NO];
     let _: () = msg_send![sync_message_label, setSelectable: NO];
+    let _: () = msg_send![sync_message_label, setUsesSingleLineMode: NO];
+    let _: () = msg_send![sync_message_label, setLineBreakMode: 4];
     let _: () = msg_send![sync_message_label, setFont: caption_font];
     let message_color: id = msg_send![class!(NSColor), colorWithCalibratedRed:0.51f64 green:0.76f64 blue:1.0f64 alpha:1.0f64];
     let _: () = msg_send![sync_message_label, setTextColor: message_color];
@@ -420,7 +460,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_card, addSubview: sync_message_label];
 
     let save_button_frame = NSRect::new(
-        NSPoint::new(bounds.size.width - card_margin - 160.0, card_margin + 12.0),
+        NSPoint::new(bounds.size.width - card_margin - 160.0, 40.0),
         NSSize::new(150.0, 32.0),
     );
     let save_button: id = msg_send![class!(NSButton), alloc];
@@ -447,12 +487,17 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
 
     let _: () = msg_send![panel, addSubview: title];
     let _: () = msg_send![panel, addSubview: detail];
+    let _: () = msg_send![panel, addSubview: tab_control];
     let _: () = msg_send![panel, addSubview: general_card];
     let _: () = msg_send![panel, addSubview: behavior_card];
     let _: () = msg_send![panel, addSubview: sync_card];
     let _: () = msg_send![panel, addSubview: save_button];
     let _: () = msg_send![panel, addSubview: button];
     let controls = SettingsControls {
+        tab_control: tab_control as usize,
+        general_card: general_card as usize,
+        behavior_card: behavior_card as usize,
+        sync_card: sync_card as usize,
         hotkey_field: hotkey_field as usize,
         max_slider: max_slider as usize,
         max_label: max_label as usize,
@@ -543,6 +588,44 @@ unsafe fn slider_value_changed(slider: id) {
             id_from(controls.max_label),
             &format!("Max results: {}", value.max(10)),
         );
+    }
+}
+
+unsafe fn apply_active_settings_tab() {
+    let Some(controls) = SETTINGS_CONTROLS.get() else {
+        return;
+    };
+
+    let active = SETTINGS_ACTIVE_TAB.load(Ordering::SeqCst);
+    let _: () = msg_send![id_from(controls.tab_control), setSelectedSegment: active as isize];
+    let _: () = msg_send![
+        id_from(controls.general_card),
+        setHidden: if active == SETTINGS_TAB_GENERAL { NO } else { YES }
+    ];
+    let _: () = msg_send![
+        id_from(controls.behavior_card),
+        setHidden: if active == SETTINGS_TAB_BEHAVIOR { NO } else { YES }
+    ];
+    let _: () = msg_send![
+        id_from(controls.sync_card),
+        setHidden: if active == SETTINGS_TAB_SYNC { NO } else { YES }
+    ];
+}
+
+pub unsafe fn focus_active_settings_control(window: id) {
+    let Some(controls) = SETTINGS_CONTROLS.get() else {
+        return;
+    };
+
+    let first_responder = match SETTINGS_ACTIVE_TAB.load(Ordering::SeqCst) {
+        SETTINGS_TAB_GENERAL => id_from(controls.hotkey_field),
+        SETTINGS_TAB_BEHAVIOR => id_from(controls.max_slider),
+        SETTINGS_TAB_SYNC => id_from(controls.sync_device_name_field),
+        _ => id_from(controls.tab_control),
+    };
+
+    if first_responder != nil {
+        let _: () = msg_send![window, makeFirstResponder: first_responder];
     }
 }
 
@@ -759,6 +842,15 @@ unsafe fn register_action_class() -> id {
             // Handled automatically by the button; no extra action needed
         }
 
+        extern "C" fn change_settings_tab(_this: &Object, _cmd: Sel, sender: id) {
+            unsafe {
+                let selected: isize = msg_send![sender, selectedSegment];
+                let tab_index = selected.clamp(0, SETTINGS_TAB_SYNC as isize) as usize;
+                SETTINGS_ACTIVE_TAB.store(tab_index, Ordering::SeqCst);
+                apply_active_settings_tab();
+            }
+        }
+
         extern "C" fn save_settings_action(_this: &Object, _cmd: Sel, _sender: id) {
             unsafe {
                 apply_settings_from_ui();
@@ -782,6 +874,10 @@ unsafe fn register_action_class() -> id {
         decl.add_method(
             sel!(toggleSetting:),
             toggle_setting as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(changeSettingsTab:),
+            change_settings_tab as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(
             sel!(saveSettings:),

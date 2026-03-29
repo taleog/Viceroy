@@ -102,7 +102,7 @@ pub unsafe fn install_constrained_clip_view(scroll: id, initial_bounds: NSRect) 
 
 const COLLAPSED_RESULT_AREA_HEIGHT: f64 = 0.0;
 const OPEN_RESULT_AREA_HEIGHT: f64 = 420.0;
-const SETTINGS_WINDOW_HEIGHT: f64 = 850.0;
+const SETTINGS_WINDOW_HEIGHT: f64 = 760.0;
 const WINDOW_HEIGHT_OPEN: f64 =
     style::TABLE_TOP_OFFSET + style::TABLE_FOOTER_HEIGHT + OPEN_RESULT_AREA_HEIGHT;
 const WINDOW_HEIGHT_COLLAPSED: f64 =
@@ -1078,6 +1078,7 @@ unsafe fn perform_result_action(index: usize) {
         let count: usize = msg_send![windows, count];
         if count > 0 {
             let window: id = msg_send![windows, objectAtIndex:0];
+            crate::ui::settings_view::hide_settings_panel();
             let _: () = msg_send![window, orderOut: nil];
         }
         // Relinquish focus so the previous app regains key status for paste.
