@@ -1,6 +1,7 @@
 use crate::sync::{CatchUpResponse, PushEventsRequest, SyncEnvelope};
 use anyhow::{anyhow, Context, Result};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::DefaultBodyLimit;
 use axum::extract::Path;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -19,6 +20,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8787";
+const DEFAULT_MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct SyncServerConfig {
@@ -26,6 +28,7 @@ pub struct SyncServerConfig {
     pub database_path: PathBuf,
     pub auth_token: Option<String>,
     pub admin_token: Option<String>,
+    pub max_event_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +125,7 @@ pub fn router(state: Arc<SyncServerState>) -> Router {
         .route("/api/v1/sync/clipboard/ws", get(ws_handler))
         .route("/api/v1/sync/devices", get(list_devices))
         .route("/api/v1/sync/devices/{device_id}", patch(update_device))
+        .layer(DefaultBodyLimit::max(state.config.max_event_bytes))
         .with_state(state)
 }
 
@@ -148,12 +152,23 @@ impl SyncServerConfig {
         let admin_token = std::env::var("VICEROY_SYNC_SERVER_ADMIN_TOKEN")
             .ok()
             .filter(|token| !token.trim().is_empty());
+        let max_event_bytes = std::env::var("VICEROY_SYNC_SERVER_MAX_EVENT_BYTES")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                value.parse::<usize>().with_context(|| {
+                    format!("invalid VICEROY_SYNC_SERVER_MAX_EVENT_BYTES value: {value}")
+                })
+            })
+            .transpose()?
+            .unwrap_or(DEFAULT_MAX_EVENT_BYTES);
 
         Ok(Self {
             bind_addr,
             database_path,
             auth_token,
             admin_token,
+            max_event_bytes,
         })
     }
 }
@@ -837,6 +852,7 @@ mod tests {
         let config = SyncServerConfig::from_env().unwrap();
         assert!(!config.bind_addr.trim().is_empty());
         assert!(!config.database_path.as_os_str().is_empty());
+        assert!(config.max_event_bytes > 0);
     }
 
     #[test]
@@ -846,6 +862,7 @@ mod tests {
             database_path: PathBuf::from("test.db"),
             auth_token: Some("client-token".to_string()),
             admin_token: None,
+            max_event_bytes: DEFAULT_MAX_EVENT_BYTES,
         };
         assert_eq!(
             config

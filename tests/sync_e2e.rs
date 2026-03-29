@@ -312,6 +312,7 @@ async fn start_sync_server(database_path: PathBuf, auth_token: &str) -> Result<T
         database_path,
         auth_token: Some(auth_token.to_string()),
         admin_token: Some(auth_token.to_string()),
+        max_event_bytes: 16 * 1024 * 1024,
     };
     let state = sync_server::build_state(config)?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;

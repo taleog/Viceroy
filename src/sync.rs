@@ -31,6 +31,7 @@ const CURSOR_KEY: &str = "clipboard_cursor";
 const STATE_CONNECTION_KEY: &str = "connection_state";
 const STATE_LAST_SUCCESS_KEY: &str = "last_successful_sync_at";
 const STATE_LAST_ERROR_KEY: &str = "last_error";
+const PERMANENT_ERROR_PREFIX: &str = "permanent:";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalDevice {
@@ -295,6 +296,7 @@ pub fn pending_operations(limit: usize) -> Result<Vec<PendingSyncOperation>> {
         "SELECT id, entry_sync_id, operation, payload, created_at, attempts, last_error
          FROM sync_outbox
          WHERE sent_at IS NULL
+           AND (last_error IS NULL OR last_error NOT LIKE 'permanent:%')
          ORDER BY created_at ASC
          LIMIT ?1",
     )?;
@@ -342,6 +344,15 @@ pub fn mark_operation_failed(operation_id: i64, error: &str) -> Result<()> {
         params![error, operation_id],
     )?;
     Ok(())
+}
+
+pub fn mark_operation_permanent_failure(operation_id: i64, error: &str) -> Result<()> {
+    let permanent_error = if error.starts_with(PERMANENT_ERROR_PREFIX) {
+        error.to_string()
+    } else {
+        format!("{PERMANENT_ERROR_PREFIX} {error}")
+    };
+    mark_operation_failed(operation_id, &permanent_error)
 }
 
 pub fn apply_remote_clipboard_record(record: &ClipboardSyncRecord) -> Result<i64> {
@@ -440,7 +451,9 @@ pub fn apply_remote_clipboard_record(record: &ClipboardSyncRecord) -> Result<i64
 
 fn status_with_connection(conn: &Connection, device: LocalDevice) -> Result<SyncStatus> {
     let pending_operations: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sync_outbox WHERE sent_at IS NULL",
+        "SELECT COUNT(*) FROM sync_outbox
+         WHERE sent_at IS NULL
+           AND (last_error IS NULL OR last_error NOT LIKE 'permanent:%')",
         [],
         |row| row.get(0),
     )?;
@@ -537,41 +550,81 @@ async fn process_outbox(client: &reqwest::Client, config: &SyncRuntimeConfig) ->
         return Ok(());
     }
 
-    let request = PushEventsRequest {
-        device: config.device.clone(),
-        events: pending
-            .iter()
-            .map(|operation| SyncEnvelope {
-                operation: operation.operation.clone(),
-                record: operation.payload.clone(),
-            })
-            .collect(),
-    };
+    process_outbox_batch(client, config, &pending).await
+}
 
+async fn process_outbox_batch(
+    client: &reqwest::Client,
+    config: &SyncRuntimeConfig,
+    pending: &[PendingSyncOperation],
+) -> Result<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
     let url = api_base_url(&config.server_url)?.join("clipboard/events")?;
-    let response = authorized_request(client.post(url), config)
-        .json(&request)
-        .send()
-        .await;
+    let mut batches = vec![pending.to_vec()];
 
-    match response {
-        Ok(response) => {
-            response
-                .error_for_status()
-                .context("sync event upload failed")?;
-            for operation in pending {
+    while let Some(batch) = batches.pop() {
+        let request = PushEventsRequest {
+            device: config.device.clone(),
+            events: batch
+                .iter()
+                .map(|operation| SyncEnvelope {
+                    operation: operation.operation.clone(),
+                    record: operation.payload.clone(),
+                })
+                .collect(),
+        };
+
+        let response = authorized_request(client.post(url.clone()), config)
+            .json(&request)
+            .send()
+            .await
+            .context("failed to upload pending sync events")?;
+        let status = response.status();
+
+        if status.is_success() {
+            for operation in &batch {
                 mark_operation_sent(operation.id)?;
             }
-            Ok(())
+            continue;
         }
-        Err(err) => {
-            let message = format!("{err:#}");
-            for operation in pending {
-                let _ = mark_operation_failed(operation.id, &message);
+
+        if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            if batch.len() > 1 {
+                let midpoint = batch.len() / 2;
+                batches.push(batch[midpoint..].to_vec());
+                batches.push(batch[..midpoint].to_vec());
+                continue;
             }
-            Err(err).context("failed to upload pending sync events")
+
+            let operation = &batch[0];
+            let event = SyncEnvelope {
+                operation: operation.operation.clone(),
+                record: operation.payload.clone(),
+            };
+            let payload_size = serde_json::to_vec(&event)
+                .map(|bytes| bytes.len())
+                .unwrap_or_default();
+            let message = format!(
+                "sync payload too large for the server limit; sync_id={} payload_bytes={payload_size}. Raise VICEROY_SYNC_SERVER_MAX_EVENT_BYTES on the server or remove the oversized clipboard item.",
+                operation.entry_sync_id
+            );
+            mark_operation_permanent_failure(operation.id, &message)?;
+            return Err(anyhow!(message).context("sync event upload failed"));
         }
+
+        let error = response
+            .error_for_status()
+            .expect_err("non-success response should produce an error");
+        let message = format!("{error:#}");
+        for operation in &batch {
+            let _ = mark_operation_failed(operation.id, &message);
+        }
+        return Err(error).context("failed to upload pending sync events");
     }
+
+    Ok(())
 }
 
 async fn catch_up_once(client: &reqwest::Client, config: &SyncRuntimeConfig) -> Result<()> {

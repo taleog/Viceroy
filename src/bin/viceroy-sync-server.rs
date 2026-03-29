@@ -12,6 +12,7 @@ fn main() {
         println!("  VICEROY_SYNC_SERVER_DATABASE    SQLite path, default ./viceroy-sync-server.db");
         println!("  VICEROY_SYNC_SERVER_AUTH_TOKEN  Optional bearer token");
         println!("  VICEROY_SYNC_SERVER_ADMIN_TOKEN Optional admin bearer token");
+        println!("  VICEROY_SYNC_SERVER_MAX_EVENT_BYTES  Max JSON body size for sync uploads, default 16777216");
         return;
     }
 
