@@ -462,7 +462,7 @@ impl ViceroyWindowsApp {
         self.items.get(self.selected)
     }
 
-    fn preview_card(&mut self) -> &PreviewCard {
+    fn refresh_preview_card_cache(&mut self) {
         let key = self.preview_cache_key_for_selected_item();
         if self.preview_cache_key != Some(key) {
             self.preview_cache_card = match self.selected_item() {
@@ -484,6 +484,9 @@ impl ViceroyWindowsApp {
             };
             self.preview_cache_key = Some(key);
         }
+    }
+
+    fn preview_card(&self) -> &PreviewCard {
         &self.preview_cache_card
     }
 
@@ -1025,13 +1028,14 @@ impl ViceroyWindowsApp {
                     }
                 });
             } else {
-                let preview = self.preview_card().clone();
+                self.refresh_preview_card_cache();
                 let ctx = ui.ctx().clone();
+                let preview = self.preview_card();
                 windows_preview::render_preview_panel(
                     ui,
                     &ctx,
                     &mut self.preview_state,
-                    Some(&preview),
+                    Some(preview),
                 );
             }
 

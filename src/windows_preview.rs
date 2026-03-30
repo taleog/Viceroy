@@ -5,8 +5,6 @@ use eframe::egui::{
     self, Color32, ColorImage, Frame, RichText, ScrollArea, Stroke, TextureHandle, TextureOptions,
     Ui, Vec2,
 };
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use viceroy::clipboard;
 use viceroy::search_engine::SearchResult;
@@ -33,6 +31,7 @@ pub struct PreviewMetadata {
 pub struct PreviewImage {
     pub width: usize,
     pub height: usize,
+    pub cache_key: u64,
     pub rgba: Vec<u8>,
 }
 
@@ -45,19 +44,16 @@ impl PreviewImage {
         let mut buf = vec![0; reader.output_buffer_size()];
         let info = reader.next_frame(&mut buf).ok()?;
         buf.truncate(info.buffer_size());
+        let cache_key = blake3::hash(&buf).as_bytes()[..8]
+            .try_into()
+            .map(u64::from_le_bytes)
+            .ok()?;
         Some(Self {
             width: info.width as usize,
             height: info.height as usize,
+            cache_key,
             rgba: buf,
         })
-    }
-
-    fn cache_key(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.width.hash(&mut hasher);
-        self.height.hash(&mut hasher);
-        self.rgba.hash(&mut hasher);
-        hasher.finish()
     }
 
     fn to_color_image(&self) -> Option<ColorImage> {
@@ -368,7 +364,7 @@ impl PreviewPanelState {
         ctx: &egui::Context,
         image: &PreviewImage,
     ) -> Option<&'a TextureHandle> {
-        let key = image.cache_key();
+        let key = image.cache_key;
         if self.texture_key != Some(key) {
             let color_image = image.to_color_image()?;
             self.texture = Some(ctx.load_texture(
