@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish (for example v0.1.0-alpha.2)'
+        description: "Release tag to publish (for example v0.1.0-alpha.2)"
         required: true
         type: string
 
@@ -18,18 +18,44 @@ permissions:
   contents: write
 
 jobs:
-  create-release:
-    name: Create Release
+  prepare:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release_ref.outputs.tag }}
+      version: ${{ steps.release_ref.outputs.version }}
+      prerelease: ${{ steps.release_ref.outputs.prerelease }}
+    steps:
+      - name: Resolve release tag
+        id: release_ref
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          VERSION="${TAG#v}"
+          PRERELEASE=false
+          if [[ "$TAG" == *alpha* || "$TAG" == *beta* ]]; then
+            PRERELEASE=true
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+  build-macos-client:
+    name: Build macOS Client
+    needs: prepare
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
-      
+          ref: ${{ needs.prepare.outputs.tag }}
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -40,81 +66,218 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-release-
-      
-      - name: Build release binary
-        run: cargo build --release
-      
-      - name: Build app bundle
-        run: ./build_app.sh
-      
-      - name: Resolve release tag
-        id: release_ref
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          fi
-          VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Create ZIP of app bundle
+      - name: Build macOS app bundle
+        run: ./build_app.sh
+
+      - name: Package macOS client
+        shell: bash
         run: |
-          cd .
-          zip -r Viceroy-${{ steps.release_ref.outputs.tag }}.zip Viceroy.app
-      
-      - name: Compute SHA256
-        id: sha256
+          mkdir -p dist
+          ASSET="Viceroy-macOS-${{ needs.prepare.outputs.tag }}.zip"
+          ditto -c -k --keepParent Viceroy.app "dist/$ASSET"
+          shasum -a 256 "dist/$ASSET" > "dist/$ASSET.sha256"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-client
+          path: dist/*
+          retention-days: 7
+
+  build-windows-client:
+    name: Build Windows Client
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+
+      - name: Build Windows client
+        run: cargo build --release
+
+      - name: Package Windows client
+        shell: pwsh
         run: |
-          SHA=$(shasum -a 256 target/release/viceroy | cut -d ' ' -f1)
-          echo "sha256=$SHA" >> $GITHUB_OUTPUT
-          echo "SHA256: $SHA"
-      
+          $asset = "Viceroy-Windows-x64-${{ needs.prepare.outputs.tag }}.zip"
+          New-Item -ItemType Directory -Force -Path dist, package | Out-Null
+          Copy-Item target/release/viceroy.exe package/Viceroy.exe
+          @"
+          Viceroy for Windows
+
+          1. Extract this zip.
+          2. Run Viceroy.exe.
+          3. Create a shortcut manually if you want it in Start or on the desktop.
+
+          Note: This build is currently unsigned, so Windows SmartScreen may warn on first launch.
+          "@ | Set-Content package/README.txt
+          Compress-Archive -Path package/* -DestinationPath "dist/$asset" -Force
+          $hash = (Get-FileHash "dist/$asset" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $asset" | Set-Content "dist/$asset.sha256"
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-client
+          path: dist/*
+          retention-days: 7
+
+  build-linux-server:
+    name: Build Linux Sync Server
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+
+      - name: Build sync server
+        run: cargo build --release --bin viceroy-sync-server
+
+      - name: Package Linux sync server
+        shell: bash
+        run: |
+          mkdir -p dist package
+          ASSET="viceroy-sync-server-linux-x64-${{ needs.prepare.outputs.tag }}.tar.gz"
+          cp target/release/viceroy-sync-server package/
+          cat > package/README.txt <<'EOF'
+          Viceroy Sync Server for Linux
+
+          Quick start:
+          1. Extract this archive.
+          2. Run ./viceroy-sync-server
+
+          Optional environment variables:
+          - VICEROY_SYNC_SERVER_BIND_ADDR
+          - VICEROY_SYNC_SERVER_DATABASE
+          - VICEROY_SYNC_SERVER_AUTH_TOKEN
+
+          See docs/sync-server.md in the repository for full setup guidance.
+          EOF
+          tar -czf "dist/$ASSET" -C package .
+          sha256sum "dist/$ASSET" > "dist/$ASSET.sha256"
+
+      - name: Upload Linux server package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-server
+          path: dist/*
+          retention-days: 7
+
+  publish-release:
+    name: Publish Release
+    needs:
+      - prepare
+      - build-macos-client
+      - build-windows-client
+      - build-linux-server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Download packaged assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Generate release notes
-        id: release_notes
+        shell: bash
         run: |
-          # Extract changelog section for this version
-          VERSION=${{ steps.release_ref.outputs.version }}
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="${{ needs.prepare.outputs.tag }}"
+          cat > /tmp/release_notes.md <<EOF
+          Downloads
+
+          - macOS client: \`Viceroy-macOS-$TAG.zip\`
+          - Windows client: \`Viceroy-Windows-x64-$TAG.zip\`
+          - Linux sync server: \`viceroy-sync-server-linux-x64-$TAG.tar.gz\`
+
+          Install Notes
+
+          - macOS: unzip and drag \`Viceroy.app\` into Applications.
+          - Windows: unzip and run \`Viceroy.exe\`.
+          - Server: extract and run \`./viceroy-sync-server\`.
+          - Current builds are unsigned, so macOS Gatekeeper and Windows SmartScreen may warn on first launch.
+
+          EOF
+
           awk -v version="$VERSION" '
             $0 ~ "^## \\[" version "\\]" { capture=1 }
             capture && $0 ~ "^## \\[" && $0 !~ "^## \\[" version "\\]" { exit }
             capture { print }
-          ' CHANGELOG.md > /tmp/release_notes.md
+          ' CHANGELOG.md >> /tmp/release_notes.md
 
-          if [ ! -s /tmp/release_notes.md ]; then
-            echo "Release $VERSION" > /tmp/release_notes.md
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          TITLE="Viceroy ${{ needs.prepare.outputs.version }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
+              gh release edit "$TAG" --title "$TITLE" --notes-file /tmp/release_notes.md --prerelease
+            else
+              gh release edit "$TAG" --title "$TITLE" --notes-file /tmp/release_notes.md
+            fi
+          else
+            if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
+              gh release create "$TAG" --title "$TITLE" --notes-file /tmp/release_notes.md --prerelease
+            else
+              gh release create "$TAG" --title "$TITLE" --notes-file /tmp/release_notes.md
+            fi
           fi
 
-          echo "Generated release notes for $VERSION"
-      
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.release_ref.outputs.tag }}
-          name: Viceroy ${{ steps.release_ref.outputs.version }}
-          body_path: /tmp/release_notes.md
-          draft: false
-          prerelease: ${{ contains(steps.release_ref.outputs.tag, 'alpha') || contains(steps.release_ref.outputs.tag, 'beta') }}
-          files: |
-            target/release/viceroy
-            Viceroy-${{ steps.release_ref.outputs.tag }}.zip
+      - name: Remove legacy assets from older reruns
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Create update metadata JSON
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          cat > latest.json << EOF
-          {
-            "version": "${{ steps.release_ref.outputs.version }}",
-            "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ steps.release_ref.outputs.tag }}/viceroy",
-            "sha256": "${{ steps.sha256.outputs.sha256 }}"
-          }
-          EOF
-          cat latest.json
-      
-      - name: Upload metadata artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: update-metadata
-          path: latest.json
-          retention-days: 90
+          TAG="${{ needs.prepare.outputs.tag }}"
+          gh release delete-asset "$TAG" "viceroy" --yes || true
+          gh release delete-asset "$TAG" "Viceroy-$TAG.zip" --yes || true
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          gh release upload "$TAG" dist/* --clobber
