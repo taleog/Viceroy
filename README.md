@@ -95,12 +95,17 @@ macOS remains the most polished experience. This branch also includes a Windows 
 ### Option 1: Download a release
 
 ```bash
-# Download the latest GitHub release, then unzip it
-# and move Viceroy.app into /Applications
+# Download the latest GitHub release
 open https://github.com/taleog/Viceroy/releases
 ```
 
-Releases are built in CI and include a generated macOS app bundle, so the repository does not track `Viceroy.app`.
+Release assets are built in CI and currently include:
+
+- `Viceroy-macOS-<tag>.dmg` for the macOS client
+- `Viceroy-Windows-Setup-<tag>.exe` for the Windows client
+- `viceroy-sync-server-linux-x64-<tag>.tar.gz` for the Linux sync server
+
+The repository does not track generated app bundles or installers.
 
 ### Option 2: Build from source
 

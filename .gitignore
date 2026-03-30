@@ -1,6 +1,7 @@
 # Build artifacts
 /target/
 /Viceroy.app/
+/dist/
 
 # macOS noise
 /.DS_Store

@@ -72,10 +72,8 @@ jobs:
       - name: Package macOS client
         shell: bash
         run: |
-          mkdir -p dist
-          ASSET="Viceroy-macOS-${{ needs.prepare.outputs.tag }}.zip"
-          ditto -c -k --keepParent Viceroy.app "dist/$ASSET"
-          shasum -a 256 "dist/$ASSET" > "dist/$ASSET.sha256"
+          chmod +x scripts/build_macos_dmg.sh
+          ./scripts/build_macos_dmg.sh "${{ needs.prepare.outputs.tag }}"
 
       - name: Upload macOS package
         uses: actions/upload-artifact@v4
@@ -110,24 +108,25 @@ jobs:
       - name: Build Windows client
         run: cargo build --release
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y
+
       - name: Package Windows client
         shell: pwsh
         run: |
-          $asset = "Viceroy-Windows-x64-${{ needs.prepare.outputs.tag }}.zip"
-          New-Item -ItemType Directory -Force -Path dist, package | Out-Null
-          Copy-Item target/release/viceroy.exe package/Viceroy.exe
-          @"
-          Viceroy for Windows
-
-          1. Extract this zip.
-          2. Run Viceroy.exe.
-          3. Create a shortcut manually if you want it in Start or on the desktop.
-
-          Note: This build is currently unsigned, so Windows SmartScreen may warn on first launch.
-          "@ | Set-Content package/README.txt
-          Compress-Archive -Path package/* -DestinationPath "dist/$asset" -Force
-          $hash = (Get-FileHash "dist/$asset" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $asset" | Set-Content "dist/$asset.sha256"
+          $outputBase = "Viceroy-Windows-Setup-${{ needs.prepare.outputs.tag }}"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $compiler)) {
+            $compiler = (Get-Command iscc).Source
+          }
+          & $compiler `
+            /DAppVersion=${{ needs.prepare.outputs.version }} `
+            /DSourceExe="$PWD\\target\\release\\viceroy.exe" `
+            /DOutputDir="$PWD\\dist" `
+            /DOutputBaseFilename="$outputBase" `
+            "$PWD\\scripts\\windows_installer.iss"
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
@@ -183,7 +182,6 @@ jobs:
           See docs/sync-server.md in the repository for full setup guidance.
           EOF
           tar -czf "dist/$ASSET" -C package .
-          sha256sum "dist/$ASSET" > "dist/$ASSET.sha256"
 
       - name: Upload Linux server package
         uses: actions/upload-artifact@v4
@@ -221,14 +219,15 @@ jobs:
           cat > /tmp/release_notes.md <<EOF
           Downloads
 
-          - macOS client: \`Viceroy-macOS-$TAG.zip\`
-          - Windows client: \`Viceroy-Windows-x64-$TAG.zip\`
+          - macOS client: \`Viceroy-macOS-$TAG.dmg\`
+          - Windows client: \`Viceroy-Windows-Setup-$TAG.exe\`
           - Linux sync server: \`viceroy-sync-server-linux-x64-$TAG.tar.gz\`
+          - Checksums: \`checksums-$TAG.txt\`
 
           Install Notes
 
-          - macOS: unzip and drag \`Viceroy.app\` into Applications.
-          - Windows: unzip and run \`Viceroy.exe\`.
+          - macOS: open the DMG, drag \`Viceroy.app\` into Applications, then launch it from Applications.
+          - Windows: run the setup executable and launch Viceroy from the Start menu.
           - Server: extract and run \`./viceroy-sync-server\`.
           - Current builds are unsigned, so macOS Gatekeeper and Windows SmartScreen may warn on first launch.
 
@@ -239,6 +238,15 @@ jobs:
             capture && $0 ~ "^## \\[" && $0 !~ "^## \\[" version "\\]" { exit }
             capture { print }
           ' CHANGELOG.md >> /tmp/release_notes.md
+
+      - name: Generate combined checksums
+        shell: bash
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          (
+            cd dist
+            sha256sum * > "checksums-$TAG.txt"
+          )
 
       - name: Create or update GitHub release
         env:
@@ -269,6 +277,11 @@ jobs:
           TAG="${{ needs.prepare.outputs.tag }}"
           gh release delete-asset "$TAG" "viceroy" --yes || true
           gh release delete-asset "$TAG" "Viceroy-$TAG.zip" --yes || true
+          gh release delete-asset "$TAG" "Viceroy-macOS-$TAG.zip" --yes || true
+          gh release delete-asset "$TAG" "Viceroy-macOS-$TAG.zip.sha256" --yes || true
+          gh release delete-asset "$TAG" "Viceroy-Windows-x64-$TAG.zip" --yes || true
+          gh release delete-asset "$TAG" "Viceroy-Windows-x64-$TAG.zip.sha256" --yes || true
+          gh release delete-asset "$TAG" "viceroy-sync-server-linux-x64-$TAG.tar.gz.sha256" --yes || true
 
       - name: Upload release assets
         env:
