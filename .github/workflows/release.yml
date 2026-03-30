@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (for example v0.1.0-alpha.2)'
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,6 +25,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
       
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -40,10 +47,21 @@ jobs:
       - name: Build app bundle
         run: ./build_app.sh
       
+      - name: Resolve release tag
+        id: release_ref
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Create ZIP of app bundle
         run: |
           cd .
-          zip -r Viceroy-${{ github.ref_name }}.zip Viceroy.app
+          zip -r Viceroy-${{ steps.release_ref.outputs.tag }}.zip Viceroy.app
       
       - name: Compute SHA256
         id: sha256
@@ -52,17 +70,11 @@ jobs:
           echo "sha256=$SHA" >> $GITHUB_OUTPUT
           echo "SHA256: $SHA"
       
-      - name: Extract version from tag
-        id: version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-      
       - name: Generate release notes
         id: release_notes
         run: |
           # Extract changelog section for this version
-          VERSION=${{ steps.version.outputs.version }}
+          VERSION=${{ steps.release_ref.outputs.version }}
           awk -v version="$VERSION" '
             $0 ~ "^## \\[" version "\\]" { capture=1 }
             capture && $0 ~ "^## \\[" && $0 !~ "^## \\[" version "\\]" { exit }
@@ -78,13 +90,14 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Viceroy ${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.release_ref.outputs.tag }}
+          name: Viceroy ${{ steps.release_ref.outputs.version }}
           body_path: /tmp/release_notes.md
           draft: false
-          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
+          prerelease: ${{ contains(steps.release_ref.outputs.tag, 'alpha') || contains(steps.release_ref.outputs.tag, 'beta') }}
           files: |
             target/release/viceroy
-            Viceroy-${{ github.ref_name }}.zip
+            Viceroy-${{ steps.release_ref.outputs.tag }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
@@ -92,8 +105,8 @@ jobs:
         run: |
           cat > latest.json << EOF
           {
-            "version": "${{ steps.version.outputs.version }}",
-            "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/viceroy",
+            "version": "${{ steps.release_ref.outputs.version }}",
+            "download_url": "https://github.com/${{ github.repository }}/releases/download/${{ steps.release_ref.outputs.tag }}/viceroy",
             "sha256": "${{ steps.sha256.outputs.sha256 }}"
           }
           EOF
