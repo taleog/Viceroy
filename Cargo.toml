@@ -61,3 +61,6 @@ panic = "abort"
 
 [profile.dev]
 opt-level = 0
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }

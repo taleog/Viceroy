@@ -25,7 +25,7 @@ pub fn search_commands(query: &str) -> Vec<SystemCommand> {
 pub fn get_all_commands() -> Vec<SystemCommand> {
     #[cfg(target_os = "macos")]
     {
-        return vec![
+        vec![
             command("Lock Screen", "Lock the screen immediately", "lock"),
             command("Sleep", "Put the computer to sleep", "sleep"),
             command("Restart", "Restart the computer", "restart"),
@@ -42,7 +42,7 @@ pub fn get_all_commands() -> Vec<SystemCommand> {
             command("Screenshot", "Take a screenshot", "screenshot"),
             command("Color Picker", "Open color picker", "color_picker"),
             command("System Settings", "Open System Settings", "system_settings"),
-        ];
+        ]
     }
 
     #[cfg(target_os = "windows")]
@@ -77,7 +77,7 @@ pub fn get_all_commands() -> Vec<SystemCommand> {
 pub async fn execute(command: &str) -> Result<String> {
     #[cfg(target_os = "macos")]
     {
-        return execute_macos(command);
+        execute_macos(command)
     }
 
     #[cfg(target_os = "windows")]

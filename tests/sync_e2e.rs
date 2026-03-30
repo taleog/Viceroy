@@ -286,11 +286,11 @@ async fn sync_round_trip_persists_and_delivers_changes() -> Result<()> {
 }
 
 fn configure_test_config_root(root: &Path) {
-    let config_root = root.join("config");
+    let _config_root = root.join("config");
     let home_root = root.join("home");
     #[cfg(target_os = "windows")]
     {
-        std::env::set_var("APPDATA", &config_root);
+        std::env::set_var("APPDATA", &_config_root);
         std::env::set_var("LOCALAPPDATA", root.join("local"));
         std::env::set_var("USERPROFILE", &home_root);
         std::env::set_var("HOME", &home_root);
@@ -301,7 +301,7 @@ fn configure_test_config_root(root: &Path) {
     }
     #[cfg(target_os = "linux")]
     {
-        std::env::set_var("XDG_CONFIG_HOME", &config_root);
+        std::env::set_var("XDG_CONFIG_HOME", &_config_root);
         std::env::set_var("HOME", &home_root);
     }
 }
