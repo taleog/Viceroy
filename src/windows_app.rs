@@ -1,5 +1,7 @@
 use arboard::Clipboard;
 use eframe::egui::{self, Align, Key, Layout, RichText, ScrollArea, Slider, TextEdit};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -173,6 +175,22 @@ struct ClipboardEditor {
     is_text: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreviewCacheKey {
+    EmptySearch,
+    EmptyClipboard,
+    EmptySettings,
+    SearchClipboard(i64),
+    HistoryEntry(i64),
+    SearchApp(u64),
+    SearchFile(u64),
+    SearchCommand(u64),
+    SearchCalculator(u64),
+    SearchEmoji(u64),
+    SearchDictionary(u64),
+    SearchWeb(u64),
+}
+
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
@@ -290,6 +308,8 @@ struct ViceroyWindowsApp {
     settings_tab: SettingsTab,
     clipboard_editor: Option<ClipboardEditor>,
     preview_state: PreviewPanelState,
+    preview_cache_key: Option<PreviewCacheKey>,
+    preview_cache_card: PreviewCard,
 }
 
 impl ViceroyWindowsApp {
@@ -324,6 +344,8 @@ impl ViceroyWindowsApp {
             settings_tab: SettingsTab::General,
             clipboard_editor: None,
             preview_state: PreviewPanelState::new(),
+            preview_cache_key: None,
+            preview_cache_card: PreviewCard::empty("Loading preview..."),
         };
         app.refresh_sync_status();
         app.reload_items(true);
@@ -337,12 +359,20 @@ impl ViceroyWindowsApp {
             if surface != AppSurface::Clipboard {
                 self.clipboard_editor = None;
             }
+            self.preview_cache_key = None;
         }
     }
 
     fn reload_items(&mut self, force: bool) {
         if self.surface == AppSurface::Settings {
+            if !force
+                && self.last_loaded_query == self.query
+                && self.last_loaded_surface == self.surface
+            {
+                return;
+            }
             self.items.clear();
+            self.preview_cache_key = None;
             self.last_loaded_query = self.query.clone();
             self.last_loaded_surface = self.surface;
             return;
@@ -359,6 +389,7 @@ impl ViceroyWindowsApp {
 
         self.items.clear();
         self.clipboard_editor = None;
+        self.preview_cache_key = None;
         let limit = self.max_results.clamp(10, 200);
 
         match self.surface {
@@ -424,29 +455,72 @@ impl ViceroyWindowsApp {
         }
         let len = self.items.len() as isize;
         self.selected = ((self.selected as isize + delta).rem_euclid(len)) as usize;
+        self.preview_cache_key = None;
     }
 
     fn selected_item(&self) -> Option<&DisplayItem> {
         self.items.get(self.selected)
     }
 
-    fn preview_card(&self) -> PreviewCard {
+    fn preview_card(&mut self) -> &PreviewCard {
+        let key = self.preview_cache_key_for_selected_item();
+        if self.preview_cache_key != Some(key) {
+            self.preview_cache_card = match self.selected_item() {
+                Some(DisplayItem::Search(result)) => {
+                    windows_preview::preview_card(PreviewSource::from_search_result(result))
+                }
+                Some(DisplayItem::History(entry)) => {
+                    windows_preview::preview_card(PreviewSource::from_clipboard_entry(entry))
+                }
+                None => PreviewCard::empty(match self.surface {
+                    AppSurface::Search => {
+                        "Start typing to search, then use Up and Down to move through results."
+                    }
+                    AppSurface::Clipboard => {
+                        "Select a clipboard entry to inspect its content and metadata."
+                    }
+                    AppSurface::Settings => "Choose a settings tab to continue.",
+                }),
+            };
+            self.preview_cache_key = Some(key);
+        }
+        &self.preview_cache_card
+    }
+
+    fn preview_cache_key_for_selected_item(&self) -> PreviewCacheKey {
         match self.selected_item() {
-            Some(DisplayItem::Search(result)) => {
-                windows_preview::preview_card(PreviewSource::from_search_result(result))
-            }
-            Some(DisplayItem::History(entry)) => {
-                windows_preview::preview_card(PreviewSource::from_clipboard_entry(entry))
-            }
-            None => PreviewCard::empty(match self.surface {
-                AppSurface::Search => {
-                    "Start typing to search, then use Up and Down to move through results."
+            Some(DisplayItem::History(entry)) => PreviewCacheKey::HistoryEntry(entry.id),
+            Some(DisplayItem::Search(result)) => match result {
+                SearchResult::Clipboard { id, .. } => PreviewCacheKey::SearchClipboard(*id),
+                SearchResult::App { path, .. } => {
+                    PreviewCacheKey::SearchApp(stable_preview_hash(path))
                 }
-                AppSurface::Clipboard => {
-                    "Select a clipboard entry to inspect its content and metadata."
+                SearchResult::File { path, .. } => {
+                    PreviewCacheKey::SearchFile(stable_preview_hash(path))
                 }
-                AppSurface::Settings => "Choose a settings tab to continue.",
-            }),
+                SearchResult::Command { command, .. } => {
+                    PreviewCacheKey::SearchCommand(stable_preview_hash(command))
+                }
+                SearchResult::Calculator {
+                    expression, result, ..
+                } => PreviewCacheKey::SearchCalculator(stable_preview_hash(&format!(
+                    "{expression}={result}"
+                ))),
+                SearchResult::Emoji { emoji, name, .. } => {
+                    PreviewCacheKey::SearchEmoji(stable_preview_hash(&format!("{emoji}:{name}")))
+                }
+                SearchResult::Dictionary { word, .. } => {
+                    PreviewCacheKey::SearchDictionary(stable_preview_hash(word))
+                }
+                SearchResult::WebSearch { url, .. } => {
+                    PreviewCacheKey::SearchWeb(stable_preview_hash(url))
+                }
+            },
+            None => match self.surface {
+                AppSurface::Search => PreviewCacheKey::EmptySearch,
+                AppSurface::Clipboard => PreviewCacheKey::EmptyClipboard,
+                AppSurface::Settings => PreviewCacheKey::EmptySettings,
+            },
         }
     }
 
@@ -907,6 +981,7 @@ impl ViceroyWindowsApp {
                             if response.clicked() {
                                 self.selected = index;
                                 self.clipboard_editor = None;
+                                self.preview_cache_key = None;
                             }
                             if response.double_clicked() {
                                 activate = Some(index);
@@ -916,6 +991,7 @@ impl ViceroyWindowsApp {
                     });
                 if let Some(index) = activate {
                     self.selected = index;
+                    self.preview_cache_key = None;
                     self.activate_selected();
                 }
             })
@@ -949,7 +1025,7 @@ impl ViceroyWindowsApp {
                     }
                 });
             } else {
-                let preview = self.preview_card();
+                let preview = self.preview_card().clone();
                 let ctx = ui.ctx().clone();
                 windows_preview::render_preview_panel(
                     ui,
@@ -1700,6 +1776,12 @@ fn copy_text(value: &str) -> anyhow::Result<()> {
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(value.to_string())?;
     Ok(())
+}
+
+fn stable_preview_hash(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn non_empty(value: &str) -> Option<String> {
