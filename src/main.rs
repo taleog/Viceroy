@@ -33,6 +33,10 @@ mod web_search;
 mod cli_app;
 #[cfg(target_os = "windows")]
 mod windows_app;
+#[cfg(target_os = "windows")]
+mod windows_preview;
+#[cfg(target_os = "windows")]
+mod windows_style;
 
 #[cfg(target_os = "macos")]
 fn main() {
