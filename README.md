@@ -1,7 +1,7 @@
 # Viceroy
 
 [![CI](https://github.com/taleog/Viceroy/actions/workflows/ci.yml/badge.svg)](https://github.com/taleog/Viceroy/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-blue)](https://github.com/taleog/Viceroy/releases)
+[![Version](https://img.shields.io/badge/version-0.1.0--alpha.2-blue)](https://github.com/taleog/Viceroy/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Viceroy is a lightweight launcher written in Rust with a native macOS experience, a Windows desktop app on this branch, and a self-hosted clipboard sync server.  

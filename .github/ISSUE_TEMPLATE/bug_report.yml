@@ -76,7 +76,7 @@ body:
     attributes:
       label: Viceroy Version
       description: Check version in the app or Cargo.toml
-      placeholder: "0.1.0-alpha.1"
+      placeholder: "0.1.0-alpha.2"
     validations:
       required: true
 
