@@ -21,8 +21,36 @@ pub fn is_define_command(query: &str) -> Option<String> {
 }
 
 pub fn open_dictionary(word: &str) -> Result<()> {
-    Command::new("open")
-        .arg(format!("dict://{}", word))
-        .spawn()?;
+    let encoded = urlencoding::encode(word);
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(format!("dict://{}", encoded))
+            .spawn()?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args([
+                "/C",
+                "start",
+                "",
+                &format!("https://www.merriam-webster.com/dictionary/{}", encoded),
+            ])
+            .spawn()?;
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        Command::new("xdg-open")
+            .arg(format!(
+                "https://www.merriam-webster.com/dictionary/{}",
+                encoded
+            ))
+            .spawn()?;
+    }
+
     Ok(())
 }

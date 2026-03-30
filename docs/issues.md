@@ -5,6 +5,9 @@
 - **Duplicate clipboard entries** - Now checks last 5 entries instead of just 1, with app-agnostic comparison
 - **Permission prompts on startup** - Disabled file search by default; no filesystem access unless explicitly enabled
 - **Tab navigation** - Added Tab key to toggle between search results and clipboard history views
+- **Cross-device sync implementation** - Added self-hosted sync server, outbox/catch-up flow, and Windows/macOS sync settings
+- **Settings compatibility** - Legacy flat sync keys now migrate into the nested `sync` config automatically
+- **Misleading localhost sync config** - Settings validation now warns when `127.0.0.1`/`localhost` is used without a local server
 
 ## Known Limitations & Performance Issues
 
@@ -47,6 +50,12 @@
 - **ClipboardHistory**: Alternative view for browsing clipboard history
 - **Settings**: Configuration panel
 
+### Sync
+- Clipboard sync is available through the built-in self-hosted server
+- Each client needs a reachable `sync.server_url`; `localhost` only works if the server runs on that same machine
+- Catch-up uses HTTP and live fan-out uses WebSocket
+- Auth is a shared bearer token when `VICEROY_SYNC_SERVER_AUTH_TOKEN` is set on the server
+
 ## Environment Variables for Development
 
 ```bash
@@ -58,6 +67,11 @@ RUST_LOG=debug
 
 # Disable automatic update checks
 VICEROY_UPDATE_CHECK_DISABLED=1
+
+# Run the sync server locally
+VICEROY_SYNC_SERVER_BIND=0.0.0.0:8787
+VICEROY_SYNC_SERVER_DATABASE=./viceroy-sync-server.db
+VICEROY_SYNC_SERVER_AUTH_TOKEN=replace-me
 ```
 
 ## Future Improvements
@@ -85,6 +99,14 @@ VICEROY_UPDATE_CHECK_DISABLED=1
 echo $VICEROY_FALLBACK_FS
 ```
 
+### Check if the sync server is reachable
+```bash
+curl http://127.0.0.1:8787/health
+
+# Or from another device over Tailscale / LAN
+curl http://100.116.102.40:8787/health
+```
+
 ### View search performance logs
 ```bash
 RUST_LOG=search_engine=info /Applications/Viceroy.app/Contents/MacOS/viceroy
@@ -96,7 +118,7 @@ RUST_LOG=search_engine=info /Applications/Viceroy.app/Contents/MacOS/viceroy
 
 ### Restart with fresh state
 ```bash
-rm ~/.config/viceroy/clipboard.db
+rm "$HOME/Library/Application Support/viceroy/clipboard.db"
 pkill Viceroy
 open /Applications/Viceroy.app
 ```

@@ -10,6 +10,10 @@
 /.env.*
 /*.local
 
+# Local app data
+/viceroy/
+/viceroy-sync-server.db
+
 # Local signing and secret material
 /*.key
 /*.pem

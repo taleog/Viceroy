@@ -1,5 +1,6 @@
 use crate::app_launcher;
 use crate::database;
+use crate::sync;
 use anyhow::{anyhow, Context, Result};
 use arboard::{Clipboard, ImageData};
 use base64::engine::general_purpose::STANDARD;
@@ -16,12 +17,14 @@ use tokio::task;
 use tokio::time::{sleep, Duration};
 
 lazy_static! {
-    static ref MONITOR_PAUSED: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    static ref MONITOR_PAUSE_DEPTH: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
     static ref WS_RE: Regex = Regex::new(r"\s+").expect("failed to compile whitespace regex");
     static ref LAST_PROGRAMMATIC_TEXT: Arc<Mutex<Option<(String, i64)>>> =
         Arc::new(Mutex::new(None));
     static ref LAST_PROGRAMMATIC_IMAGE: Arc<Mutex<Option<(blake3::Hash, i64)>>> =
         Arc::new(Mutex::new(None));
+    static ref LAST_OBSERVED_TEXT: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    static ref LAST_OBSERVED_IMAGE: Arc<Mutex<Option<blake3::Hash>>> = Arc::new(Mutex::new(None));
 }
 
 const PASSWORD_MANAGERS: &[&str] = &[
@@ -52,8 +55,8 @@ struct ClipboardMonitorPauseGuard;
 
 impl ClipboardMonitorPauseGuard {
     fn new() -> Self {
-        if let Ok(mut paused) = MONITOR_PAUSED.lock() {
-            *paused = true;
+        if let Ok(mut depth) = MONITOR_PAUSE_DEPTH.lock() {
+            *depth += 1;
         }
         ClipboardMonitorPauseGuard
     }
@@ -61,61 +64,81 @@ impl ClipboardMonitorPauseGuard {
 
 impl Drop for ClipboardMonitorPauseGuard {
     fn drop(&mut self) {
-        if let Ok(mut paused) = MONITOR_PAUSED.lock() {
-            *paused = false;
+        if let Ok(mut depth) = MONITOR_PAUSE_DEPTH.lock() {
+            *depth = depth.saturating_sub(1);
         }
     }
 }
 
 pub async fn start_monitor() -> Result<()> {
-    let mut clipboard = Clipboard::new()?;
-    let mut last_text = String::new();
-    let mut last_image_hash: Option<blake3::Hash> = None;
-
     loop {
         sleep(Duration::from_millis(200)).await;
-        if *MONITOR_PAUSED.lock().unwrap() {
+        if monitor_is_paused() {
+            continue;
+        }
+
+        let mut clipboard = match Clipboard::new() {
+            Ok(clipboard) => clipboard,
+            Err(err) => {
+                eprintln!("Failed to access clipboard: {err}");
+                continue;
+            }
+        };
+
+        if monitor_is_paused() {
             continue;
         }
         let app_name = app_launcher::get_frontmost_app_name();
 
         // Text capture
         if let Ok(content) = clipboard.get_text() {
-            if content != last_text && !content.trim().is_empty() {
+            let changed = last_observed_text()
+                .map(|last| last != content)
+                .unwrap_or(true);
+            if changed && !content.trim().is_empty() {
                 if should_skip_programmatic_text(&content) {
-                    last_text = content;
+                    set_last_observed_text(Some(content));
                     continue;
                 }
                 if should_skip_app(&app_name) {
-                    last_text = content;
+                    set_last_observed_text(Some(content));
                     continue;
                 }
                 if let Err(e) = save_clipboard_entry(&content, &app_name).await {
                     eprintln!("Failed to save clipboard entry: {}", e);
                 }
-                last_text = content;
+                set_last_observed_text(Some(content));
             }
         }
         // Image capture
         if let Ok(image) = clipboard.get_image() {
             let hash = blake3::hash(&image.bytes);
-            let changed = last_image_hash.map(|h| h != hash).unwrap_or(true);
+            let changed = last_observed_image_hash()
+                .map(|last| last != hash)
+                .unwrap_or(true);
             if changed {
                 if should_skip_programmatic_image(&hash) {
-                    last_image_hash = Some(hash);
+                    set_last_observed_image_hash(Some(hash));
                     continue;
                 }
                 if should_skip_app(&app_name) {
-                    last_image_hash = Some(hash);
+                    set_last_observed_image_hash(Some(hash));
                     continue;
                 }
                 if let Err(e) = save_clipboard_image(&image, &app_name).await {
                     eprintln!("Failed to save clipboard image: {}", e);
                 }
-                last_image_hash = Some(hash);
+                set_last_observed_image_hash(Some(hash));
             }
         }
     }
+}
+
+fn monitor_is_paused() -> bool {
+    MONITOR_PAUSE_DEPTH
+        .lock()
+        .map(|depth| *depth > 0)
+        .unwrap_or(false)
 }
 
 fn should_skip_app(app_name: &Option<String>) -> bool {
@@ -129,6 +152,29 @@ fn should_skip_app(app_name: &Option<String>) -> bool {
 fn normalize_text(content: &str) -> String {
     let trimmed = content.trim();
     WS_RE.replace_all(trimmed, " ").to_string()
+}
+
+fn last_observed_text() -> Option<String> {
+    LAST_OBSERVED_TEXT
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
+fn set_last_observed_text(value: Option<String>) {
+    if let Ok(mut guard) = LAST_OBSERVED_TEXT.lock() {
+        *guard = value;
+    }
+}
+
+fn last_observed_image_hash() -> Option<blake3::Hash> {
+    LAST_OBSERVED_IMAGE.lock().ok().and_then(|guard| *guard)
+}
+
+fn set_last_observed_image_hash(value: Option<blake3::Hash>) {
+    if let Ok(mut guard) = LAST_OBSERVED_IMAGE.lock() {
+        *guard = value;
+    }
 }
 
 fn should_skip_programmatic_text(content: &str) -> bool {
@@ -166,6 +212,7 @@ fn should_skip_duplicate_text(
     let mut stmt = conn.prepare(
         "SELECT content, content_type, app_name, timestamp 
          FROM clipboard_history 
+         WHERE deleted_at IS NULL
          ORDER BY id DESC 
          LIMIT 5",
     )?;
@@ -211,6 +258,10 @@ async fn save_clipboard_entry(content: &str, app_name: &Option<String>) -> Resul
             Option::<i64>::None
         ],
     )?;
+    let entry_id = conn.last_insert_rowid();
+    if let Err(err) = sync::queue_local_clipboard_upsert(entry_id) {
+        eprintln!("Failed to queue clipboard sync for text entry {entry_id}: {err:#}");
+    }
     prune_old(&conn)?;
     Ok(())
 }
@@ -239,6 +290,10 @@ async fn save_clipboard_image(image: &ImageData<'_>, app_name: &Option<String>) 
             Some(image.height as i64)
         ],
     )?;
+    let entry_id = conn.last_insert_rowid();
+    if let Err(err) = sync::queue_local_clipboard_upsert(entry_id) {
+        eprintln!("Failed to queue clipboard sync for image entry {entry_id}: {err:#}");
+    }
     prune_old(&conn)?;
     Ok(())
 }
@@ -256,6 +311,7 @@ pub async fn get_history(limit: usize) -> Result<Vec<ClipboardEntry>> {
     let mut stmt = conn.prepare(
         "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned, image_width, image_height 
          FROM clipboard_history 
+         WHERE deleted_at IS NULL
          ORDER BY is_pinned DESC, timestamp DESC 
          LIMIT ?1"
     )?;
@@ -312,7 +368,8 @@ fn search_history_blocking(query: &str) -> Result<Vec<ClipboardEntry>> {
     let mut stmt = conn.prepare(
         "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned, image_width, image_height 
          FROM clipboard_history 
-         WHERE content LIKE ?1 OR custom_name LIKE ?1 OR app_name LIKE ?1
+         WHERE deleted_at IS NULL
+           AND (content LIKE ?1 OR custom_name LIKE ?1 OR app_name LIKE ?1)
          ORDER BY is_pinned DESC, timestamp DESC 
          LIMIT 100"
     )?;
@@ -339,97 +396,175 @@ fn search_history_blocking(query: &str) -> Result<Vec<ClipboardEntry>> {
 
 fn delete_entry_blocking(id: i64) -> Result<()> {
     let conn = database::get_connection()?;
-    conn.execute("DELETE FROM clipboard_history WHERE id = ?1", params![id])?;
+    let deleted_at = Utc::now().timestamp();
+    let rows_updated = conn.execute(
+        "UPDATE clipboard_history
+         SET deleted_at = ?1
+         WHERE id = ?2 AND deleted_at IS NULL",
+        params![deleted_at, id],
+    )?;
+    if rows_updated > 0 {
+        if let Err(err) = sync::queue_local_clipboard_delete(id) {
+            eprintln!("Failed to queue clipboard delete sync for entry {id}: {err:#}");
+        }
+    }
     Ok(())
 }
 
 fn update_entry_blocking(id: i64, content: String, custom_name: Option<String>) -> Result<()> {
     let conn = database::get_connection()?;
-    conn.execute(
+    let rows_updated = conn.execute(
         "UPDATE clipboard_history SET content = ?1, custom_name = ?2 WHERE id = ?3",
         params![content, custom_name, id],
     )?;
+    if rows_updated > 0 {
+        if let Err(err) = sync::queue_local_clipboard_upsert(id) {
+            eprintln!("Failed to queue clipboard sync for updated entry {id}: {err:#}");
+        }
+    }
     Ok(())
 }
 
 fn update_custom_name_blocking(id: i64, name: Option<String>) -> Result<()> {
     let conn = database::get_connection()?;
-    conn.execute(
+    let rows_updated = conn.execute(
         "UPDATE clipboard_history SET custom_name = ?1 WHERE id = ?2",
         params![name, id],
     )?;
+    if rows_updated > 0 {
+        if let Err(err) = sync::queue_local_clipboard_upsert(id) {
+            eprintln!("Failed to queue clipboard sync for renamed entry {id}: {err:#}");
+        }
+    }
     Ok(())
 }
 
-pub async fn paste_to_active_app(content: &str) -> Result<()> {
-    let _guard = ClipboardMonitorPauseGuard::new();
-    // Store the frontmost app BEFORE modifying clipboard
-    let previous_app = app_launcher::get_frontmost_app_name();
+pub async fn paste_to_active_app(
+    content: &str,
+    target_app: Option<app_launcher::FrontmostApp>,
+) -> Result<()> {
+    set_text_clipboard(content).await?;
 
-    // Copy to clipboard
-    let mut clipboard = Clipboard::new()?;
-    clipboard.set_text(content)?;
-    if let Ok(mut guard) = LAST_PROGRAMMATIC_TEXT.lock() {
-        *guard = Some((normalize_text(content), Utc::now().timestamp()));
+    if let Some(app) = target_app.as_ref() {
+        activate_app(app)?;
     }
 
-    // Delay to ensure clipboard is updated
-    sleep(Duration::from_millis(100)).await;
-
-    // Explicitly activate the previous app to ensure focus is correct before paste
-    if let Some(app_name) = previous_app {
-        activate_app(&app_name)?;
-    }
-
-    // Longer pause to ensure focus is returned and app is ready
-    sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(150)).await;
     send_paste_keystroke()?;
+    sleep(Duration::from_millis(200)).await;
+    Ok(())
+}
+
+pub async fn restore_history_entry_to_clipboard(
+    content: &str,
+    content_type: &str,
+    _image_width: Option<i64>,
+    _image_height: Option<i64>,
+) -> Result<()> {
+    if content_type == "image" {
+        set_image_clipboard(content).await?;
+    } else {
+        set_text_clipboard(content).await?;
+    }
     Ok(())
 }
 
 pub async fn paste_history_entry(
     content: &str,
     content_type: &str,
-    _image_width: Option<i64>,
-    _image_height: Option<i64>,
+    image_width: Option<i64>,
+    image_height: Option<i64>,
+    target_app: Option<app_launcher::FrontmostApp>,
 ) -> Result<()> {
-    // Pause monitor so we don't re-ingest the same entry after paste.
-    let _guard = ClipboardMonitorPauseGuard::new();
     if content_type == "image" {
-        paste_image_to_active_app(content).await?;
+        let _ = (image_width, image_height);
+        paste_image_to_active_app(content, target_app.as_ref()).await?;
     } else {
-        paste_to_active_app(content).await?;
+        restore_history_entry_to_clipboard(content, content_type, image_width, image_height)
+            .await?;
+        if let Some(app) = target_app.as_ref() {
+            activate_app(app)?;
+        }
+        sleep(Duration::from_millis(150)).await;
+        send_paste_keystroke()?;
     }
-    // Hold pause longer to ensure monitor doesn't capture the paste result
-    sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(200)).await;
     Ok(())
 }
 
-async fn paste_image_to_active_app(content: &str) -> Result<()> {
-    let _guard = ClipboardMonitorPauseGuard::new();
-    // Store the frontmost app BEFORE modifying clipboard
-    let previous_app = app_launcher::get_frontmost_app_name();
+async fn paste_image_to_active_app(
+    content: &str,
+    target_app: Option<&app_launcher::FrontmostApp>,
+) -> Result<()> {
+    set_image_clipboard(content).await?;
 
-    let image = decode_history_image(content)?;
+    if let Some(app) = target_app {
+        activate_app(app)?;
+    }
+
+    sleep(Duration::from_millis(150)).await;
+    send_paste_keystroke()?;
+    sleep(Duration::from_millis(200)).await;
+    Ok(())
+}
+
+async fn set_text_clipboard(content: &str) -> Result<()> {
+    let _guard = ClipboardMonitorPauseGuard::new();
     let mut clipboard = Clipboard::new()?;
+    clipboard.set_text(content)?;
+    drop(clipboard);
+    if let Ok(mut guard) = LAST_PROGRAMMATIC_TEXT.lock() {
+        *guard = Some((normalize_text(content), Utc::now().timestamp()));
+    }
+    set_last_observed_text(Some(content.to_string()));
+    wait_for_text_clipboard(content).await?;
+    Ok(())
+}
+
+async fn set_image_clipboard(content: &str) -> Result<()> {
+    let _guard = ClipboardMonitorPauseGuard::new();
+    let image = decode_history_image(content)?;
     let hash = blake3::hash(&image.bytes);
+    let mut clipboard = Clipboard::new()?;
     clipboard.set_image(image)?;
+    drop(clipboard);
     if let Ok(mut guard) = LAST_PROGRAMMATIC_IMAGE.lock() {
         guard.replace((hash, Utc::now().timestamp()));
     }
+    set_last_observed_image_hash(Some(hash));
+    wait_for_image_clipboard(hash).await?;
+    Ok(())
+}
 
-    // Delay to ensure clipboard is updated
-    sleep(Duration::from_millis(100)).await;
-
-    // Explicitly activate the previous app
-    if let Some(app_name) = previous_app {
-        activate_app(&app_name)?;
+async fn wait_for_text_clipboard(expected: &str) -> Result<()> {
+    let expected = normalize_text(expected);
+    for _ in 0..20 {
+        if let Ok(mut clipboard) = Clipboard::new() {
+            if let Ok(content) = clipboard.get_text() {
+                if normalize_text(&content) == expected {
+                    return Ok(());
+                }
+            }
+        }
+        sleep(Duration::from_millis(25)).await;
     }
 
-    // Longer pause to ensure focus is returned
-    sleep(Duration::from_millis(200)).await;
-    send_paste_keystroke()?;
-    Ok(())
+    Err(anyhow!("clipboard text did not update in time"))
+}
+
+async fn wait_for_image_clipboard(expected_hash: blake3::Hash) -> Result<()> {
+    for _ in 0..20 {
+        if let Ok(mut clipboard) = Clipboard::new() {
+            if let Ok(image) = clipboard.get_image() {
+                if blake3::hash(&image.bytes) == expected_hash {
+                    return Ok(());
+                }
+            }
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+
+    Err(anyhow!("clipboard image did not update in time"))
 }
 
 fn decode_history_image(content: &str) -> Result<ImageData<'static>> {
@@ -453,32 +588,49 @@ fn decode_history_image(content: &str) -> Result<ImageData<'static>> {
     })
 }
 
-fn activate_app(app_name: &str) -> Result<()> {
-    let script = format!(
-        r#"tell application "{}" to activate"#,
-        app_name.replace('\"', "\\\"")
-    );
-    let status = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .status()
-        .context("failed to activate app")?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow!("failed to activate app: {}", app_name))
-    }
+fn activate_app(app: &app_launcher::FrontmostApp) -> Result<()> {
+    app_launcher::activate_frontmost_app(app).context("failed to activate paste target")
 }
 
 fn send_paste_keystroke() -> Result<()> {
-    let status = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(r#"tell application "System Events" to keystroke "v" using command down"#)
-        .status()
-        .context("failed to trigger paste keystroke")?;
-    if status.success() {
-        Ok(())
-    } else {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(r#"tell application "System Events" to keystroke "v" using command down"#)
+            .status()
+            .context("failed to trigger paste keystroke")?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(anyhow!("paste keystroke command failed"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')",
+            ])
+            .status()
+            .context("failed to trigger paste keystroke")?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(anyhow!("paste keystroke command failed"))
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let status = std::process::Command::new("xdotool")
+            .args(["key", "--clearmodifiers", "ctrl+v"])
+            .status()
+            .context("failed to trigger paste keystroke")?;
+        if status.success() {
+            return Ok(());
+        }
         Err(anyhow!("paste keystroke command failed"))
     }
 }

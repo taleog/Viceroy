@@ -12,10 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks for documentation updates
 - Issue and PR templates for consistent contributions
 - CONTRIBUTING.md with development guidelines
+- Windows desktop app on the shared Rust backend
+- Self-hosted `viceroy-sync-server` binary for clipboard sync
+- Sync settings UI and persistence on macOS and Windows
+- Sync settings migration from legacy flat keys to the nested `sync` section
 
 ### Changed
 - Version scheme updated to alpha release (0.1.0-alpha.1)
 - Repository cleanup for public development: generated `Viceroy.app` is no longer tracked, bundle assets now build from `icons/`, and setup docs now point contributors to source and release-based install paths
+- README and docs now describe the branch's Windows app, self-hosted sync server, and cross-device sync setup more accurately
 
 ## [0.1.0-alpha.1] - 2024-12-04
 

@@ -102,6 +102,7 @@ pub unsafe fn install_constrained_clip_view(scroll: id, initial_bounds: NSRect) 
 
 const COLLAPSED_RESULT_AREA_HEIGHT: f64 = 0.0;
 const OPEN_RESULT_AREA_HEIGHT: f64 = 420.0;
+const SETTINGS_WINDOW_HEIGHT: f64 = 760.0;
 const WINDOW_HEIGHT_OPEN: f64 =
     style::TABLE_TOP_OFFSET + style::TABLE_FOOTER_HEIGHT + OPEN_RESULT_AREA_HEIGHT;
 const WINDOW_HEIGHT_COLLAPSED: f64 =
@@ -322,18 +323,12 @@ pub unsafe fn sync_window_height_with_state() {
         Err(_) => TableMode::Search,
     };
     let open = should_window_open_for_mode(mode);
-    let target_height = if open {
-        WINDOW_HEIGHT_OPEN
-    } else {
-        WINDOW_HEIGHT_COLLAPSED
+    let target_height = match mode {
+        TableMode::Settings => SETTINGS_WINDOW_HEIGHT,
+        _ if open => WINDOW_HEIGHT_OPEN,
+        _ => WINDOW_HEIGHT_COLLAPSED,
     };
     let preview_visible = mode == TableMode::ClipboardHistory;
-    let previously_open = WINDOW_IS_OPEN.load(Ordering::SeqCst);
-    if previously_open == open {
-        update_preview_layout(preview_visible);
-        return;
-    }
-    WINDOW_IS_OPEN.store(open, Ordering::SeqCst);
 
     let app: id = msg_send![class!(NSApplication), sharedApplication];
     let windows: id = msg_send![app, windows];
@@ -343,6 +338,12 @@ pub unsafe fn sync_window_height_with_state() {
     }
     let window: id = msg_send![windows, objectAtIndex:0];
     let current_frame: NSRect = msg_send![window, frame];
+    let previously_open = WINDOW_IS_OPEN.load(Ordering::SeqCst);
+    if previously_open == open && (current_frame.size.height - target_height).abs() < 0.5 {
+        update_preview_layout(preview_visible);
+        return;
+    }
+    WINDOW_IS_OPEN.store(open, Ordering::SeqCst);
     let new_origin_y = current_frame.origin.y + (current_frame.size.height - target_height);
     let new_frame = NSRect::new(
         NSPoint::new(current_frame.origin.x, new_origin_y),
@@ -1077,6 +1078,7 @@ unsafe fn perform_result_action(index: usize) {
         let count: usize = msg_send![windows, count];
         if count > 0 {
             let window: id = msg_send![windows, objectAtIndex:0];
+            crate::ui::settings_view::hide_settings_panel();
             let _: () = msg_send![window, orderOut: nil];
         }
         // Relinquish focus so the previous app regains key status for paste.
@@ -1091,6 +1093,7 @@ unsafe fn perform_result_action(index: usize) {
         return;
     }
     let result = results[index].clone();
+    let mut hide_after_action = true;
 
     match result {
         search_engine::SearchResult::App { path, .. } => {
@@ -1107,7 +1110,9 @@ unsafe fn perform_result_action(index: usize) {
             image_height,
             ..
         } => {
+            let target_app = app_launcher::get_frontmost_app();
             hide_window_immediately();
+            hide_after_action = false;
             let content_clone = content.clone();
             let content_type_clone = content_type.clone();
             SEARCH_RT.spawn(async move {
@@ -1116,6 +1121,7 @@ unsafe fn perform_result_action(index: usize) {
                     &content_type_clone,
                     image_width,
                     image_height,
+                    target_app,
                 )
                 .await;
             });
@@ -1126,17 +1132,21 @@ unsafe fn perform_result_action(index: usize) {
             });
         }
         search_engine::SearchResult::Calculator { result, .. } => {
+            let target_app = app_launcher::get_frontmost_app();
             hide_window_immediately();
+            hide_after_action = false;
             let to_paste = result.clone();
             SEARCH_RT.spawn(async move {
-                let _ = crate::clipboard::paste_to_active_app(&to_paste).await;
+                let _ = crate::clipboard::paste_to_active_app(&to_paste, target_app).await;
             });
         }
         search_engine::SearchResult::Emoji { emoji, .. } => {
+            let target_app = app_launcher::get_frontmost_app();
             hide_window_immediately();
+            hide_after_action = false;
             let to_paste = emoji.clone();
             SEARCH_RT.spawn(async move {
-                let _ = crate::clipboard::paste_to_active_app(&to_paste).await;
+                let _ = crate::clipboard::paste_to_active_app(&to_paste, target_app).await;
             });
         }
         search_engine::SearchResult::Dictionary { word, .. } => {
@@ -1148,5 +1158,7 @@ unsafe fn perform_result_action(index: usize) {
     }
 
     // Non-paste actions hide after triggering.
-    hide_window_immediately();
+    if hide_after_action {
+        hide_window_immediately();
+    }
 }

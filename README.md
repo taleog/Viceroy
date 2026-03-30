@@ -4,8 +4,8 @@
 [![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-blue)](https://github.com/taleog/Viceroy/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Viceroy is a lightweight **native macOS launcher** written in Rust.  
-It gives you a fast, Spotlight-style command palette for **apps, files, clipboard history, system commands, emoji, web search, and a calculator** — all in one place.
+Viceroy is a lightweight launcher written in Rust with a native macOS experience, a Windows desktop app on this branch, and a self-hosted clipboard sync server.  
+It gives you a fast command palette for **apps, files, clipboard history, system commands, emoji, web search, and a calculator** — all in one place.
 
 > ⚠️ **Status: Early alpha (0.1.0-alpha.x)**. Expect rough edges and breaking changes while the project matures in public.
 
@@ -31,6 +31,7 @@ It gives you a fast, Spotlight-style command palette for **apps, files, clipboar
     - Timestamp
     - Optional custom names + pinned items
   - Searchable history with relative times (“2 min ago”, “Yesterday”)
+  - Optional self-hosted sync across devices via the built-in sync server
 
 - **🚀 App Launcher**
   - Scans common app locations (`/Applications`, `/System/Applications`, `~/Applications`, etc.)
@@ -70,15 +71,22 @@ It gives you a fast, Spotlight-style command palette for **apps, files, clipboar
   - Configurable hotkey to toggle the launcher from anywhere
   - Uses native macOS accessibility APIs (requires Accessibility permission on first run)
 
+- **🔄 Self-Hosted Clipboard Sync**
+  - Built-in sync client on macOS and Windows in this branch
+  - Included `viceroy-sync-server` binary for self-hosted deployments
+  - Supports HTTP(S) and Tailscale-friendly deployments
+  - Uses a simple SQLite-backed event log and WebSocket fan-out
+
 ---
 
 ## Requirements
 
-- macOS (Intel or Apple Silicon)
+- macOS (Intel or Apple Silicon) for the native Spotlight-style launcher
+- Windows for the desktop Windows app on this branch
 - Rust toolchain (Rust 2021 edition compatible)
 - `cargo` for building and running
 
-> Viceroy uses native macOS APIs (Cocoa/AppKit) directly, so it only targets macOS.
+macOS remains the most polished experience. This branch also includes a Windows app and a minimal CLI fallback for other platforms.
 
 ---
 
@@ -100,12 +108,20 @@ Releases are built in CI and include a generated macOS app bundle, so the reposi
 git clone https://github.com/taleog/Viceroy.git
 cd Viceroy
 
-# Run in debug mode
+# Run the app for your current platform
 cargo run
 ```
 
-This will start Viceroy and show the floating search window.  
-On first run, macOS may ask for **Accessibility** permission so the global hotkey can work.
+On macOS this starts the floating launcher window. On Windows it starts the native Windows desktop app.  
+On first macOS run, the system may ask for **Accessibility** permission so the global hotkey can work.
+
+### Run the self-hosted sync server
+
+```bash
+cargo run --bin viceroy-sync-server
+```
+
+See [`docs/sync-server.md`](./docs/sync-server.md) for server setup, client settings, and protocol details.
 
 ### Build a `.app` bundle locally
 
@@ -232,11 +248,15 @@ Use arrow keys / mouse to select a row, then:
 
 ## Configuration
 
-Viceroy stores its config and data under your OS config directory, e.g.:
+Viceroy stores its config and data under your OS config directory. Common locations are:
 
-- **Settings**: `~/.config/viceroy/settings.json`
-- **Clipboard DB**: `~/.config/viceroy/clipboard.db`
-- **Usage data** (for app ranking): `~/.config/viceroy/usage.json`
+- **macOS Settings**: `~/Library/Application Support/viceroy/settings.json`
+- **macOS Clipboard DB**: `~/Library/Application Support/viceroy/clipboard.db`
+- **Linux Settings**: `~/.config/viceroy/settings.json`
+- **Linux Clipboard DB**: `~/.config/viceroy/clipboard.db`
+- **Windows Settings**: `%AppData%\viceroy\settings.json`
+- **Windows Clipboard DB**: `%AppData%\viceroy\clipboard.db`
+- **Usage data** (for app ranking): stored alongside the app config directory as `usage.json`
 
 ### Example `settings.json`
 
@@ -259,11 +279,29 @@ On first run, Viceroy will create a default config. You can edit it by hand, e.g
   "max_results": 50,
   "hotkey": "Alt+Space",
   "dismiss_on_escape": true,
-  "dismiss_on_click_away": true
+  "dismiss_on_click_away": true,
+  "sync": {
+    "enabled": false,
+    "device_id": "",
+    "device_name": "Office Laptop",
+    "server_url": "http://100.116.102.40:8787",
+    "auth_token": null,
+    "poll_interval_seconds": 15
+  }
 }
 ```
 
 > Note: The hotkey syntax is parsed by the `global-hotkey` crate. Not all combinations may be valid on all macOS versions.
+> Note: Older flat sync keys such as `sync_enabled` and `sync_server_url` are migrated automatically into the nested `sync` section on load.
+
+### Sync setup notes
+
+- Use the base server URL only, for example `http://100.116.102.40:8787`, not `/api/v1/sync/...`
+- `127.0.0.1` or `localhost` only work if the sync server is running on the same device as the client
+- If you secure the server with `VICEROY_SYNC_SERVER_AUTH_TOKEN`, set the same bearer token in each client
+- Tailscale works well for personal setups because each device can point at the server's Tailscale IP or DNS name
+
+For a fuller walkthrough, see [`docs/sync-server.md`](./docs/sync-server.md).
 
 ---
 
@@ -320,11 +358,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guidelines.
 High-level overview:
 
 - **Runtime / UI**
-  - Pure Rust + Cocoa/AppKit:
+  - macOS UI uses Rust + Cocoa/AppKit:
     - `cacao`, `cocoa`, `objc`, `objc-foundation`, `core-foundation`, `core-graphics`
-  - UI is built programmatically:
-    - `NSApplication`, `NSWindow`, `NSTextField`, `NSTableView`, etc.
-  - A custom floating window mimics Spotlight/Raycast behaviour.
+  - Windows uses a native desktop UI built with `eframe`/`egui`
+  - Non-macOS/non-Windows platforms fall back to a minimal CLI entrypoint
+  - The macOS launcher window is built programmatically with AppKit widgets
 
 - **Concurrency Model**
   - All UI work runs on the **main thread** (AppKit requirement).
@@ -335,15 +373,18 @@ High-level overview:
   - `app_launcher.rs` — app discovery, frontmost app detection, and launching.
   - `file_search.rs` — wraps `mdfind` for Spotlight-backed file search.
   - `clipboard.rs` — async clipboard monitor using `arboard`, writes to SQLite via `database.rs`.
+  - `sync.rs` — clipboard sync client, outbox, catch-up flow, and WebSocket listener.
+  - `sync_server.rs` — self-hosted sync server router and SQLite-backed event store.
   - `calculator.rs` — expression evaluation and formatting (decimal/hex/binary/percentage).
   - `system_commands.rs` — shell/AppleScript wrappers for system actions.
   - `web_search.rs` — builds search URLs and opens them with `open`.
   - `emoji.rs` — small in-memory emoji database + keyword search.
   - `dictionary.rs` — opens macOS Dictionary with `dict://` URLs.
-  - `database.rs` — SQLite schema & connections (`clipboard_history` table + index).
+  - `database.rs` — SQLite schema & connections (`clipboard_history`, `sync_outbox`, `sync_state`, and related indices).
   - `settings.rs` — JSON settings load/save (`settings.json`).
   - `usage.rs` — simple usage tracking of app launches to influence ranking.
   - `ui/*` — helper functions and state for the main window, table view, and clipboard list.
+  - `windows_app.rs` — Windows desktop application shell and settings UI.
 
 - **Search Orchestration**
   - Centralized in `search_engine.rs`:
@@ -362,6 +403,7 @@ This is a hobby/learning project, so the roadmap is flexible. Some ideas:
 - Better keyboard shortcuts & discoverability
 - Plugin system / external command hooks
 - Smarter ranking for results based on usage and context
+- Better sync observability (connection testing, richer status, conflict tooling)
 
 Issues and PRs are welcome, especially for:
 
