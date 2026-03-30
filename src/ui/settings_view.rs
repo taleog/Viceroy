@@ -22,6 +22,10 @@ static SETTINGS_ACTIVE_TAB: AtomicUsize = AtomicUsize::new(0);
 const SETTINGS_TAB_GENERAL: usize = 0;
 const SETTINGS_TAB_BEHAVIOR: usize = 1;
 const SETTINGS_TAB_SYNC: usize = 2;
+const SETTINGS_CARD_RADIUS: f64 = 22.0;
+const SETTINGS_GROUP_RADIUS: f64 = 16.0;
+const SETTINGS_SECTION_INSET: f64 = 24.0;
+const SETTINGS_BUTTON_HEIGHT: f64 = 34.0;
 
 struct SettingsControls {
     tab_control: usize,
@@ -102,33 +106,175 @@ unsafe fn ensure_panel(content_view: id, bounds: NSRect) -> id {
     panel
 }
 
+unsafe fn settings_white(alpha: f64) -> id {
+    msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:alpha]
+}
+
+unsafe fn settings_surface(alpha: f64) -> id {
+    msg_send![class!(NSColor), colorWithCalibratedWhite:0.12f64 alpha:alpha]
+}
+
+unsafe fn apply_settings_surface(view: id, background: id, corner_radius: f64, border_alpha: f64) {
+    let _: () = msg_send![view, setWantsLayer: YES];
+    let layer: id = msg_send![view, layer];
+    if layer == nil {
+        return;
+    }
+    let bg_cg: id = msg_send![background, CGColor];
+    let border_color: id = settings_white(border_alpha);
+    let border_cg: id = msg_send![border_color, CGColor];
+    let _: () = msg_send![layer, setCornerRadius: corner_radius];
+    let _: () = msg_send![layer, setMasksToBounds: YES];
+    let _: () = msg_send![layer, setBackgroundColor: bg_cg];
+    let _: () = msg_send![layer, setBorderWidth: 1.0f64];
+    let _: () = msg_send![layer, setBorderColor: border_cg];
+}
+
+unsafe fn set_button_title(button: id, title: &str, size: f64, weight: f64, alpha: f64) {
+    let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
+    let font: id = msg_send![class!(NSFont), systemFontOfSize:size weight:weight];
+    let color: id = settings_white(alpha);
+    let _: () = msg_send![attrs, setObject: font forKey: NSString::alloc(nil).init_str("NSFont")];
+    let _: () = msg_send![attrs, setObject: color forKey: NSString::alloc(nil).init_str("NSColor")];
+    let attributed: id = msg_send![class!(NSAttributedString), alloc];
+    let attributed: id = msg_send![
+        attributed,
+        initWithString: NSString::alloc(nil).init_str(title)
+        attributes: attrs
+    ];
+    let _: () = msg_send![button, setAttributedTitle: attributed];
+}
+
+unsafe fn style_action_button(button: id, title: &str, primary: bool) {
+    let _: () = msg_send![button, setBordered: NO];
+    let _: () = msg_send![button, setBezelStyle: 0];
+    let _: () = msg_send![button, setFocusRingType: 0];
+    let background: id = if primary {
+        msg_send![class!(NSColor), controlAccentColor]
+    } else {
+        settings_surface(0.82)
+    };
+    let border_alpha = if primary { 0.0 } else { 0.08 };
+    apply_settings_surface(button, background, 12.0, border_alpha);
+    set_button_title(button, title, 13.0, 0.52, 0.96);
+}
+
+unsafe fn style_toggle(button: id, title: &str) {
+    let _: () = msg_send![button, setButtonType: 3];
+    let _: () = msg_send![button, setBordered: NO];
+    let _: () = msg_send![button, setFocusRingType: 0];
+    let accent: id = msg_send![class!(NSColor), controlAccentColor];
+    let _: () = msg_send![button, setContentTintColor: accent];
+    set_button_title(button, title, 13.0, 0.44, 0.88);
+}
+
+unsafe fn style_input(view: id, editable: bool, selectable: bool, monospaced: bool) {
+    let _: () = msg_send![view, setBezeled: NO];
+    let _: () = msg_send![view, setBordered: NO];
+    let _: () = msg_send![view, setDrawsBackground: YES];
+    let _: () = msg_send![view, setBackgroundColor: settings_surface(0.96)];
+    let _: () = msg_send![view, setEditable: if editable { YES } else { NO }];
+    let _: () = msg_send![view, setSelectable: if selectable { YES } else { NO }];
+    let _: () = msg_send![view, setFocusRingType: 0];
+    let font: id = if monospaced {
+        msg_send![class!(NSFont), monospacedSystemFontOfSize:13.0 weight:0.3]
+    } else {
+        msg_send![class!(NSFont), systemFontOfSize:13.5 weight:0.42]
+    };
+    let _: () = msg_send![view, setFont: font];
+    let _: () = msg_send![view, setTextColor: settings_white(0.94)];
+    apply_settings_surface(view, settings_surface(0.96), 12.0, 0.08);
+}
+
+unsafe fn style_info_block(view: id, monospaced: bool) {
+    let font: id = if monospaced {
+        msg_send![class!(NSFont), monospacedSystemFontOfSize:12.0 weight:0.28]
+    } else {
+        msg_send![class!(NSFont), systemFontOfSize:12.5 weight:0.34]
+    };
+    let _: () = msg_send![view, setFont: font];
+    let _: () = msg_send![view, setTextColor: settings_white(0.74)];
+    let _: () = msg_send![view, setUsesSingleLineMode: NO];
+    let _: () = msg_send![view, setLineBreakMode: 4];
+    apply_settings_surface(view, settings_surface(0.52), 14.0, 0.08);
+}
+
 unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let panel: id = msg_send![class!(NSView), alloc];
     let panel: id = msg_send![panel, initWithFrame: bounds];
     let _: () = msg_send![panel, setWantsLayer: YES];
     let layer: id = msg_send![panel, layer];
-    let bg_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.08f64 alpha:1.0f64];
+    let bg_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.05f64 alpha:0.70f64];
     let bg_cg: id = msg_send![bg_color, CGColor];
     let _: () = msg_send![layer, setBackgroundColor: bg_cg];
+    let _: () = msg_send![layer, setBorderWidth: 1.0f64];
+    let border_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+    let border_cg: id = msg_send![border_color, CGColor];
+    let _: () = msg_send![layer, setBorderColor: border_cg];
     let _: () = msg_send![layer, setCornerRadius: 26.0f64];
+    let _: () = msg_send![layer, setMasksToBounds: YES];
     let _: () = msg_send![panel, setHidden: YES];
     let _: () = msg_send![panel, setAutoresizingMask: 18];
 
+    let backdrop: id = msg_send![class!(NSVisualEffectView), alloc];
+    let backdrop: id = msg_send![backdrop, initWithFrame: bounds];
+    let _: () = msg_send![backdrop, setMaterial: 12];
+    let _: () = msg_send![backdrop, setBlendingMode: 0];
+    let _: () = msg_send![backdrop, setState: 1];
+    let _: () = msg_send![backdrop, setAutoresizingMask: 18];
+    let _: () = msg_send![backdrop, setWantsLayer: YES];
+    let backdrop_layer: id = msg_send![backdrop, layer];
+    let _: () = msg_send![backdrop_layer, setCornerRadius: 26.0f64];
+    let _: () = msg_send![panel, addSubview: backdrop];
+
     let height = bounds.size.height;
-    let title_frame = NSRect::new(NSPoint::new(36.0, height - 76.0), NSSize::new(320.0, 34.0));
+    let title_frame = NSRect::new(
+        NSPoint::new(SETTINGS_SECTION_INSET, height - 72.0),
+        NSSize::new(320.0, 34.0),
+    );
     let title: id = msg_send![class!(NSTextField), alloc];
     let title: id = msg_send![title, initWithFrame: title_frame];
     let _: () = msg_send![title, setBezeled: NO];
     let _: () = msg_send![title, setEditable: NO];
     let _: () = msg_send![title, setDrawsBackground: NO];
     let _: () = msg_send![title, setSelectable: NO];
-    let title_font: id = msg_send![class!(NSFont), boldSystemFontOfSize:24.0];
+    let title_font: id = msg_send![class!(NSFont), boldSystemFontOfSize:28.0];
     let title_text_color: id = msg_send![class!(NSColor), whiteColor];
     let _: () = msg_send![title, setFont: title_font];
     let _: () = msg_send![title, setTextColor: title_text_color];
     let _: () = msg_send![title, setStringValue: NSString::alloc(nil).init_str("Settings")];
 
-    let detail_frame = NSRect::new(NSPoint::new(36.0, height - 112.0), NSSize::new(420.0, 42.0));
+    let badge_frame = NSRect::new(
+        NSPoint::new(
+            bounds.size.width - SETTINGS_SECTION_INSET - 118.0,
+            height - 68.0,
+        ),
+        NSSize::new(118.0, 24.0),
+    );
+    let badge: id = msg_send![class!(NSTextField), alloc];
+    let badge: id = msg_send![badge, initWithFrame: badge_frame];
+    let _: () = msg_send![badge, setBezeled: NO];
+    let _: () = msg_send![badge, setEditable: NO];
+    let _: () = msg_send![badge, setDrawsBackground: YES];
+    let _: () = msg_send![badge, setBordered: NO];
+    let _: () = msg_send![badge, setWantsLayer: YES];
+    let _: () = msg_send![badge, setAlignment: 1];
+    let badge_font: id = msg_send![class!(NSFont), monospacedSystemFontOfSize:11.0 weight:0.3];
+    let _: () = msg_send![badge, setFont: badge_font];
+    let badge_text_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.78f64];
+    let _: () = msg_send![badge, setTextColor: badge_text_color];
+    let badge_fill: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+    let _: () = msg_send![badge, setBackgroundColor: badge_fill];
+    let badge_layer: id = msg_send![badge, layer];
+    let _: () = msg_send![badge_layer, setCornerRadius: 12.0f64];
+    let _: () = msg_send![badge, setStringValue: NSString::alloc(nil).init_str("macOS panel")];
+
+    let detail_frame = NSRect::new(
+        NSPoint::new(SETTINGS_SECTION_INSET, height - 108.0),
+        NSSize::new(420.0, 42.0),
+    );
     let detail: id = msg_send![class!(NSTextField), alloc];
     let detail: id = msg_send![detail, initWithFrame: detail_frame];
     let _: () = msg_send![detail, setBezeled: NO];
@@ -137,19 +283,18 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![detail, setSelectable: NO];
     let detail_font: id = msg_send![class!(NSFont), systemFontOfSize:13.5];
     let detail_text_color: id =
-        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.6f64];
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.68f64];
     let _: () = msg_send![detail, setFont: detail_font];
     let _: () = msg_send![detail, setTextColor: detail_text_color];
-    let _: () = msg_send![detail, setStringValue: NSString::alloc(nil).init_str("Configure hotkey, behavior, and self-hosted sync preferences from here.")];
+    let _: () = msg_send![detail, setStringValue: NSString::alloc(nil).init_str("Tune the hotkey, result behavior, and sync settings from one focused macOS panel.")];
 
     let target = ensure_actions_target();
-    let card_margin = 36.0;
-    let card_inset = 20.0;
+    let card_margin = SETTINGS_SECTION_INSET;
+    let card_inset = SETTINGS_GROUP_RADIUS + 4.0;
     let card_width = bounds.size.width - card_margin * 2.0;
-    let card_top = height - 208.0;
+    let card_top = height - 196.0;
 
-    let tab_control_frame =
-        NSRect::new(NSPoint::new(36.0, height - 156.0), NSSize::new(290.0, 28.0));
+    let tab_control_frame = NSRect::new(NSPoint::new(4.0, 6.0), NSSize::new(306.0, 28.0));
     let tab_control: id = msg_send![class!(NSSegmentedControl), alloc];
     let tab_control: id = msg_send![tab_control, initWithFrame: tab_control_frame];
     let _: () = msg_send![tab_control, setSegmentCount: 3];
@@ -170,8 +315,25 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     ];
     let _: () = msg_send![tab_control, setTrackingMode: 1];
     let _: () = msg_send![tab_control, setSelectedSegment: SETTINGS_ACTIVE_TAB.load(Ordering::SeqCst) as isize];
+    let _: () = msg_send![tab_control, setControlSize: 1];
     let _: () = msg_send![tab_control, setTarget: target];
     let _: () = msg_send![tab_control, setAction: sel!(changeSettingsTab:)];
+
+    let tab_shell: id = msg_send![class!(NSView), alloc];
+    let tab_shell: id = msg_send![
+        tab_shell,
+        initWithFrame: NSRect::new(
+            NSPoint::new(card_margin - 4.0, height - 156.0),
+            NSSize::new(314.0, 40.0)
+        )
+    ];
+    apply_settings_surface(
+        tab_shell,
+        settings_surface(0.6),
+        SETTINGS_GROUP_RADIUS,
+        0.08,
+    );
+    let _: () = msg_send![tab_shell, addSubview: tab_control];
 
     // General card for hotkey
     let general_card_height = 150.0;
@@ -180,9 +342,9 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let general_card: id = msg_send![general_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, general_card_y), NSSize::new(card_width, general_card_height))];
     let _: () = msg_send![general_card, setWantsLayer: YES];
     let general_layer: id = msg_send![general_card, layer];
-    let general_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.1f64 alpha:0.85f64];
+    let general_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.10f64 alpha:0.86f64];
     let general_bg_cg: id = msg_send![general_bg, CGColor];
-    let _: () = msg_send![general_layer, setCornerRadius: 18.0f64];
+    let _: () = msg_send![general_layer, setCornerRadius: SETTINGS_CARD_RADIUS];
     let _: () = msg_send![general_layer, setBackgroundColor: general_bg_cg];
     let _: () = msg_send![general_layer, setBorderWidth: 1.0f64];
     let general_border: id =
@@ -223,10 +385,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
         NSSize::new(card_width - card_inset * 2.0, 30.0),
     );
     let hotkey_field: id = msg_send![hotkey_field, initWithFrame: hotkey_field_frame];
-    let _: () = msg_send![hotkey_field, setBezeled: YES];
-    let _: () = msg_send![hotkey_field, setEditable: YES];
-    let _: () = msg_send![hotkey_field, setDrawsBackground: YES];
-    let _: () = msg_send![hotkey_field, setBordered: YES];
+    style_input(hotkey_field, true, true, false);
     let _: () = msg_send![general_card, addSubview: hotkey_heading];
     let _: () = msg_send![general_card, addSubview: hotkey_caption];
     let _: () = msg_send![general_card, addSubview: hotkey_field];
@@ -241,7 +400,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let behavior_bg: id =
         msg_send![class!(NSColor), colorWithCalibratedWhite:0.11f64 alpha:0.82f64];
     let behavior_bg_cg: id = msg_send![behavior_bg, CGColor];
-    let _: () = msg_send![behavior_layer, setCornerRadius: 18.0f64];
+    let _: () = msg_send![behavior_layer, setCornerRadius: SETTINGS_CARD_RADIUS];
     let _: () = msg_send![behavior_layer, setBackgroundColor: behavior_bg_cg];
     let _: () = msg_send![behavior_layer, setBorderWidth: 1.0f64];
     let behavior_border: id =
@@ -286,16 +445,13 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
 
     let esc_toggle: id = msg_send![class!(NSButton), alloc];
     let esc_toggle: id = msg_send![esc_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, card_inset + 60.0), NSSize::new(card_width / 2.0 - card_inset, 28.0))];
-    let _: () = msg_send![esc_toggle, setButtonType: 3];
-    let _: () = msg_send![esc_toggle, setTitle: NSString::alloc(nil).init_str("Dismiss on Escape")];
+    style_toggle(esc_toggle, "Dismiss on Escape");
     let _: () = msg_send![esc_toggle, setTarget: target];
     let _: () = msg_send![esc_toggle, setAction: sel!(toggleSetting:)];
 
     let click_toggle: id = msg_send![class!(NSButton), alloc];
     let click_toggle: id = msg_send![click_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, card_inset + 24.0), NSSize::new(card_width / 2.0 - card_inset, 28.0))];
-    let _: () = msg_send![click_toggle, setButtonType: 3];
-    let _: () =
-        msg_send![click_toggle, setTitle: NSString::alloc(nil).init_str("Dismiss on click away")];
+    style_toggle(click_toggle, "Dismiss on click away");
     let _: () = msg_send![click_toggle, setTarget: target];
     let _: () = msg_send![click_toggle, setAction: sel!(toggleSetting:)];
 
@@ -314,7 +470,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let sync_layer: id = msg_send![sync_card, layer];
     let sync_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.1f64 alpha:0.84f64];
     let sync_bg_cg: id = msg_send![sync_bg, CGColor];
-    let _: () = msg_send![sync_layer, setCornerRadius: 18.0f64];
+    let _: () = msg_send![sync_layer, setCornerRadius: SETTINGS_CARD_RADIUS];
     let _: () = msg_send![sync_layer, setBackgroundColor: sync_bg_cg];
     let _: () = msg_send![sync_layer, setBorderWidth: 1.0f64];
     let sync_border: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
@@ -349,24 +505,19 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
 
     let sync_enabled_toggle: id = msg_send![class!(NSButton), alloc];
     let sync_enabled_toggle: id = msg_send![sync_enabled_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 320.0), NSSize::new(160.0, 28.0))];
-    let _: () = msg_send![sync_enabled_toggle, setButtonType: 3];
-    let _: () =
-        msg_send![sync_enabled_toggle, setTitle: NSString::alloc(nil).init_str("Enable sync")];
+    style_toggle(sync_enabled_toggle, "Enable sync");
     let _: () = msg_send![sync_enabled_toggle, setTarget: target];
     let _: () = msg_send![sync_enabled_toggle, setAction: sel!(toggleSetting:)];
 
     let refresh_button: id = msg_send![class!(NSButton), alloc];
     let refresh_button: id = msg_send![refresh_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 314.0), NSSize::new(120.0, 30.0))];
-    let _: () = msg_send![refresh_button, setBezelStyle: 1];
-    let _: () =
-        msg_send![refresh_button, setTitle: NSString::alloc(nil).init_str("Refresh status")];
+    style_action_button(refresh_button, "Refresh status", false);
     let _: () = msg_send![refresh_button, setTarget: target];
     let _: () = msg_send![refresh_button, setAction: sel!(refreshSyncStatus:)];
 
     let test_button: id = msg_send![class!(NSButton), alloc];
     let test_button: id = msg_send![test_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 276.0), NSSize::new(120.0, 30.0))];
-    let _: () = msg_send![test_button, setBezelStyle: 1];
-    let _: () = msg_send![test_button, setTitle: NSString::alloc(nil).init_str("Test connection")];
+    style_action_button(test_button, "Test connection", false);
     let _: () = msg_send![test_button, setTarget: target];
     let _: () = msg_send![test_button, setAction: sel!(testSyncConnection:)];
 
@@ -382,10 +533,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
 
     let sync_device_name_field: id = msg_send![class!(NSTextField), alloc];
     let sync_device_name_field: id = msg_send![sync_device_name_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 272.0), NSSize::new(field_width, 30.0))];
-    let _: () = msg_send![sync_device_name_field, setBezeled: YES];
-    let _: () = msg_send![sync_device_name_field, setEditable: YES];
-    let _: () = msg_send![sync_device_name_field, setDrawsBackground: YES];
-    let _: () = msg_send![sync_device_name_field, setBordered: YES];
+    style_input(sync_device_name_field, true, true, false);
 
     let server_url_label: id = msg_send![class!(NSTextField), alloc];
     let server_url_label: id = msg_send![server_url_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 230.0), NSSize::new(left_label_width, 22.0))];
@@ -399,10 +547,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
 
     let sync_server_url_field: id = msg_send![class!(NSTextField), alloc];
     let sync_server_url_field: id = msg_send![sync_server_url_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 224.0), NSSize::new(field_width, 30.0))];
-    let _: () = msg_send![sync_server_url_field, setBezeled: YES];
-    let _: () = msg_send![sync_server_url_field, setEditable: YES];
-    let _: () = msg_send![sync_server_url_field, setDrawsBackground: YES];
-    let _: () = msg_send![sync_server_url_field, setBordered: YES];
+    style_input(sync_server_url_field, true, true, false);
 
     let auth_token_label: id = msg_send![class!(NSTextField), alloc];
     let auth_token_label: id = msg_send![auth_token_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 182.0), NSSize::new(left_label_width, 22.0))];
@@ -416,10 +561,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
 
     let sync_auth_token_field: id = msg_send![class!(NSSecureTextField), alloc];
     let sync_auth_token_field: id = msg_send![sync_auth_token_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 176.0), NSSize::new(field_width, 30.0))];
-    let _: () = msg_send![sync_auth_token_field, setBezeled: YES];
-    let _: () = msg_send![sync_auth_token_field, setEditable: YES];
-    let _: () = msg_send![sync_auth_token_field, setDrawsBackground: YES];
-    let _: () = msg_send![sync_auth_token_field, setBordered: YES];
+    style_input(sync_auth_token_field, true, true, false);
 
     let device_id_label: id = msg_send![class!(NSTextField), alloc];
     let device_id_label: id = msg_send![device_id_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 138.0), NSSize::new(left_label_width, 22.0))];
@@ -437,20 +579,11 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_status_label, setEditable: NO];
     let _: () = msg_send![sync_status_label, setDrawsBackground: NO];
     let _: () = msg_send![sync_status_label, setBordered: NO];
-    let _: () = msg_send![sync_status_label, setUsesSingleLineMode: NO];
-    let _: () = msg_send![sync_status_label, setLineBreakMode: 4];
-    let _: () = msg_send![sync_status_label, setFont: caption_font];
-    let _: () = msg_send![sync_status_label, setTextColor: caption_color];
+    style_info_block(sync_status_label, true);
 
     let sync_device_id_field: id = msg_send![class!(NSTextField), alloc];
     let sync_device_id_field: id = msg_send![sync_device_id_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 132.0), NSSize::new(field_width, 30.0))];
-    let _: () = msg_send![sync_device_id_field, setBezeled: NO];
-    let _: () = msg_send![sync_device_id_field, setEditable: NO];
-    let _: () = msg_send![sync_device_id_field, setDrawsBackground: NO];
-    let _: () = msg_send![sync_device_id_field, setBordered: NO];
-    let _: () = msg_send![sync_device_id_field, setSelectable: YES];
-    let _: () = msg_send![sync_device_id_field, setFont: caption_font];
-    let _: () = msg_send![sync_device_id_field, setTextColor: caption_color];
+    style_input(sync_device_id_field, false, true, true);
 
     let sync_indicator_label: id = msg_send![class!(NSTextField), alloc];
     let sync_indicator_label: id = msg_send![sync_indicator_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 258.0), NSSize::new(18.0, 22.0))];
@@ -494,11 +627,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_devices_label, setEditable: NO];
     let _: () = msg_send![sync_devices_label, setDrawsBackground: NO];
     let _: () = msg_send![sync_devices_label, setBordered: NO];
-    let _: () = msg_send![sync_devices_label, setSelectable: NO];
-    let _: () = msg_send![sync_devices_label, setUsesSingleLineMode: NO];
-    let _: () = msg_send![sync_devices_label, setLineBreakMode: 4];
-    let _: () = msg_send![sync_devices_label, setFont: caption_font];
-    let _: () = msg_send![sync_devices_label, setTextColor: caption_color];
+    style_info_block(sync_devices_label, false);
 
     let _: () = msg_send![sync_card, addSubview: sync_heading];
     let _: () = msg_send![sync_card, addSubview: sync_caption];
@@ -519,40 +648,74 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_card, addSubview: devices_heading];
     let _: () = msg_send![sync_card, addSubview: sync_devices_label];
 
+    let footer_height = 58.0;
+    let footer_frame = NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(bounds.size.width, footer_height),
+    );
+    let footer: id = msg_send![class!(NSView), alloc];
+    let footer: id = msg_send![footer, initWithFrame: footer_frame];
+    let _: () = msg_send![footer, setWantsLayer: YES];
+    let footer_layer: id = msg_send![footer, layer];
+    let footer_bg: id = msg_send![class!(NSColor), colorWithCalibratedWhite:0.08f64 alpha:0.95f64];
+    let footer_bg_cg: id = msg_send![footer_bg, CGColor];
+    let _: () = msg_send![footer_layer, setBackgroundColor: footer_bg_cg];
+    let divider_layer: id = msg_send![class!(CALayer), layer];
+    let divider_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.05f64];
+    let divider_color_cg: id = msg_send![divider_color, CGColor];
+    let _: () = msg_send![divider_layer, setBackgroundColor: divider_color_cg];
+    let _: () = msg_send![divider_layer, setFrame:NSRect::new(NSPoint::new(0.0, footer_height - 1.0), NSSize::new(bounds.size.width, 1.0))];
+    let _: () = msg_send![footer_layer, addSublayer: divider_layer];
+
+    let footer_hint: id = msg_send![class!(NSTextField), alloc];
+    let footer_hint: id = msg_send![footer_hint, initWithFrame:NSRect::new(NSPoint::new(card_margin, 12.0), NSSize::new(340.0, 20.0))];
+    let _: () = msg_send![footer_hint, setBezeled: NO];
+    let _: () = msg_send![footer_hint, setEditable: NO];
+    let _: () = msg_send![footer_hint, setDrawsBackground: NO];
+    let _: () = msg_send![footer_hint, setBordered: NO];
+    let footer_font: id = msg_send![class!(NSFont), monospacedSystemFontOfSize:11.0 weight:0.2];
+    let _: () = msg_send![footer_hint, setFont: footer_font];
+    let footer_hint_text =
+        NSString::alloc(nil).init_str("Cmd+, reopens this panel  •  Save writes your preferences");
+    let _: () = msg_send![footer_hint, setStringValue: footer_hint_text];
+    let footer_hint_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
+    let _: () = msg_send![footer_hint, setTextColor: footer_hint_color];
+    let _: () = msg_send![footer, addSubview: footer_hint];
+
     let save_button_frame = NSRect::new(
-        NSPoint::new(bounds.size.width - card_margin - 160.0, 40.0),
-        NSSize::new(150.0, 32.0),
+        NSPoint::new(bounds.size.width - card_margin - 160.0, 13.0),
+        NSSize::new(150.0, SETTINGS_BUTTON_HEIGHT),
     );
     let save_button: id = msg_send![class!(NSButton), alloc];
     let save_button: id = msg_send![save_button, initWithFrame: save_button_frame];
-    let _: () = msg_send![save_button, setBezelStyle: 4];
-    let _: () = msg_send![save_button, setTitle: NSString::alloc(nil).init_str("Save settings")];
+    style_action_button(save_button, "Save settings", true);
     let _: () = msg_send![save_button, setTarget: target];
     let _: () = msg_send![save_button, setAction: sel!(saveSettings:)];
 
     let button_width = 150.0;
-    let button_height = 32.0;
+    let button_height = SETTINGS_BUTTON_HEIGHT;
     let button_frame = NSRect::new(
-        NSPoint::new(bounds.size.width - button_width - 30.0, height - 70.0),
+        NSPoint::new(bounds.size.width - button_width * 2.0 - 44.0, 13.0),
         NSSize::new(button_width, button_height),
     );
     let button: id = msg_send![class!(NSButton), alloc];
     let button: id = msg_send![button, initWithFrame: button_frame];
-    let _: () = msg_send![button, setBezelStyle: 1];
-    let _: () = msg_send![button, setBordered: YES];
-    let _: () = msg_send![button, setTitle: NSString::alloc(nil).init_str("Back to search")];
-    let target = ensure_actions_target();
+    style_action_button(button, "Back to search", false);
     let _: () = msg_send![button, setTarget: target];
     let _: () = msg_send![button, setAction: sel!(closeSettingsPanel:)];
 
     let _: () = msg_send![panel, addSubview: title];
+    let _: () = msg_send![panel, addSubview: badge];
     let _: () = msg_send![panel, addSubview: detail];
-    let _: () = msg_send![panel, addSubview: tab_control];
+    let _: () = msg_send![panel, addSubview: tab_shell];
     let _: () = msg_send![panel, addSubview: general_card];
     let _: () = msg_send![panel, addSubview: behavior_card];
     let _: () = msg_send![panel, addSubview: sync_card];
-    let _: () = msg_send![panel, addSubview: save_button];
-    let _: () = msg_send![panel, addSubview: button];
+    let _: () = msg_send![footer, addSubview: button];
+    let _: () = msg_send![footer, addSubview: save_button];
+    let _: () = msg_send![panel, addSubview: footer];
     let controls = SettingsControls {
         tab_control: tab_control as usize,
         general_card: general_card as usize,
