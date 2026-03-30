@@ -1,196 +1,193 @@
 # Contributing to Viceroy
 
-Thank you for your interest in contributing to Viceroy! This document provides guidelines and workflows for contributing.
+Thanks for helping improve Viceroy.
 
-## Development Status
+This guide is for contributors working on:
+- the macOS client
+- the Windows client
+- the self-hosted sync server
+- documentation and release tooling
 
-Viceroy is currently in **early alpha** (version 0.1.0-alpha.x). This means:
-- The app is publicly visible but still evolving quickly
-- APIs and features may change without notice
-- We welcome contributions but expect rough edges
+## Project Status
 
-## Getting Started
+Viceroy is still in early alpha.
+
+That means:
+- features are still moving quickly
+- some architecture is still settling
+- release builds are usable but not fully polished
+- contributions are welcome, especially fixes, tests, docs, and platform polish
+
+## Before You Start
+
+Please check:
+- the open issues
+- [`docs/issues.md`](./docs/issues.md)
+- [`docs/roadmap.md`](./docs/roadmap.md)
+
+If you are changing sync behavior, also read:
+- [`docs/sync-server.md`](./docs/sync-server.md)
+- [`docs/sync-model.md`](./docs/sync-model.md)
+
+## Development Setup
 
 ### Prerequisites
 
-- macOS (Intel or Apple Silicon) for the native launcher
-- Windows for the Windows desktop app on this branch
-- Rust toolchain (2021 edition)
+- Rust toolchain
 - Git
+- macOS for native launcher work
+- Windows for Windows client work
 
-### Setup
+### First-time setup
 
 ```bash
-# Clone the repository
 git clone https://github.com/taleog/Viceroy.git
 cd Viceroy
+make setup
+make check
+```
 
-# Build the project
-cargo build
+### Useful commands
 
-# Run tests
-cargo test
-
-# Run the app for your current platform
-cargo run
-
-# Build the macOS app bundle
+```bash
+make help
+make run
+make fmt
+make lint
+make test
+make check
 make app
-
-# Run the self-hosted sync server
+make install-app
 cargo run --bin viceroy-sync-server
 ```
 
-## Development Workflow
+## Workflow
 
-### Branch Naming
+### Branch names
 
-Use descriptive branch names:
-- `feature/description` - New features
-- `fix/description` - Bug fixes
-- `docs/description` - Documentation updates
-- `refactor/description` - Code refactoring
+Use short descriptive branches:
+- `feature/...`
+- `fix/...`
+- `docs/...`
+- `refactor/...`
+- `test/...`
 
-### Commit Messages
+### Commit messages
 
-Follow [Conventional Commits](https://www.conventionalcommits.org/):
+Use Conventional Commits:
 
+```text
+type(scope): summary
 ```
-<type>(<scope>): <description>
-
-[optional body]
-
-[optional footer]
-```
-
-Types:
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes (formatting, etc.)
-- `refactor`: Code refactoring
-- `test`: Adding or updating tests
-- `chore`: Maintenance tasks
 
 Examples:
+
+```text
+feat(sync): add websocket reconnect backoff
+fix(clipboard): stabilize macOS paste handoff
+docs(readme): simplify installation guide
 ```
-feat(search): add contact search support
-fix(clipboard): resolve duplicate entry detection
-docs(readme): update installation instructions
-```
 
-### Pull Request Process
+### Pull requests
 
-1. Create a feature branch from `main`
-2. Make your changes
-3. Update documentation if needed
-4. Update CHANGELOG.md under `[Unreleased]`
-5. Run linting and tests:
-   ```bash
-   make fmt
-   make lint
-   make test
-   ```
-6. Push and create a pull request
-7. Fill out the PR template completely
+Before opening a PR:
+1. Run `make check`
+2. Update docs for any user-visible change
+3. Update `CHANGELOG.md` under `Unreleased` when appropriate
+4. Re-read your diff for platform-specific regressions
 
-### Code Review
+Good PRs usually include:
+- the user-visible change
+- any platform caveats
+- testing performed
+- screenshots if the UI changed
 
-All PRs require review before merging. Reviewers will check:
-- Code quality and style
-- Test coverage
-- Documentation updates
-- Changelog entries
+## Code Expectations
 
-## Code Style
+- Prefer clear, boring code over clever code
+- Keep shared logic platform-neutral where possible
+- Keep platform-specific behavior isolated when necessary
+- Add comments for tricky behavior, not obvious behavior
+- Avoid breaking sync invariants without updating the docs
 
-- Follow Rust idioms and best practices
-- Use `cargo fmt` for formatting
-- Use `cargo clippy` for linting (warnings are errors)
-- Keep functions focused and reasonably sized
-- Add comments for complex logic
+## Platform Notes
 
-### macOS-Specific Guidelines
+### macOS
 
-- Never call AppKit methods from background threads
-- Use `dispatch::Queue::main()` to marshal results to the main thread
-- Use `msg_send!` for Objective-C interop, always wrapped in `unsafe`
-- Test on both Intel and Apple Silicon when possible
+- AppKit work must stay on the main thread
+- Objective-C interop should stay tightly scoped in `unsafe`
+- Accessibility and frontmost-app behavior are easy to regress, so test them directly
+- Release packaging changes should be validated through the generated `.app` or `.dmg`, not only `cargo run`
 
-### Windows / Cross-Platform Notes
+### Windows
 
-- Keep shared backend logic in platform-neutral modules when possible
-- When changing sync behavior, verify both `src/windows_app.rs` and the macOS settings/UI paths
-- If you change the sync protocol or settings shape, update [`docs/sync-server.md`](docs/sync-server.md) and the README in the same PR
+- Keep parity with shared backend behavior when possible
+- Test installer behavior when changing release packaging
+- When changing settings or sync UX, verify the Windows app still matches the shared config model
+
+### Sync
+
+If you change sync behavior:
+- preserve idempotent retries
+- preserve source-device echo prevention
+- preserve resumable catch-up behavior
+- update [`docs/sync-model.md`](./docs/sync-model.md)
+- update [`docs/sync-server.md`](./docs/sync-server.md) if setup or deployment changes
 
 ## Testing
 
-### Running Tests
+Minimum expectations:
+- unit or integration tests for new logic where practical
+- manual verification for UI/platform changes
+- `make lint`
+- `make test`
+
+Useful commands:
 
 ```bash
-# Run all tests
-make test
-
-# Run specific test
 cargo test test_name
-
-# Run tests with output
 cargo test -- --nocapture
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-### Test Guidelines
+## Documentation Expectations
 
-- Add tests for new functionality
-- Tests should be deterministic
-- Use `tempfile` for tests that need filesystem access
-- Integration tests go in `tests/` directory
+Please update docs in the same PR when you change:
+- installation steps
+- settings shape
+- sync behavior
+- release packaging
+- user-facing UI or workflows
 
-## Documentation
+Main docs to keep aligned:
+- [`README.md`](./README.md)
+- [`docs/installing.md`](./docs/installing.md)
+- [`docs/troubleshooting.md`](./docs/troubleshooting.md)
+- [`docs/sync-server.md`](./docs/sync-server.md)
+- [`docs/sync-model.md`](./docs/sync-model.md)
+- [`docs/roadmap.md`](./docs/roadmap.md)
 
-- Update README.md for user-facing changes
-- Update docs/roadmap.md for feature planning
-- Update docs/issues.md for known issues
-- Add inline documentation for public APIs
+## Release Notes
 
-## Issue Reporting
+Viceroy currently uses alpha releases:
+- `0.x.y-alpha.z`
 
-### Bug Reports
-
-Use the bug report issue template. Include:
-- Clear description of the issue
-- Steps to reproduce
-- Expected vs actual behavior
-- System information (OS, version, architecture)
-- Logs if applicable
-
-### Feature Requests
-
-Use the feature request issue template. Include:
-- Clear description of the feature
-- Use case and motivation
-- Proposed implementation (optional)
-
-## Release Process
-
-Releases follow semantic versioning:
-- **Alpha** (0.x.y-alpha.z): Early development, breaking changes expected
-- **Beta** (0.x.y-beta.z): Feature complete, bug fixes only
-- **Release** (x.y.z): Stable releases
-
-### Version Bumping
-
-1. Update `version` in `Cargo.toml`
-2. Update `CHANGELOG.md`:
-   - Move items from `[Unreleased]` to new version section
-   - Add release date
-3. Create a git tag: `git tag v0.1.0-alpha.2`
+Typical release flow:
+1. update `Cargo.toml`
+2. move notes from `Unreleased` into a dated section in `CHANGELOG.md`
+3. push `main`
+4. create or reuse the release tag
+5. let GitHub Actions publish the assets
 
 ## Getting Help
 
-- Check existing issues and documentation
-- Open a new issue with questions
-- Be patient and respectful
+If you are unsure where to make a change:
+- open a draft PR
+- open an issue
+- leave notes about the tradeoffs you are seeing
+
+Clear partial progress is better than silent abandoned work.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By contributing, you agree that your contributions are licensed under the MIT License.

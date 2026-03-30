@@ -66,7 +66,7 @@ VICEROY_FALLBACK_FS=1
 RUST_LOG=debug
 
 # Disable automatic update checks
-VICEROY_UPDATE_CHECK_DISABLED=1
+VICEROY_NO_UPDATE_CHECK=1
 
 # Run the sync server locally
 VICEROY_SYNC_SERVER_BIND=0.0.0.0:8787

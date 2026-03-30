@@ -4,285 +4,141 @@
 [![Version](https://img.shields.io/badge/version-0.1.0--alpha.2-blue)](https://github.com/taleog/Viceroy/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Viceroy is a lightweight launcher written in Rust with a native macOS experience, a Windows desktop app on this branch, and a self-hosted clipboard sync server.  
-It gives you a fast command palette for **apps, files, clipboard history, system commands, emoji, web search, and a calculator** — all in one place.
+Viceroy is a fast launcher and clipboard tool built in Rust.
 
-> ⚠️ **Status: Early alpha (0.1.0-alpha.x)**. Expect rough edges and breaking changes while the project matures in public.
+It combines:
+- a native macOS launcher
+- a Windows desktop client
+- a self-hosted clipboard sync server
 
----
+You can use it to search apps, files, clipboard history, system actions, emoji, dictionary shortcuts, web shortcuts, and calculator expressions from one palette.
 
-## Features
+> Status: early alpha. Expect rough edges, breaking changes, and unsigned release builds for now.
 
-- **🔍 Universal Search**
-  - Fuzzy search across:
-    - Installed apps
-    - Files (via Spotlight / `mdfind`)
-    - Clipboard history (text + images)
-    - System commands (sleep, lock, volume, etc.)
-    - Calculator expressions
-    - Emoji and dictionary shortcuts
-    - Web search helpers (Google, DuckDuckGo, etc.)
+## What It Does
 
-- **📋 Clipboard History**
-  - Background clipboard monitor (text + images)
-  - Stores:
-    - Content
-    - Source app name
-    - Timestamp
-    - Optional custom names + pinned items
-  - Searchable history with relative times (“2 min ago”, “Yesterday”)
-  - Optional self-hosted sync across devices via the built-in sync server
+- Search installed apps and launch them quickly
+- Search local files
+- Keep searchable clipboard history for text and images
+- Paste clipboard history items back into the active app
+- Run built-in system commands
+- Evaluate calculator expressions inline
+- Search emoji and dictionary shortcuts
+- Sync clipboard history between devices with a self-hosted server
 
-- **🚀 App Launcher**
-  - Scans common app locations (`/Applications`, `/System/Applications`, `~/Applications`, etc.)
-  - Tracks basic usage data (last used, launch count) to boost frequently used apps
+## Platform Support
 
-- **📁 File Search**
-  - Uses `mdfind` under the hood instead of re-implementing indexing
-  - Respects hide patterns (e.g. `.git`, `node_modules`, `.DS_Store`)
+| Component | Status | Notes |
+| --- | --- | --- |
+| macOS client | Best supported | Native launcher experience |
+| Windows client | Supported | Shares the Rust backend and sync support |
+| Linux desktop client | Not a polished desktop target yet | CLI fallback only |
+| Linux sync server | Supported | Recommended host for self-hosted sync |
 
-- **⚡ System Commands**
-  - Built-in commands like:
-    - Lock / sleep / restart / shutdown
-    - Volume up/down/mute
-    - Empty trash
-    - Toggle hidden files in Finder
-    - Screenshot, color picker, and more
+## Install
 
-- **🔢 Calculator**
-  - Type math expressions directly:
-    - `2 + 2`, `10 * (5 + 3)`, etc.
-  - Shows:
-    - Decimal
-    - Hex
-    - Binary
-    - Percentage
+### Download a release
 
-- **😊 Emoji & Dictionary Helpers**
-  - Emoji picker with common emoji and keyword search (e.g. `:smile`, `:heart`)
-  - Dictionary shortcuts:
-    - `define word`
-    - `def word`
-    - `d word`
-  - Opens macOS Dictionary via `dict://` links
-
-
-- **⌨️ Global Hotkey**
-  - Configurable hotkey to toggle the launcher from anywhere
-  - Uses native macOS accessibility APIs (requires Accessibility permission on first run)
-
-- **🔄 Self-Hosted Clipboard Sync**
-  - Built-in sync client on macOS and Windows in this branch
-  - Included `viceroy-sync-server` binary for self-hosted deployments
-  - Supports HTTP(S) and Tailscale-friendly deployments
-  - Uses a simple SQLite-backed event log and WebSocket fan-out
-
----
-
-## Requirements
-
-- macOS (Intel or Apple Silicon) for the native Spotlight-style launcher
-- Windows for the desktop Windows app on this branch
-- Rust toolchain (Rust 2021 edition compatible)
-- `cargo` for building and running
-
-macOS remains the most polished experience. This branch also includes a Windows app and a minimal CLI fallback for other platforms.
-
----
-
-## Getting Started
-
-### Option 1: Download a release
+Open the releases page:
 
 ```bash
-# Download the latest GitHub release
 open https://github.com/taleog/Viceroy/releases
 ```
 
-Release assets are built in CI and currently include:
+Current release assets are:
+- `Viceroy-macOS-<tag>.dmg`
+- `Viceroy-Windows-Setup-<tag>.exe`
+- `viceroy-sync-server-linux-x64-<tag>.tar.gz`
 
-- `Viceroy-macOS-<tag>.dmg` for the macOS client
-- `Viceroy-Windows-Setup-<tag>.exe` for the Windows client
-- `viceroy-sync-server-linux-x64-<tag>.tar.gz` for the Linux sync server
+The builds are currently unsigned. That means:
+- macOS may show a Gatekeeper warning on first launch
+- Windows may show a SmartScreen warning on first launch
 
-The repository does not track generated app bundles or installers.
+For step-by-step install instructions, see [`docs/installing.md`](./docs/installing.md).
 
-### Option 2: Build from source
+### Build from source
 
 ```bash
 git clone https://github.com/taleog/Viceroy.git
 cd Viceroy
-
-# Run the app for your current platform
 cargo run
 ```
 
-On macOS this starts the floating launcher window. On Windows it starts the native Windows desktop app.  
-On first macOS run, the system may ask for **Accessibility** permission so the global hotkey can work.
-
-### Run the self-hosted sync server
+Useful shortcuts from the repo root:
 
 ```bash
+make help
+make app
+make install-app
 cargo run --bin viceroy-sync-server
 ```
 
-See [`docs/sync-server.md`](./docs/sync-server.md) for server setup, client settings, and protocol details.
+## First Launch
 
-### Build a `.app` bundle locally
+On macOS, Viceroy may ask for Accessibility permission so the global hotkey and paste helpers can work correctly.
 
-There is a helper command to create a proper macOS app bundle from the tracked source and icon assets:
+If the app does not respond to the global hotkey:
+1. Open System Settings
+2. Go to Privacy & Security
+3. Open Accessibility
+4. Allow Viceroy
 
-```bash
-make app
-```
+If Gatekeeper warns on first launch, use right-click -> Open once.
 
-This produces `Viceroy.app` in the project root.
+## Using Viceroy
 
-You can then:
+### Open the launcher
 
-```bash
-# Install locally (optional)
-cp -r Viceroy.app /Applications/
-open /Applications/Viceroy.app
-```
+Use the configured global hotkey. The default is `Alt+Space`.
 
-Or use the one-step helper:
+### Search
 
-```bash
-make install-app
-```
+Type plain text to search:
+- apps
+- files
+- clipboard entries
+- system commands
 
-For more details (DMG, signing, etc.), see [`APP_BUNDLE.md`](./APP_BUNDLE.md).
+Other supported patterns:
+- calculator: `2 + 2`
+- emoji: `:smile`
+- dictionary: `define concurrency`
+- web shortcuts: `google rust ffi`, `ddg tailscale`
 
----
+### Clipboard history
 
-## Updates
+Clipboard items are stored with metadata such as:
+- source app
+- timestamp
+- optional custom name
+- pinned state
 
-- Viceroy performs a **non-blocking update check** shortly after launch (the UI stays responsive while the helper task runs) and only logs failures so it never interrupts your workflow.
-- Disable the updater with `--no-update-check` or `VICEROY_NO_UPDATE_CHECK=1`.
-- Run a silent check (no prompt; the update is downloaded automatically) with `--silent-update-check` or `VICEROY_SILENT_UPDATE_CHECK=1`.
-- Override the metadata source with `VICEROY_UPDATE_METADATA_URL` when you need to point to a staging/mock server (see the ignored integration test for an example).
+Selecting a clipboard item can copy it back to the system clipboard and optionally paste it into the frontmost app.
 
-### How the updater works
+### Sync
 
-1. Viceroy resolves the metadata URL (default is `https://example.com/viceroy/latest.json` but `VICEROY_UPDATE_METADATA_URL` can override it).
-2. It downloads the metadata JSON (version + download URL + sha256 checksum) and compares the declared version with `env!("CARGO_PKG_VERSION")` using `semver`.
-3. If a newer version is found and neither `--silent-update-check` nor `VICEROY_SILENT_UPDATE_CHECK` was passed, the user is prompted on the console (`Y/n`).
-4. The release binary is streamed to a temporary `<current-exe>.download` on disk while a SHA-256 digest is computed.
-5. Once the checksum matches, the helper copies the executable bit from the running binary, renames the temp file to replace the current executable (macOS requires restarting Viceroy to pick up the new code), and logs the successful install.
-6. Errors are logged via `env_logger` (see `src/main.rs`) and the update gracefully gives up instead of panicking.
+Viceroy can sync clipboard history between devices through the built-in self-hosted server.
 
-### Metadata contract
-
-The metadata endpoint must return this document:
-
-```json
-{
-  "version": "0.1.1",
-  "download_url": "https://example.com/releases/viceroy-0.1.1",
-  "sha256": "abc123..."
-}
-```
-
-`download_url` needs to point to a raw executable built for the same architecture that is currently running. The SHA checksum should be computed over that executable so Viceroy can verify the download before renaming it into place.
-
-### Testing
-
-- `tests/updater_integration.rs` is ignored by default because it expects a mock server on `http://127.0.0.1:8999`. Set `VICEROY_UPDATE_METADATA_URL` to your local metadata endpoint before running it:
-
-  ```bash
-  export VICEROY_UPDATE_METADATA_URL="http://127.0.0.1:8999/latest.json"
-  cargo test updater_integration -- --ignored
-  ```
-
-Start the local helper server (after building the release binary) with:
-
-```bash
-python3 scripts/mock_update_server.py --binary target/release/viceroy --version 0.1.1 --port 8999
-```
-
-It prints the metadata document and a matching download URL (`/download`). Point `VICEROY_UPDATE_METADATA_URL` at the printed metadata endpoint if you use a non-default port.
-
-The mocked server should serve the metadata above and a valid binary blob with the matching SHA so the end-to-end flow can finish.
-
----
-
-## Usage
-
-> The exact keybindings and behaviour may change as the project evolves. The high-level usage pattern will stay the same.
-
-### Global hotkey
-
-- Press the configured global hotkey (configurable in `settings.json`) to:
-  - Show the Viceroy window
-  - Focus the search field
-- Hit `Esc` or click away to dismiss (also configurable).
-
-### Searching
-
-Type into the search box:
-
-- **Plain text** → searches:
-  - Apps
-  - Files
-  - Clipboard entries
-  - System commands
-- **Math** → calculator mode
-  - `2 + 2`
-  - `100 / 4`
-- **Emoji**:
-  - Prefix with `:` or switch to emoji mode:
-    - `:smile`
-    - `:heart`
-- **Dictionary**:
-  - `define concurrency`
-  - `def architecture`
-  - `d polymorphism`
-- **Web search shortcuts**:
-  - `search how to boil pasta`
-  - `google rust ffi tutorial`
-  - `ddg launchctl tutorial`
-  - `duckduckgo spotlight alternatives`
-
-Use arrow keys / mouse to select a row, then:
-
-- `Enter` to launch/open/execute
-- For clipboard entries: pressing enter copies them back to the system clipboard and (optionally) pastes.
-
----
+Good starting docs:
+- [`docs/sync-server.md`](./docs/sync-server.md)
+- [`docs/sync-model.md`](./docs/sync-model.md)
 
 ## Configuration
 
-Viceroy stores its config and data under your OS config directory. Common locations are:
+Common config locations:
 
-- **macOS Settings**: `~/Library/Application Support/viceroy/settings.json`
-- **macOS Clipboard DB**: `~/Library/Application Support/viceroy/clipboard.db`
-- **Linux Settings**: `~/.config/viceroy/settings.json`
-- **Linux Clipboard DB**: `~/.config/viceroy/clipboard.db`
-- **Windows Settings**: `%AppData%\viceroy\settings.json`
-- **Windows Clipboard DB**: `%AppData%\viceroy\clipboard.db`
-- **Usage data** (for app ranking): stored alongside the app config directory as `usage.json`
+| Platform | Settings | Clipboard DB |
+| --- | --- | --- |
+| macOS | `~/Library/Application Support/viceroy/settings.json` | `~/Library/Application Support/viceroy/clipboard.db` |
+| Windows | `%AppData%\\viceroy\\settings.json` | `%AppData%\\viceroy\\clipboard.db` |
+| Linux | `~/.config/viceroy/settings.json` | `~/.config/viceroy/clipboard.db` |
 
-### Example `settings.json`
-
-On first run, Viceroy will create a default config. You can edit it by hand, e.g.:
+Example `settings.json`:
 
 ```json
 {
-  "theme": {
-    "background_color": "#1e1e1e",
-    "text_color": "#d4d4d4",
-    "accent_color": "#007acc",
-    "selection_color": "#264f78"
-  },
-  "file_hiding_patterns": [
-    "\\.git",
-    "node_modules",
-    "\\.DS_Store"
-  ],
-  "retype_delay_enabled": false,
-  "max_results": 50,
   "hotkey": "Alt+Space",
+  "max_results": 50,
   "dismiss_on_escape": true,
   "dismiss_on_click_away": true,
   "sync": {
@@ -296,145 +152,83 @@ On first run, Viceroy will create a default config. You can edit it by hand, e.g
 }
 ```
 
-> Note: The hotkey syntax is parsed by the `global-hotkey` crate. Not all combinations may be valid on all macOS versions.
-> Note: Older flat sync keys such as `sync_enabled` and `sync_server_url` are migrated automatically into the nested `sync` section on load.
+Notes:
+- older flat sync keys are migrated automatically into the nested `sync` section
+- `server_url` should be the base server URL, not an `/api/...` path
+- `localhost` only works when the server runs on the same machine as the client
 
-### Sync setup notes
+## Updates
 
-- Use the base server URL only, for example `http://100.116.102.40:8787`, not `/api/v1/sync/...`
-- `127.0.0.1` or `localhost` only work if the sync server is running on the same device as the client
-- If you secure the server with `VICEROY_SYNC_SERVER_AUTH_TOKEN`, set the same bearer token in each client
-- Tailscale works well for personal setups because each device can point at the server's Tailscale IP or DNS name
+Viceroy includes a background update check.
 
-For a fuller walkthrough, see [`docs/sync-server.md`](./docs/sync-server.md).
+Useful flags and environment variables:
+- `--no-update-check`
+- `--silent-update-check`
+- `VICEROY_NO_UPDATE_CHECK=1`
+- `VICEROY_SILENT_UPDATE_CHECK=1`
+- `VICEROY_UPDATE_METADATA_URL=<url>`
 
----
+For local update-flow testing, the repo also includes:
+- `make mock-server`
+- `make mock-e2e`
+- `scripts/mock_update_server.py`
 
-## Development Workflow
+## Development
 
-### Quick Start
+### Quick start
 
 ```bash
-# Clone and set up development environment
 git clone https://github.com/taleog/Viceroy.git
 cd Viceroy
-make setup  # Installs git hooks and checks toolchain
+make setup
+make check
+make run
 ```
 
-The repo ships with a `Makefile` so repetitive commands stay discoverable:
+Common commands:
+- `make fmt`
+- `make lint`
+- `make test`
+- `make check`
+- `make app`
+- `make install-app`
+- `make mock-server`
+- `make mock-e2e`
 
-```bash
-make help
-```
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full contributor workflow.
 
-### Common Commands
+## Architecture
 
-**Development:**
-- `make setup` — Set up development environment (git hooks, toolchain check)
-- `make run RUN_ARGS='--silent-update-check'` — Run Viceroy with optional CLI arguments
-- `make fmt` / `make lint` / `make test` — Formatting, clippy (fails on warnings), and tests
-- `make check` — Run all checks (fmt + lint + test)
+High-level structure:
+- macOS client uses Cocoa/AppKit bindings from Rust
+- Windows client uses a native desktop shell built around the shared Rust backend
+- the sync server stores events in SQLite and fans them out over WebSocket
+- search orchestration lives in shared Rust modules and combines multiple sources in parallel
 
-**Build & Release:**
-- `make release` — Build release binary at `target/release/viceroy`
-- `make app` — Build `Viceroy.app` in the repo root
-- `make install-app` — Build, install to `/Applications`, and open the app
-- `make version` — Show current version
+Important modules:
+- `src/app_launcher.rs`
+- `src/clipboard.rs`
+- `src/search_engine.rs`
+- `src/sync.rs`
+- `src/sync_server.rs`
+- `src/windows_app.rs`
+- `src/ui/`
 
-**Update System Testing:**
-- `make mock-server` — Serve release binary + metadata locally
-- `make mock-e2e` — Full end-to-end test with mock server
+## Documentation Map
 
-### Git Hooks
+- [`docs/installing.md`](./docs/installing.md): release installs, first-run behavior, local builds
+- [`docs/troubleshooting.md`](./docs/troubleshooting.md): common setup and runtime issues
+- [`docs/sync-server.md`](./docs/sync-server.md): server setup and deployment
+- [`docs/sync-model.md`](./docs/sync-model.md): sync invariants and conflict rules
+- [`docs/issues.md`](./docs/issues.md): current limitations and debugging notes
+- [`docs/roadmap.md`](./docs/roadmap.md): near-term and longer-term direction
+- [`CHANGELOG.md`](./CHANGELOG.md): release history
 
-After running `make setup`, git hooks are installed:
 
-- **pre-commit**: Runs `cargo fmt` and `cargo clippy`, reminds you to update CHANGELOG.md
-- **commit-msg**: Validates commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
+## Contributing
 
-### Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guidelines.
-
----
-
-## Architecture (for developers)
-
-High-level overview:
-
-- **Runtime / UI**
-  - macOS UI uses Rust + Cocoa/AppKit:
-    - `cacao`, `cocoa`, `objc`, `objc-foundation`, `core-foundation`, `core-graphics`
-  - Windows uses a native desktop UI built with `eframe`/`egui`
-  - Non-macOS/non-Windows platforms fall back to a minimal CLI entrypoint
-  - The macOS launcher window is built programmatically with AppKit widgets
-
-- **Concurrency Model**
-  - All UI work runs on the **main thread** (AppKit requirement).
-  - Background work uses a global `tokio::runtime::Runtime` (`SEARCH_RT`).
-  - A small helper in `ui/helpers.rs` (`run_on_main`) marshals results back to the main thread via `dispatch::Queue::main()`.
-
-- **Key Modules**
-  - `app_launcher.rs` — app discovery, frontmost app detection, and launching.
-  - `file_search.rs` — wraps `mdfind` for Spotlight-backed file search.
-  - `clipboard.rs` — async clipboard monitor using `arboard`, writes to SQLite via `database.rs`.
-  - `sync.rs` — clipboard sync client, outbox, catch-up flow, and WebSocket listener.
-  - `sync_server.rs` — self-hosted sync server router and SQLite-backed event store.
-  - `calculator.rs` — expression evaluation and formatting (decimal/hex/binary/percentage).
-  - `system_commands.rs` — shell/AppleScript wrappers for system actions.
-  - `web_search.rs` — builds search URLs and opens them with `open`.
-  - `emoji.rs` — small in-memory emoji database + keyword search.
-  - `dictionary.rs` — opens macOS Dictionary with `dict://` URLs.
-  - `database.rs` — SQLite schema & connections (`clipboard_history`, `sync_outbox`, `sync_state`, and related indices).
-  - `settings.rs` — JSON settings load/save (`settings.json`).
-  - `usage.rs` — simple usage tracking of app launches to influence ranking.
-  - `ui/*` — helper functions and state for the main window, table view, and clipboard list.
-  - `windows_app.rs` — Windows desktop application shell and settings UI.
-
-- **Search Orchestration**
-  - Centralized in `search_engine.rs`:
-    - Accepts a query + mode (All, Apps, Files, Clipboard, Calculator, Emoji, etc.).
-    - Uses `fuzzy-matcher` to score results.
-    - Runs multiple search tasks in parallel with `tokio::join!`.
-
----
-
-## Roadmap / Ideas
-
-This is a hobby/learning project, so the roadmap is flexible. Some ideas:
-
-- More search modes (notes, colors, audio, etc.)
-- Richer emoji database with categories
-- Better keyboard shortcuts & discoverability
-- Plugin system / external command hooks
-- Smarter ranking for results based on usage and context
-- Better sync observability (connection testing, richer status, conflict tooling)
-
-Issues and PRs are welcome, especially for:
-
-- Bug fixes
-- Performance improvements
-- Better macOS integration
-- Documentation and examples
-
----
+Documentation, bug fixes, performance work, and platform polish are all useful contributions. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## License
 
-MIT License — see [`LICENSE`](./LICENSE) for details.
-
----
-
-## Credits
-
-- **Libraries**
-  - https://crates.io/crates/cacao
-  - https://crates.io/crates/cocoa
-  - https://crates.io/crates/objc
-  - https://crates.io/crates/tokio
-  - https://crates.io/crates/fuzzy-matcher
-  - https://crates.io/crates/rusqlite
-  - https://crates.io/crates/arboard
-  - https://crates.io/crates/global-hotkey
-
-Built as a learning project and a daily driver launcher.
+MIT. See [`LICENSE`](./LICENSE).
