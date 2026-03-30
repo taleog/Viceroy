@@ -1095,6 +1095,7 @@ impl ViceroyWindowsApp {
                     );
 
                     windows_style::card_frame(false).show(&mut columns[1], |ui| {
+                        ui.set_min_width(ui.available_width());
                         let tone = sync_indicator_tone(
                             self.sync_status.as_ref(),
                             self.sync_test_result.as_ref(),
@@ -1149,6 +1150,7 @@ impl ViceroyWindowsApp {
 
                 ui.add_space(12.0);
                 windows_style::card_frame(false).show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.label(windows_style::section_text("Devices"));
                         if let Some(status) = &self.sync_status {
@@ -1175,21 +1177,27 @@ impl ViceroyWindowsApp {
                             .show(ui, |ui| {
                                 for device in known_devices {
                                     windows_style::card_frame(device.is_current).show(ui, |ui| {
-                                        ui.horizontal_wrapped(|ui| {
+                                        ui.set_min_width(ui.available_width());
+                                        ui.horizontal(|ui| {
                                             let badge_tone = if device.is_current {
-                                                BadgeTone::Success
+                                                BadgeTone::Accent
                                             } else {
                                                 BadgeTone::Neutral
                                             };
                                             windows_style::badge_frame(badge_tone).show(ui, |ui| {
                                                 ui.label(windows_style::badge_text(
-                                                    if device.is_current { "This device" } else { "Device" },
+                                                    if device.is_current {
+                                                        "Current"
+                                                    } else {
+                                                        "Device"
+                                                    },
                                                     badge_tone,
                                                 ));
                                             });
-                                            ui.label(windows_style::body_text(format!(
-                                                "{} ({})",
-                                                device.device_name, device.platform
+                                            ui.label(windows_style::body_text(&device.device_name));
+                                            ui.label(windows_style::muted_text(format!(
+                                                "({})",
+                                                device.platform
                                             )));
                                         });
                                         ui.add_space(4.0);

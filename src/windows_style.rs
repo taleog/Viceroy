@@ -74,10 +74,10 @@ impl BadgeTone {
     pub fn text(self) -> Color32 {
         match self {
             BadgeTone::Neutral => TEXT_MUTED,
-            BadgeTone::Accent => INFO,
-            BadgeTone::Success => SUCCESS,
-            BadgeTone::Warning => WARNING,
-            BadgeTone::Danger => DANGER,
+            BadgeTone::Accent => TEXT,
+            BadgeTone::Success => WINDOW_BG,
+            BadgeTone::Warning => WINDOW_BG,
+            BadgeTone::Danger => WINDOW_BG,
         }
     }
 }

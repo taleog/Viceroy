@@ -172,7 +172,16 @@ struct SyncRuntimeConfig {
 
 #[derive(Debug, Deserialize)]
 struct DeviceListResponse {
-    devices: Vec<KnownSyncDevice>,
+    devices: Vec<RemoteSyncDevice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RemoteSyncDevice {
+    device_id: String,
+    device_name: String,
+    platform: String,
+    first_seen_at: i64,
+    last_seen_at: i64,
 }
 
 pub fn init() -> Result<SyncStatus> {
@@ -413,11 +422,17 @@ pub async fn test_connection(
         }
     };
 
+    let devices = body
+        .devices
+        .into_iter()
+        .map(|device| remote_device_into_known(device, &config.device.device_id))
+        .collect::<Vec<_>>();
+
     if let Ok(conn) = database::get_connection() {
-        let _ = store_known_devices(&conn, &config.device.device_id, &body.devices);
+        let _ = store_known_devices(&conn, &config.device.device_id, &devices);
     }
 
-    let device_count = body.devices.len();
+    let device_count = devices.len();
     let noun = if device_count == 1 {
         "device"
     } else {
@@ -880,7 +895,11 @@ async fn request_known_devices(
         .json()
         .await
         .context("failed to parse sync device list response")?;
-    Ok(body.devices)
+    Ok(body
+        .devices
+        .into_iter()
+        .map(|device| remote_device_into_known(device, &config.device.device_id))
+        .collect())
 }
 
 async fn handle_ws_message(message: Message) -> Result<Option<i64>> {
@@ -1044,6 +1063,17 @@ fn store_known_devices(
     }
 
     Ok(())
+}
+
+fn remote_device_into_known(device: RemoteSyncDevice, current_device_id: &str) -> KnownSyncDevice {
+    KnownSyncDevice {
+        is_current: device.device_id == current_device_id,
+        device_id: device.device_id,
+        device_name: device.device_name,
+        platform: device.platform,
+        first_seen_at: device.first_seen_at,
+        last_seen_at: device.last_seen_at,
+    }
 }
 
 fn ensure_entry_identity(
