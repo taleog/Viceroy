@@ -52,13 +52,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check out release source
-        shell: bash
-        run: |
-          TAG="${{ needs.prepare.outputs.tag }}"
-          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          git checkout "refs/tags/$TAG"
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -99,13 +92,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Check out release source
-        shell: bash
-        run: |
-          TAG="${{ needs.prepare.outputs.tag }}"
-          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          git checkout "refs/tags/$TAG"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -158,13 +144,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Check out release source
-        shell: bash
-        run: |
-          TAG="${{ needs.prepare.outputs.tag }}"
-          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          git checkout "refs/tags/$TAG"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -227,13 +206,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Check out release source
-        shell: bash
-        run: |
-          TAG="${{ needs.prepare.outputs.tag }}"
-          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          git checkout "refs/tags/$TAG"
 
       - name: Download packaged assets
         uses: actions/download-artifact@v4
