@@ -26,6 +26,7 @@ const SETTINGS_CARD_RADIUS: f64 = 22.0;
 const SETTINGS_GROUP_RADIUS: f64 = 16.0;
 const SETTINGS_SECTION_INSET: f64 = 24.0;
 const SETTINGS_BUTTON_HEIGHT: f64 = 34.0;
+const SETTINGS_STATUS_PANEL_WIDTH: f64 = 312.0;
 
 struct SettingsControls {
     tab_control: usize,
@@ -245,32 +246,6 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![title, setTextColor: title_text_color];
     let _: () = msg_send![title, setStringValue: NSString::alloc(nil).init_str("Settings")];
 
-    let badge_frame = NSRect::new(
-        NSPoint::new(
-            bounds.size.width - SETTINGS_SECTION_INSET - 118.0,
-            height - 68.0,
-        ),
-        NSSize::new(118.0, 24.0),
-    );
-    let badge: id = msg_send![class!(NSTextField), alloc];
-    let badge: id = msg_send![badge, initWithFrame: badge_frame];
-    let _: () = msg_send![badge, setBezeled: NO];
-    let _: () = msg_send![badge, setEditable: NO];
-    let _: () = msg_send![badge, setDrawsBackground: YES];
-    let _: () = msg_send![badge, setBordered: NO];
-    let _: () = msg_send![badge, setWantsLayer: YES];
-    let _: () = msg_send![badge, setAlignment: 1];
-    let badge_font: id = msg_send![class!(NSFont), monospacedSystemFontOfSize:11.0 weight:0.3];
-    let _: () = msg_send![badge, setFont: badge_font];
-    let badge_text_color: id =
-        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.78f64];
-    let _: () = msg_send![badge, setTextColor: badge_text_color];
-    let badge_fill: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
-    let _: () = msg_send![badge, setBackgroundColor: badge_fill];
-    let badge_layer: id = msg_send![badge, layer];
-    let _: () = msg_send![badge_layer, setCornerRadius: 12.0f64];
-    let _: () = msg_send![badge, setStringValue: NSString::alloc(nil).init_str("macOS panel")];
-
     let detail_frame = NSRect::new(
         NSPoint::new(SETTINGS_SECTION_INSET, height - 108.0),
         NSSize::new(420.0, 42.0),
@@ -336,7 +311,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![tab_shell, addSubview: tab_control];
 
     // General card for hotkey
-    let general_card_height = 150.0;
+    let general_card_height = 196.0;
     let general_card_y = (card_top - general_card_height).max(card_margin);
     let general_card: id = msg_send![class!(NSView), alloc];
     let general_card: id = msg_send![general_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, general_card_y), NSSize::new(card_width, general_card_height))];
@@ -381,14 +356,34 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
 
     let hotkey_field: id = msg_send![class!(NSTextField), alloc];
     let hotkey_field_frame = NSRect::new(
-        NSPoint::new(card_inset, card_inset),
+        NSPoint::new(card_inset, 72.0),
         NSSize::new(card_width - card_inset * 2.0, 30.0),
     );
     let hotkey_field: id = msg_send![hotkey_field, initWithFrame: hotkey_field_frame];
     style_input(hotkey_field, true, true, false);
+    let hotkey_tip_block: id = msg_send![class!(NSTextField), alloc];
+    let hotkey_tip_block: id = msg_send![
+        hotkey_tip_block,
+        initWithFrame: NSRect::new(
+            NSPoint::new(card_inset, 24.0),
+            NSSize::new(card_width - card_inset * 2.0, 34.0)
+        )
+    ];
+    let _: () = msg_send![hotkey_tip_block, setBezeled: NO];
+    let _: () = msg_send![hotkey_tip_block, setEditable: NO];
+    let _: () = msg_send![hotkey_tip_block, setDrawsBackground: NO];
+    let _: () = msg_send![hotkey_tip_block, setBordered: NO];
+    let _: () = msg_send![hotkey_tip_block, setSelectable: NO];
+    style_info_block(hotkey_tip_block, false);
+    let _: () = msg_send![
+        hotkey_tip_block,
+        setStringValue: NSString::alloc(nil)
+            .init_str("Choose something unlikely to collide with Spotlight. Cmd+, always reopens Settings.")
+    ];
     let _: () = msg_send![general_card, addSubview: hotkey_heading];
     let _: () = msg_send![general_card, addSubview: hotkey_caption];
     let _: () = msg_send![general_card, addSubview: hotkey_field];
+    let _: () = msg_send![general_card, addSubview: hotkey_tip_block];
 
     // Behavior card
     let behavior_card_height = 220.0;
@@ -499,8 +494,10 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_caption, setStringValue: NSString::alloc(nil).init_str("Point Viceroy at your self-hosted sync server and inspect the current device state.")];
 
     let left_label_width = 82.0;
-    let left_column_width = card_width - 360.0;
-    let right_column_x = card_width - 280.0;
+    let sync_column_gap = 24.0;
+    let right_column_width = SETTINGS_STATUS_PANEL_WIDTH;
+    let right_column_x = card_width - card_inset - right_column_width;
+    let left_column_width = right_column_x - card_inset - sync_column_gap;
     let field_width = left_column_width - left_label_width - 12.0;
 
     let sync_enabled_toggle: id = msg_send![class!(NSButton), alloc];
@@ -510,13 +507,13 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_enabled_toggle, setAction: sel!(toggleSetting:)];
 
     let refresh_button: id = msg_send![class!(NSButton), alloc];
-    let refresh_button: id = msg_send![refresh_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 314.0), NSSize::new(120.0, 30.0))];
+    let refresh_button: id = msg_send![refresh_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 314.0), NSSize::new(right_column_width, 30.0))];
     style_action_button(refresh_button, "Refresh status", false);
     let _: () = msg_send![refresh_button, setTarget: target];
     let _: () = msg_send![refresh_button, setAction: sel!(refreshSyncStatus:)];
 
     let test_button: id = msg_send![class!(NSButton), alloc];
-    let test_button: id = msg_send![test_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 276.0), NSSize::new(120.0, 30.0))];
+    let test_button: id = msg_send![test_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 276.0), NSSize::new(right_column_width, 30.0))];
     style_action_button(test_button, "Test connection", false);
     let _: () = msg_send![test_button, setTarget: target];
     let _: () = msg_send![test_button, setAction: sel!(testSyncConnection:)];
@@ -573,20 +570,61 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![device_id_label, setTextColor: caption_color];
     set_string(device_id_label, "Device ID");
 
+    let sync_status_panel: id = msg_send![class!(NSView), alloc];
+    let sync_status_panel: id = msg_send![
+        sync_status_panel,
+        initWithFrame: NSRect::new(
+            NSPoint::new(right_column_x, 136.0),
+            NSSize::new(right_column_width, 124.0)
+        )
+    ];
+    apply_settings_surface(sync_status_panel, settings_surface(0.7), 18.0, 0.08);
+
+    let sync_status_heading: id = msg_send![class!(NSTextField), alloc];
+    let sync_status_heading: id = msg_send![
+        sync_status_heading,
+        initWithFrame: NSRect::new(
+            NSPoint::new(16.0, 90.0),
+            NSSize::new(right_column_width - 32.0, 16.0)
+        )
+    ];
+    let _: () = msg_send![sync_status_heading, setBezeled: NO];
+    let _: () = msg_send![sync_status_heading, setEditable: NO];
+    let _: () = msg_send![sync_status_heading, setDrawsBackground: NO];
+    let _: () = msg_send![sync_status_heading, setBordered: NO];
+    let _: () = msg_send![sync_status_heading, setSelectable: NO];
+    let _: () = msg_send![sync_status_heading, setFont: caption_font];
+    let _: () = msg_send![sync_status_heading, setTextColor: caption_color];
+    set_string(sync_status_heading, "Connection status");
+
     let sync_status_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_status_label: id = msg_send![sync_status_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x + 18.0, 198.0), NSSize::new(222.0, 88.0))];
+    let sync_status_label: id = msg_send![
+        sync_status_label,
+        initWithFrame: NSRect::new(
+            NSPoint::new(34.0, 18.0),
+            NSSize::new(right_column_width - 50.0, 74.0)
+        )
+    ];
     let _: () = msg_send![sync_status_label, setBezeled: NO];
     let _: () = msg_send![sync_status_label, setEditable: NO];
     let _: () = msg_send![sync_status_label, setDrawsBackground: NO];
     let _: () = msg_send![sync_status_label, setBordered: NO];
-    style_info_block(sync_status_label, true);
+    let _: () = msg_send![sync_status_label, setSelectable: NO];
+    let _: () = msg_send![sync_status_label, setUsesSingleLineMode: NO];
+    let _: () = msg_send![sync_status_label, setLineBreakMode: 4];
+    let status_font: id = msg_send![class!(NSFont), monospacedSystemFontOfSize:12.0 weight:0.28];
+    let _: () = msg_send![sync_status_label, setFont: status_font];
+    let _: () = msg_send![sync_status_label, setTextColor: settings_white(0.74)];
 
     let sync_device_id_field: id = msg_send![class!(NSTextField), alloc];
     let sync_device_id_field: id = msg_send![sync_device_id_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 132.0), NSSize::new(field_width, 30.0))];
     style_input(sync_device_id_field, false, true, true);
 
     let sync_indicator_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_indicator_label: id = msg_send![sync_indicator_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 258.0), NSSize::new(18.0, 22.0))];
+    let sync_indicator_label: id = msg_send![
+        sync_indicator_label,
+        initWithFrame: NSRect::new(NSPoint::new(14.0, 56.0), NSSize::new(14.0, 18.0))
+    ];
     let _: () = msg_send![sync_indicator_label, setBezeled: NO];
     let _: () = msg_send![sync_indicator_label, setEditable: NO];
     let _: () = msg_send![sync_indicator_label, setDrawsBackground: NO];
@@ -598,7 +636,13 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_indicator_label, setStringValue: NSString::alloc(nil).init_str("●")];
 
     let sync_message_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_message_label: id = msg_send![sync_message_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 144.0), NSSize::new(240.0, 44.0))];
+    let sync_message_label: id = msg_send![
+        sync_message_label,
+        initWithFrame: NSRect::new(
+            NSPoint::new(right_column_x, 94.0),
+            NSSize::new(right_column_width, 34.0)
+        )
+    ];
     let _: () = msg_send![sync_message_label, setBezeled: NO];
     let _: () = msg_send![sync_message_label, setEditable: NO];
     let _: () = msg_send![sync_message_label, setDrawsBackground: NO];
@@ -611,7 +655,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_message_label, setTextColor: message_color];
 
     let devices_heading: id = msg_send![class!(NSTextField), alloc];
-    let devices_heading: id = msg_send![devices_heading, initWithFrame:NSRect::new(NSPoint::new(card_inset, 108.0), NSSize::new(card_width - card_inset * 2.0, 20.0))];
+    let devices_heading: id = msg_send![devices_heading, initWithFrame:NSRect::new(NSPoint::new(card_inset, 108.0), NSSize::new(left_column_width, 20.0))];
     let _: () = msg_send![devices_heading, setBezeled: NO];
     let _: () = msg_send![devices_heading, setEditable: NO];
     let _: () = msg_send![devices_heading, setDrawsBackground: NO];
@@ -622,7 +666,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
         msg_send![devices_heading, setStringValue: NSString::alloc(nil).init_str("Devices")];
 
     let sync_devices_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_devices_label: id = msg_send![sync_devices_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 22.0), NSSize::new(card_width - card_inset * 2.0, 82.0))];
+    let sync_devices_label: id = msg_send![sync_devices_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 22.0), NSSize::new(left_column_width, 82.0))];
     let _: () = msg_send![sync_devices_label, setBezeled: NO];
     let _: () = msg_send![sync_devices_label, setEditable: NO];
     let _: () = msg_send![sync_devices_label, setDrawsBackground: NO];
@@ -641,8 +685,10 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_card, addSubview: auth_token_label];
     let _: () = msg_send![sync_card, addSubview: sync_auth_token_field];
     let _: () = msg_send![sync_card, addSubview: device_id_label];
-    let _: () = msg_send![sync_card, addSubview: sync_indicator_label];
-    let _: () = msg_send![sync_card, addSubview: sync_status_label];
+    let _: () = msg_send![sync_status_panel, addSubview: sync_status_heading];
+    let _: () = msg_send![sync_status_panel, addSubview: sync_indicator_label];
+    let _: () = msg_send![sync_status_panel, addSubview: sync_status_label];
+    let _: () = msg_send![sync_card, addSubview: sync_status_panel];
     let _: () = msg_send![sync_card, addSubview: sync_device_id_field];
     let _: () = msg_send![sync_card, addSubview: sync_message_label];
     let _: () = msg_send![sync_card, addSubview: devices_heading];
@@ -669,7 +715,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![footer_layer, addSublayer: divider_layer];
 
     let footer_hint: id = msg_send![class!(NSTextField), alloc];
-    let footer_hint: id = msg_send![footer_hint, initWithFrame:NSRect::new(NSPoint::new(card_margin, 12.0), NSSize::new(340.0, 20.0))];
+    let footer_hint: id = msg_send![footer_hint, initWithFrame:NSRect::new(NSPoint::new(card_margin, 12.0), NSSize::new(420.0, 20.0))];
     let _: () = msg_send![footer_hint, setBezeled: NO];
     let _: () = msg_send![footer_hint, setEditable: NO];
     let _: () = msg_send![footer_hint, setDrawsBackground: NO];
@@ -677,7 +723,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let footer_font: id = msg_send![class!(NSFont), monospacedSystemFontOfSize:11.0 weight:0.2];
     let _: () = msg_send![footer_hint, setFont: footer_font];
     let footer_hint_text =
-        NSString::alloc(nil).init_str("Cmd+, reopens this panel  •  Save writes your preferences");
+        NSString::alloc(nil).init_str("Cmd+, reopens settings  •  Save applies your changes");
     let _: () = msg_send![footer_hint, setStringValue: footer_hint_text];
     let footer_hint_color: id =
         msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.45f64];
@@ -707,7 +753,6 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![button, setAction: sel!(closeSettingsPanel:)];
 
     let _: () = msg_send![panel, addSubview: title];
-    let _: () = msg_send![panel, addSubview: badge];
     let _: () = msg_send![panel, addSubview: detail];
     let _: () = msg_send![panel, addSubview: tab_shell];
     let _: () = msg_send![panel, addSubview: general_card];
