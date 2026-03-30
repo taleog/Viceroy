@@ -1,4 +1,4 @@
-use crate::{database, settings};
+use crate::{clipboard, database, settings};
 use anyhow::{anyhow, Context, Result};
 use chrono::{Local, LocalResult, TimeZone, Utc};
 use futures_util::StreamExt;
@@ -628,6 +628,7 @@ pub fn apply_remote_clipboard_record(record: &ClipboardSyncRecord) -> Result<i64
                 id
             ],
         )?;
+        clipboard::notify_history_changed();
         return Ok(id);
     }
 
@@ -665,6 +666,7 @@ pub fn apply_remote_clipboard_record(record: &ClipboardSyncRecord) -> Result<i64
             record.deleted_at
         ],
     )?;
+    clipboard::notify_history_changed();
 
     Ok(conn.last_insert_rowid())
 }

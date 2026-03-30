@@ -2,6 +2,7 @@ use arboard::Clipboard;
 use eframe::egui::{self, Align, Key, Layout, RichText, ScrollArea, Slider, TextEdit};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use tokio::runtime::Runtime;
 use viceroy::search_engine::{self, SearchResult};
 use viceroy::{
@@ -270,6 +271,7 @@ struct ViceroyWindowsApp {
     surface: AppSurface,
     last_loaded_query: String,
     last_loaded_surface: AppSurface,
+    last_loaded_clipboard_revision: u64,
     status: String,
     hotkey: String,
     max_results: usize,
@@ -301,6 +303,7 @@ impl ViceroyWindowsApp {
             surface: AppSurface::Search,
             last_loaded_query: String::new(),
             last_loaded_surface: AppSurface::Settings,
+            last_loaded_clipboard_revision: clipboard::history_revision(),
             status: "Search apps, files, clipboard snippets, commands, and the web.".to_string(),
             hotkey: app_settings.hotkey.clone(),
             max_results: app_settings.max_results,
@@ -340,9 +343,12 @@ impl ViceroyWindowsApp {
             self.last_loaded_surface = self.surface;
             return;
         }
+        let clipboard_revision = clipboard::history_revision();
         if !force
             && self.last_loaded_query == self.query
             && self.last_loaded_surface == self.surface
+            && (self.surface != AppSurface::Clipboard
+                || self.last_loaded_clipboard_revision == clipboard_revision)
         {
             return;
         }
@@ -395,6 +401,7 @@ impl ViceroyWindowsApp {
                     }
                     Err(err) => self.status = format!("Clipboard load failed: {err:#}"),
                 }
+                self.last_loaded_clipboard_revision = clipboard_revision;
             }
             AppSurface::Settings => {}
         }
@@ -1359,6 +1366,9 @@ impl eframe::App for ViceroyWindowsApp {
             self.reload_items(true);
         } else {
             self.reload_items(false);
+        }
+        if self.surface == AppSurface::Clipboard {
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
     }
 }

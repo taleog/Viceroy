@@ -12,6 +12,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::task;
 use tokio::time::{sleep, Duration};
@@ -26,6 +27,8 @@ lazy_static! {
     static ref LAST_OBSERVED_TEXT: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     static ref LAST_OBSERVED_IMAGE: Arc<Mutex<Option<blake3::Hash>>> = Arc::new(Mutex::new(None));
 }
+
+static HISTORY_REVISION: AtomicU64 = AtomicU64::new(0);
 
 const PASSWORD_MANAGERS: &[&str] = &[
     "Keychain Access",
@@ -132,6 +135,14 @@ pub async fn start_monitor() -> Result<()> {
             }
         }
     }
+}
+
+pub fn history_revision() -> u64 {
+    HISTORY_REVISION.load(Ordering::SeqCst)
+}
+
+pub fn notify_history_changed() {
+    HISTORY_REVISION.fetch_add(1, Ordering::SeqCst);
 }
 
 fn monitor_is_paused() -> bool {
@@ -259,6 +270,7 @@ async fn save_clipboard_entry(content: &str, app_name: &Option<String>) -> Resul
         ],
     )?;
     let entry_id = conn.last_insert_rowid();
+    notify_history_changed();
     if let Err(err) = sync::queue_local_clipboard_upsert(entry_id) {
         eprintln!("Failed to queue clipboard sync for text entry {entry_id}: {err:#}");
     }
@@ -291,6 +303,7 @@ async fn save_clipboard_image(image: &ImageData<'_>, app_name: &Option<String>) 
         ],
     )?;
     let entry_id = conn.last_insert_rowid();
+    notify_history_changed();
     if let Err(err) = sync::queue_local_clipboard_upsert(entry_id) {
         eprintln!("Failed to queue clipboard sync for image entry {entry_id}: {err:#}");
     }
@@ -404,6 +417,7 @@ fn delete_entry_blocking(id: i64) -> Result<()> {
         params![deleted_at, id],
     )?;
     if rows_updated > 0 {
+        notify_history_changed();
         if let Err(err) = sync::queue_local_clipboard_delete(id) {
             eprintln!("Failed to queue clipboard delete sync for entry {id}: {err:#}");
         }
@@ -418,6 +432,7 @@ fn update_entry_blocking(id: i64, content: String, custom_name: Option<String>) 
         params![content, custom_name, id],
     )?;
     if rows_updated > 0 {
+        notify_history_changed();
         if let Err(err) = sync::queue_local_clipboard_upsert(id) {
             eprintln!("Failed to queue clipboard sync for updated entry {id}: {err:#}");
         }
@@ -432,6 +447,7 @@ fn update_custom_name_blocking(id: i64, name: Option<String>) -> Result<()> {
         params![name, id],
     )?;
     if rows_updated > 0 {
+        notify_history_changed();
         if let Err(err) = sync::queue_local_clipboard_upsert(id) {
             eprintln!("Failed to queue clipboard sync for renamed entry {id}: {err:#}");
         }

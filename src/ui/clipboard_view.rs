@@ -4,8 +4,8 @@ use crate::search_engine;
 use crate::ui::helpers::run_on_main;
 use crate::ui::helpers::style;
 use crate::ui::state::{
-    ClipboardPreviewRefs, TableMode, CLIPBOARD_PREVIEW, ICON_CACHE, SEARCH_RT, TABLE_DATA,
-    TABLE_MODE, TABLE_RESULTS,
+    ClipboardPreviewRefs, TableMode, CLIPBOARD_PREVIEW, ICON_CACHE, SEARCH_FIELD, SEARCH_RT,
+    TABLE_DATA, TABLE_MODE, TABLE_RESULTS, WINDOW_IS_OPEN,
 };
 use crate::ui::table::{reload_table, schedule_table_update_next_tick};
 use base64::engine::general_purpose::STANDARD;
@@ -17,7 +17,7 @@ use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use std::fmt::Write;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 const MAX_PREVIEW_CHARS: usize = 5000;
@@ -37,6 +37,9 @@ static PREVIEW_SELECTED_ROW: AtomicI64 = AtomicI64::new(-1);
 static EDIT_ENTRY_ID: AtomicI64 = AtomicI64::new(-1);
 static EDIT_IS_TEXT: AtomicBool = AtomicBool::new(false);
 static EDIT_MODE: AtomicBool = AtomicBool::new(false);
+static HISTORY_REFRESH_WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
+static HISTORY_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static LAST_RENDERED_HISTORY_REVISION: AtomicU64 = AtomicU64::new(0);
 
 pub fn format_clipboard_relative_time(timestamp: i64, now: i64) -> String {
     let delta = (now - timestamp).max(0);
@@ -133,7 +136,7 @@ pub fn apply_clipboard_history_state(
     rows: Vec<(String, String)>,
     results: Vec<search_engine::SearchResult>,
 ) {
-    let select_first = !rows.is_empty();
+    let selection = next_clipboard_selection(&results);
     if let Ok(mut mode) = TABLE_MODE.lock() {
         *mode = TableMode::ClipboardHistory;
     }
@@ -148,24 +151,46 @@ pub fn apply_clipboard_history_state(
         schedule_table_update_next_tick();
     }
     crate::ui::table::update_preview_layout(true);
-    let selection = if select_first { Some(0) } else { None };
     update_clipboard_preview_selection(selection);
+    LAST_RENDERED_HISTORY_REVISION.store(clipboard::history_revision(), Ordering::SeqCst);
+}
+
+fn apply_clipboard_history_state_if_still_visible(
+    rows: Vec<(String, String)>,
+    results: Vec<search_engine::SearchResult>,
+    query_snapshot: String,
+) {
+    let still_visible = WINDOW_IS_OPEN.load(Ordering::SeqCst)
+        && TABLE_MODE
+            .lock()
+            .map(|mode| *mode == TableMode::ClipboardHistory)
+            .unwrap_or(false);
+    if !still_visible {
+        return;
+    }
+    if current_search_query().as_deref().unwrap_or_default() != query_snapshot {
+        return;
+    }
+
+    let selection = next_clipboard_selection(&results);
+    if let Ok(mut tr) = TABLE_RESULTS.lock() {
+        *tr = results;
+    }
+    if let Ok(mut td) = TABLE_DATA.lock() {
+        *td = rows;
+    }
+    unsafe {
+        reload_table();
+        schedule_table_update_next_tick();
+    }
+    crate::ui::table::update_preview_layout(true);
+    update_clipboard_preview_selection(selection);
+    LAST_RENDERED_HISTORY_REVISION.store(clipboard::history_revision(), Ordering::SeqCst);
 }
 
 pub fn show_clipboard_history_view() {
-    SEARCH_RT.spawn(async move {
-        match clipboard::get_history(200).await {
-            Ok(entries) => {
-                let (rows, results) = build_clipboard_history_payload(entries);
-                run_on_main(move || {
-                    apply_clipboard_history_state(rows, results);
-                });
-            }
-            Err(err) => {
-                eprintln!("Failed to load clipboard history: {}", err);
-            }
-        }
-    });
+    start_history_refresh_watcher();
+    request_clipboard_history_refresh(true);
 }
 
 fn preview_refs() -> Option<ClipboardPreviewRefs> {
@@ -215,6 +240,121 @@ fn refresh_action_bar_visibility() {
         unsafe {
             let bar = id_from(refs.action_bar);
             set_hidden(bar, !show);
+        }
+    }
+}
+
+fn next_clipboard_selection(results: &[search_engine::SearchResult]) -> Option<usize> {
+    let selected_id = current_selected_clipboard_entry_id();
+    if let Some(selected_id) = selected_id {
+        if let Some(index) = results.iter().position(|result| {
+            matches!(
+                result,
+                search_engine::SearchResult::Clipboard { id, .. } if *id == selected_id
+            )
+        }) {
+            return Some(index);
+        }
+    }
+
+    (!results.is_empty()).then_some(0)
+}
+
+fn current_selected_clipboard_entry_id() -> Option<i64> {
+    let selected_row = PREVIEW_SELECTED_ROW.load(Ordering::SeqCst);
+    if selected_row < 0 {
+        return None;
+    }
+
+    TABLE_RESULTS.lock().ok().and_then(|results| {
+        results
+            .get(selected_row as usize)
+            .and_then(|result| match result {
+                search_engine::SearchResult::Clipboard { id, .. } => Some(*id),
+                _ => None,
+            })
+    })
+}
+
+fn start_history_refresh_watcher() {
+    if HISTORY_REFRESH_WATCHER_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    SEARCH_RT.spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+            if !WINDOW_IS_OPEN.load(Ordering::SeqCst) {
+                continue;
+            }
+            let visible = TABLE_MODE
+                .lock()
+                .map(|mode| *mode == TableMode::ClipboardHistory)
+                .unwrap_or(false);
+            if !visible {
+                continue;
+            }
+
+            let revision = clipboard::history_revision();
+            let rendered = LAST_RENDERED_HISTORY_REVISION.load(Ordering::SeqCst);
+            if revision == rendered || HISTORY_REFRESH_IN_FLIGHT.load(Ordering::SeqCst) {
+                continue;
+            }
+
+            request_clipboard_history_refresh(false);
+        }
+    });
+}
+
+fn request_clipboard_history_refresh(force_show_mode: bool) {
+    if HISTORY_REFRESH_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let query_snapshot = current_search_query().unwrap_or_default();
+    SEARCH_RT.spawn(async move {
+        let result = if query_snapshot.trim().is_empty() {
+            clipboard::get_history(200).await
+        } else {
+            clipboard::search_history(&query_snapshot).await
+        };
+
+        match result {
+            Ok(entries) => {
+                let (rows, results) = build_clipboard_history_payload(entries);
+                run_on_main(move || {
+                    if force_show_mode {
+                        apply_clipboard_history_state(rows, results);
+                    } else {
+                        apply_clipboard_history_state_if_still_visible(
+                            rows,
+                            results,
+                            query_snapshot,
+                        );
+                    }
+                    HISTORY_REFRESH_IN_FLIGHT.store(false, Ordering::SeqCst);
+                });
+            }
+            Err(err) => {
+                eprintln!("Failed to load clipboard history: {}", err);
+                HISTORY_REFRESH_IN_FLIGHT.store(false, Ordering::SeqCst);
+            }
+        }
+    });
+}
+
+fn current_search_query() -> Option<String> {
+    unsafe {
+        let field = SEARCH_FIELD.get().copied().map(|ptr| ptr as id)?;
+        if field == nil {
+            return None;
+        }
+        let value: id = msg_send![field, stringValue];
+        let cstr: *const std::os::raw::c_char = msg_send![value, UTF8String];
+        if cstr.is_null() {
+            None
+        } else {
+            Some(std::ffi::CStr::from_ptr(cstr).to_string_lossy().to_string())
         }
     }
 }
@@ -1005,6 +1145,14 @@ unsafe fn apply_preview_subview_layout(bounds: NSRect, refs: &ClipboardPreviewRe
     let _: () = msg_send![remove_button, setFrame: remove_frame];
     let _: () = msg_send![save_button, setFrame: save_frame];
     let _: () = msg_send![cancel_button, setFrame: cancel_frame];
+
+    let image_hidden: BOOL = msg_send![image_view, isHidden];
+    if image_hidden == NO {
+        let image: id = msg_send![image_view, image];
+        if image != nil {
+            layout_image_preview(id_from(refs.root), image_view, image);
+        }
+    }
 }
 
 pub fn refresh_clipboard_preview_layout() {
@@ -1227,7 +1375,7 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let image_layer: id = msg_send![image_view, layer];
     let _: () = msg_send![image_layer, setCornerRadius: 16.0f64];
     let _: () = msg_send![image_layer, setMasksToBounds: YES];
-    let _: () = msg_send![image_view, setImageScaling: 1]; // proportionally fit
+    let _: () = msg_send![image_view, setImageScaling: 3]; // proportionally scale up or down
     let _: () = msg_send![image_view, setHidden: YES];
     let _: () = msg_send![preview, addSubview: image_view];
 

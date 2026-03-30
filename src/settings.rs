@@ -114,8 +114,8 @@ pub fn prepare_sync_settings(
     let auth_token = normalize_optional_text(Some(auth_token_input));
     let server_url = match normalize_optional_text(Some(server_url_input)) {
         Some(server_url) => {
-            let normalized = sync::normalize_server_url(&server_url)
-                .context("invalid sync server URL")?;
+            let normalized =
+                sync::normalize_server_url(&server_url).context("invalid sync server URL")?;
             if enabled {
                 sync::validate_server_url_for_local_device(&normalized)
                     .context("invalid sync server URL")?;
@@ -362,7 +362,11 @@ fn normalize_device_name(value: &str) -> String {
     }
 }
 
-fn recover_invalid_settings_file(path: &Path, original_content: &str, err: anyhow::Error) -> Result<Settings> {
+fn recover_invalid_settings_file(
+    path: &Path,
+    original_content: &str,
+    err: anyhow::Error,
+) -> Result<Settings> {
     let backup_path = invalid_settings_backup_path(path);
     if let Some(parent) = backup_path.parent() {
         fs::create_dir_all(parent)?;
@@ -393,8 +397,14 @@ fn temporary_settings_path(path: &Path) -> PathBuf {
 }
 
 fn invalid_settings_backup_path(path: &Path) -> PathBuf {
-    let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("settings");
-    let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("json");
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("settings");
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("json");
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -494,9 +504,17 @@ mod tests {
         assert_eq!(settings.hotkey, DEFAULT_HOTKEY);
         let files = fs::read_dir(dir.path())
             .expect("read dir")
-            .map(|entry| entry.expect("dir entry").file_name().to_string_lossy().to_string())
+            .map(|entry| {
+                entry
+                    .expect("dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .to_string()
+            })
             .collect::<Vec<_>>();
-        assert!(files.iter().any(|name| name.starts_with("settings.invalid-")));
+        assert!(files
+            .iter()
+            .any(|name| name.starts_with("settings.invalid-")));
         let saved = fs::read_to_string(&path).expect("read recovered settings");
         assert!(saved.contains(DEFAULT_HOTKEY));
     }

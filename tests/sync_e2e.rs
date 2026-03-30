@@ -281,8 +281,11 @@ async fn sync_round_trip_persists_and_delivers_changes() -> Result<()> {
         == SyncOperationKind::DeleteClipboardEntry
         && event.record.sync_id == remote_sync_id));
 
-    let replacement_server =
-        start_sync_server(temp.path().join("replacement-server.db"), "replacement-token").await?;
+    let replacement_server = start_sync_server(
+        temp.path().join("replacement-server.db"),
+        "replacement-token",
+    )
+    .await?;
     wait_for_server_health(&client, &replacement_server.base_url).await?;
 
     app_settings.sync.server_url = Some(replacement_server.base_url.clone());
@@ -630,8 +633,7 @@ async fn wait_for_remote_sync_id(
     timeout(Duration::from_secs(20), async {
         loop {
             let response =
-                fetch_changes(client, base_url, 0, device_id, device_name, platform, token)
-                    .await?;
+                fetch_changes(client, base_url, 0, device_id, device_name, platform, token).await?;
             if response
                 .events
                 .iter()
