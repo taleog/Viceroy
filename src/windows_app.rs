@@ -1055,213 +1055,232 @@ impl ViceroyWindowsApp {
         });
         ui.add_space(12.0);
 
-        windows_style::panel_frame().show(ui, |ui| match self.settings_tab {
-            SettingsTab::General => {
-                ui.label(windows_style::section_text("Global Hotkey"));
-                ui.label(windows_style::muted_text(
-                    "Keep parity with the macOS launcher shell. The value is stored here for the Windows frontend.",
-                ));
-                ui.add_space(12.0);
-                ui.add_sized(
-                    [ui.available_width(), 36.0],
-                    TextEdit::singleline(&mut self.hotkey),
-                );
-            }
-            SettingsTab::Behavior => {
-                ui.label(windows_style::section_text("Results and Dismissal"));
-                ui.label(windows_style::muted_text(
-                    "Tune how much content the launcher loads, how aggressively it collapses, and how clipboard restore behaves on macOS.",
-                ));
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.label(windows_style::body_text(format!(
-                        "Max results: {}",
-                        self.max_results
-                    )));
-                    ui.add(Slider::new(&mut self.max_results, 10..=200));
-                });
-                ui.add_space(12.0);
-                ui.checkbox(&mut self.dismiss_on_escape, "Dismiss on Escape");
-                ui.checkbox(
-                    &mut self.dismiss_on_click_away,
-                    "Dismiss on click away",
-                );
-                ui.checkbox(
-                    &mut self.paste_after_restore,
-                    "On macOS, paste immediately after restoring a clipboard item",
-                );
-            }
-            SettingsTab::Sync => {
-                ui.label(windows_style::section_text("Cross-Device Sync"));
-                ui.label(windows_style::muted_text(
-                    "Point Viceroy at your self-hosted sync server, test the connection, and keep an eye on every device tied to it.",
-                ));
-                ui.add_space(12.0);
-                ui.columns(2, |columns| {
-                    columns[0].checkbox(&mut self.sync_enabled, "Enable sync");
-                    columns[0].checkbox(
-                        &mut self.sync_mirror_clipboard,
-                        "Mirror latest synced item to this clipboard",
-                    );
-                    columns[0].add_space(8.0);
-                    settings_field(
-                        &mut columns[0],
-                        "Device name",
-                        &mut self.sync_device_name,
-                        false,
-                    );
-                    settings_field(
-                        &mut columns[0],
-                        "Device id",
-                        &mut self.sync_device_id,
-                        true,
-                    );
-                    settings_field(
-                        &mut columns[0],
-                        "Server URL",
-                        &mut self.sync_server_url,
-                        false,
-                    );
-                    columns[0].label(windows_style::muted_text("Auth token"));
-                    columns[0].add_sized(
-                        [columns[0].available_width(), 34.0],
-                        TextEdit::singleline(&mut self.sync_auth_token).password(true),
-                    );
-
-                    windows_style::card_frame(false).show(&mut columns[1], |ui| {
-                        ui.set_min_width(ui.available_width());
-                        let tone = sync_indicator_tone(
-                            self.sync_status.as_ref(),
-                            self.sync_test_result.as_ref(),
-                        );
-                        let heading = sync_indicator_heading(
-                            self.sync_status.as_ref(),
-                            self.sync_test_result.as_ref(),
-                        );
-                        ui.horizontal(|ui| {
-                            sync_status_dot(ui, tone);
-                            ui.label(windows_style::section_text(heading));
-                        });
-                        ui.add_space(6.0);
-                        if let Some(status) = &self.sync_status {
-                            for line in [
-                                format!(
-                                    "Current device: {} ({})",
-                                    status.device.device_name, status.device.platform
-                                ),
-                                format!(
-                                    "Server: {}",
-                                    status.server_url.as_deref().unwrap_or("Not configured")
-                                ),
-                                format!(
-                                    "Last successful sync: {}",
-                                    sync::format_timestamp(status.last_successful_sync_at)
-                                ),
-                                format!("Pending operations: {}", status.pending_operations),
-                            ] {
-                                ui.label(windows_style::muted_text(line));
-                            }
-                        } else {
-                            ui.label(windows_style::muted_text(
-                                "Sync status is not available yet.",
-                            ));
-                        }
-                        if let Some(status) = &self.sync_status {
-                            if let Some(error) = &status.last_error {
-                                ui.add_space(8.0);
-                                ui.label(windows_style::status_text(error, BadgeTone::Danger));
-                            }
-                        }
-                        if !self.sync_message.is_empty() {
-                            ui.add_space(8.0);
-                            ui.label(windows_style::status_text(
-                                &self.sync_message,
-                                sync_message_tone(self.sync_test_result.as_ref(), &self.sync_message),
-                            ));
-                        }
-                    });
-                });
-
-                ui.add_space(12.0);
-                windows_style::card_frame(false).show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        ui.label(windows_style::section_text("Devices"));
-                        if let Some(status) = &self.sync_status {
-                            ui.label(windows_style::muted_text(format!(
-                                "{} known",
-                                status.known_devices.len()
-                            )));
-                        }
-                    });
-                    ui.add_space(8.0);
-                    let known_devices = self
-                        .sync_status
-                        .as_ref()
-                        .map(|status| status.known_devices.as_slice())
-                        .unwrap_or(&[]);
-                    if known_devices.is_empty() {
+        let content_height = (ui.available_height() - 76.0).max(160.0);
+        ScrollArea::vertical()
+            .id_salt("settings_scroll")
+            .max_height(content_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                windows_style::panel_frame().show(ui, |ui| match self.settings_tab {
+                    SettingsTab::General => {
+                        ui.label(windows_style::section_text("Global Hotkey"));
                         ui.label(windows_style::muted_text(
-                            "No device roster is cached yet. Run Test connection or Refresh status to load it.",
+                            "Keep parity with the macOS launcher shell. The value is stored here for the Windows frontend.",
                         ));
-                    } else {
-                        ScrollArea::vertical()
-                            .id_salt("sync_devices_scroll")
-                            .max_height(180.0)
-                            .show(ui, |ui| {
-                                for device in known_devices {
-                                    windows_style::card_frame(device.is_current).show(ui, |ui| {
-                                        ui.set_min_width(ui.available_width());
-                                        ui.horizontal(|ui| {
-                                            let badge_tone = if device.is_current {
-                                                BadgeTone::Accent
-                                            } else {
-                                                BadgeTone::Neutral
-                                            };
-                                            windows_style::badge_frame(badge_tone).show(ui, |ui| {
-                                                ui.label(windows_style::badge_text(
-                                                    if device.is_current {
-                                                        "Current"
-                                                    } else {
-                                                        "Device"
-                                                    },
-                                                    badge_tone,
-                                                ));
-                                            });
-                                            ui.label(windows_style::body_text(&device.device_name));
-                                            ui.label(windows_style::muted_text(format!(
-                                                "({})",
-                                                device.platform
-                                            )));
-                                        });
-                                        ui.add_space(4.0);
-                                        ui.label(windows_style::muted_text(format!(
-                                            "Last seen: {}",
-                                            sync::format_timestamp(Some(device.last_seen_at))
-                                        )));
-                                    });
-                                    ui.add_space(6.0);
+                        ui.add_space(12.0);
+                        ui.add_sized(
+                            [ui.available_width(), 36.0],
+                            TextEdit::singleline(&mut self.hotkey),
+                        );
+                    }
+                    SettingsTab::Behavior => {
+                        ui.label(windows_style::section_text("Results and Dismissal"));
+                        ui.label(windows_style::muted_text(
+                            "Tune how much content the launcher loads, how aggressively it collapses, and how clipboard restore behaves on macOS.",
+                        ));
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            ui.label(windows_style::body_text(format!(
+                                "Max results: {}",
+                                self.max_results
+                            )));
+                            ui.add(Slider::new(&mut self.max_results, 10..=200));
+                        });
+                        ui.add_space(12.0);
+                        ui.checkbox(&mut self.dismiss_on_escape, "Dismiss on Escape");
+                        ui.checkbox(&mut self.dismiss_on_click_away, "Dismiss on click away");
+                        ui.checkbox(
+                            &mut self.paste_after_restore,
+                            "On macOS, paste immediately after restoring a clipboard item",
+                        );
+                    }
+                    SettingsTab::Sync => {
+                        ui.label(windows_style::section_text("Cross-Device Sync"));
+                        ui.label(windows_style::muted_text(
+                            "Point Viceroy at your self-hosted sync server, test the connection, and keep an eye on every device tied to it.",
+                        ));
+                        ui.add_space(12.0);
+                        ui.columns(2, |columns| {
+                            columns[0].checkbox(&mut self.sync_enabled, "Enable sync");
+                            columns[0].checkbox(
+                                &mut self.sync_mirror_clipboard,
+                                "Mirror latest synced item to this clipboard",
+                            );
+                            columns[0].add_space(8.0);
+                            settings_field(
+                                &mut columns[0],
+                                "Device name",
+                                &mut self.sync_device_name,
+                                false,
+                            );
+                            settings_field(
+                                &mut columns[0],
+                                "Device id",
+                                &mut self.sync_device_id,
+                                true,
+                            );
+                            settings_field(
+                                &mut columns[0],
+                                "Server URL",
+                                &mut self.sync_server_url,
+                                false,
+                            );
+                            columns[0].label(windows_style::muted_text("Auth token"));
+                            columns[0].add_sized(
+                                [columns[0].available_width(), 34.0],
+                                TextEdit::singleline(&mut self.sync_auth_token).password(true),
+                            );
+
+                            windows_style::card_frame(false).show(&mut columns[1], |ui| {
+                                ui.set_min_width(ui.available_width());
+                                let tone = sync_indicator_tone(
+                                    self.sync_status.as_ref(),
+                                    self.sync_test_result.as_ref(),
+                                );
+                                let heading = sync_indicator_heading(
+                                    self.sync_status.as_ref(),
+                                    self.sync_test_result.as_ref(),
+                                );
+                                ui.horizontal(|ui| {
+                                    sync_status_dot(ui, tone);
+                                    ui.label(windows_style::section_text(heading));
+                                });
+                                ui.add_space(6.0);
+                                if let Some(status) = &self.sync_status {
+                                    for line in [
+                                        format!(
+                                            "Current device: {} ({})",
+                                            status.device.device_name, status.device.platform
+                                        ),
+                                        format!(
+                                            "Server: {}",
+                                            status.server_url.as_deref().unwrap_or("Not configured")
+                                        ),
+                                        format!(
+                                            "Last successful sync: {}",
+                                            sync::format_timestamp(status.last_successful_sync_at)
+                                        ),
+                                        format!("Pending operations: {}", status.pending_operations),
+                                    ] {
+                                        ui.label(windows_style::muted_text(line));
+                                    }
+                                } else {
+                                    ui.label(windows_style::muted_text(
+                                        "Sync status is not available yet.",
+                                    ));
+                                }
+                                if let Some(status) = &self.sync_status {
+                                    if let Some(error) = &status.last_error {
+                                        ui.add_space(8.0);
+                                        ui.label(windows_style::status_text(error, BadgeTone::Danger));
+                                    }
+                                }
+                                if !self.sync_message.is_empty() {
+                                    ui.add_space(8.0);
+                                    ui.label(windows_style::status_text(
+                                        &self.sync_message,
+                                        sync_message_tone(
+                                            self.sync_test_result.as_ref(),
+                                            &self.sync_message,
+                                        ),
+                                    ));
                                 }
                             });
+                        });
+
+                        ui.add_space(12.0);
+                        windows_style::card_frame(false).show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                ui.label(windows_style::section_text("Devices"));
+                                if let Some(status) = &self.sync_status {
+                                    ui.label(windows_style::muted_text(format!(
+                                        "{} known",
+                                        status.known_devices.len()
+                                    )));
+                                }
+                            });
+                            ui.add_space(8.0);
+                            let known_devices = self
+                                .sync_status
+                                .as_ref()
+                                .map(|status| status.known_devices.as_slice())
+                                .unwrap_or(&[]);
+                            if known_devices.is_empty() {
+                                ui.label(windows_style::muted_text(
+                                    "No device roster is cached yet. Run Test connection or Refresh status to load it.",
+                                ));
+                            } else {
+                                ScrollArea::vertical()
+                                    .id_salt("sync_devices_scroll")
+                                    .max_height(140.0)
+                                    .show(ui, |ui| {
+                                        for device in known_devices {
+                                            windows_style::card_frame(device.is_current).show(
+                                                ui,
+                                                |ui| {
+                                                    ui.set_min_width(ui.available_width());
+                                                    ui.horizontal(|ui| {
+                                                        let badge_tone = if device.is_current {
+                                                            BadgeTone::Accent
+                                                        } else {
+                                                            BadgeTone::Neutral
+                                                        };
+                                                        windows_style::badge_frame(badge_tone).show(
+                                                            ui,
+                                                            |ui| {
+                                                                ui.label(windows_style::badge_text(
+                                                                    if device.is_current {
+                                                                        "Current"
+                                                                    } else {
+                                                                        "Device"
+                                                                    },
+                                                                    badge_tone,
+                                                                ));
+                                                            },
+                                                        );
+                                                        ui.label(windows_style::body_text(
+                                                            &device.device_name,
+                                                        ));
+                                                        ui.label(windows_style::muted_text(format!(
+                                                            "({})",
+                                                            device.platform
+                                                        )));
+                                                    });
+                                                    ui.add_space(4.0);
+                                                    ui.label(windows_style::muted_text(format!(
+                                                        "Last seen: {}",
+                                                        sync::format_timestamp(Some(
+                                                            device.last_seen_at,
+                                                        ))
+                                                    )));
+                                                },
+                                            );
+                                            ui.add_space(6.0);
+                                        }
+                                    });
+                            }
+                        });
                     }
                 });
-            }
-        });
+            });
 
         ui.add_space(12.0);
         windows_style::panel_frame().show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add(windows_style::ghost_button("Refresh status"))
-                    .clicked()
-                {
-                    self.refresh_sync_status();
-                }
-                if ui
-                    .add(windows_style::ghost_button("Test connection"))
-                    .clicked()
-                {
-                    self.test_sync_connection();
+                if self.settings_tab == SettingsTab::Sync {
+                    if ui
+                        .add(windows_style::ghost_button("Refresh status"))
+                        .clicked()
+                    {
+                        self.refresh_sync_status();
+                    }
+                    if ui
+                        .add(windows_style::ghost_button("Test connection"))
+                        .clicked()
+                    {
+                        self.test_sync_connection();
+                    }
                 }
                 if ui
                     .add(windows_style::action_button("Save settings"))
