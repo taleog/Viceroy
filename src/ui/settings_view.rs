@@ -36,9 +36,11 @@ struct SettingsControls {
     hotkey_field: usize,
     max_slider: usize,
     max_label: usize,
+    toggle_paste_after_restore: usize,
     toggle_escape: usize,
     toggle_click: usize,
     sync_enabled_toggle: usize,
+    sync_mirror_clipboard_toggle: usize,
     sync_device_name_field: usize,
     sync_device_id_field: usize,
     sync_server_url_field: usize,
@@ -386,7 +388,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![general_card, addSubview: hotkey_tip_block];
 
     // Behavior card
-    let behavior_card_height = 220.0;
+    let behavior_card_height = 256.0;
     let behavior_card_y = (card_top - behavior_card_height).max(card_margin);
     let behavior_card: id = msg_send![class!(NSView), alloc];
     let behavior_card: id = msg_send![behavior_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, behavior_card_y), NSSize::new(card_width, behavior_card_height))];
@@ -438,6 +440,15 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![max_slider, setTarget: target];
     let _: () = msg_send![max_slider, setAction: sel!(maxResultsSliderChanged:)];
 
+    let paste_toggle: id = msg_send![class!(NSButton), alloc];
+    let paste_toggle: id = msg_send![paste_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, card_inset + 96.0), NSSize::new(card_width - card_inset * 2.0, 28.0))];
+    style_toggle(
+        paste_toggle,
+        "Paste immediately after restoring a clipboard item",
+    );
+    let _: () = msg_send![paste_toggle, setTarget: target];
+    let _: () = msg_send![paste_toggle, setAction: sel!(toggleSetting:)];
+
     let esc_toggle: id = msg_send![class!(NSButton), alloc];
     let esc_toggle: id = msg_send![esc_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, card_inset + 60.0), NSSize::new(card_width / 2.0 - card_inset, 28.0))];
     style_toggle(esc_toggle, "Dismiss on Escape");
@@ -453,11 +464,12 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![behavior_card, addSubview: behavior_heading];
     let _: () = msg_send![behavior_card, addSubview: max_label];
     let _: () = msg_send![behavior_card, addSubview: max_slider];
+    let _: () = msg_send![behavior_card, addSubview: paste_toggle];
     let _: () = msg_send![behavior_card, addSubview: esc_toggle];
     let _: () = msg_send![behavior_card, addSubview: click_toggle];
 
     // Sync card
-    let sync_card_height = 430.0;
+    let sync_card_height = 466.0;
     let sync_card_y = (card_top - sync_card_height).max(card_margin);
     let sync_card: id = msg_send![class!(NSView), alloc];
     let sync_card: id = msg_send![sync_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, sync_card_y), NSSize::new(card_width, sync_card_height))];
@@ -501,19 +513,28 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let field_width = left_column_width - left_label_width - 12.0;
 
     let sync_enabled_toggle: id = msg_send![class!(NSButton), alloc];
-    let sync_enabled_toggle: id = msg_send![sync_enabled_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 320.0), NSSize::new(160.0, 28.0))];
+    let sync_enabled_toggle: id = msg_send![sync_enabled_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 356.0), NSSize::new(160.0, 28.0))];
     style_toggle(sync_enabled_toggle, "Enable sync");
     let _: () = msg_send![sync_enabled_toggle, setTarget: target];
     let _: () = msg_send![sync_enabled_toggle, setAction: sel!(toggleSetting:)];
 
+    let sync_mirror_toggle: id = msg_send![class!(NSButton), alloc];
+    let sync_mirror_toggle: id = msg_send![sync_mirror_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 320.0), NSSize::new(left_column_width, 28.0))];
+    style_toggle(
+        sync_mirror_toggle,
+        "Mirror latest synced item to this clipboard",
+    );
+    let _: () = msg_send![sync_mirror_toggle, setTarget: target];
+    let _: () = msg_send![sync_mirror_toggle, setAction: sel!(toggleSetting:)];
+
     let refresh_button: id = msg_send![class!(NSButton), alloc];
-    let refresh_button: id = msg_send![refresh_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 314.0), NSSize::new(right_column_width, 30.0))];
+    let refresh_button: id = msg_send![refresh_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 350.0), NSSize::new(right_column_width, 30.0))];
     style_action_button(refresh_button, "Refresh status", false);
     let _: () = msg_send![refresh_button, setTarget: target];
     let _: () = msg_send![refresh_button, setAction: sel!(refreshSyncStatus:)];
 
     let test_button: id = msg_send![class!(NSButton), alloc];
-    let test_button: id = msg_send![test_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 276.0), NSSize::new(right_column_width, 30.0))];
+    let test_button: id = msg_send![test_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 312.0), NSSize::new(right_column_width, 30.0))];
     style_action_button(test_button, "Test connection", false);
     let _: () = msg_send![test_button, setTarget: target];
     let _: () = msg_send![test_button, setAction: sel!(testSyncConnection:)];
@@ -676,6 +697,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_card, addSubview: sync_heading];
     let _: () = msg_send![sync_card, addSubview: sync_caption];
     let _: () = msg_send![sync_card, addSubview: sync_enabled_toggle];
+    let _: () = msg_send![sync_card, addSubview: sync_mirror_toggle];
     let _: () = msg_send![sync_card, addSubview: refresh_button];
     let _: () = msg_send![sync_card, addSubview: test_button];
     let _: () = msg_send![sync_card, addSubview: device_name_label];
@@ -769,9 +791,11 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
         hotkey_field: hotkey_field as usize,
         max_slider: max_slider as usize,
         max_label: max_label as usize,
+        toggle_paste_after_restore: paste_toggle as usize,
         toggle_escape: esc_toggle as usize,
         toggle_click: click_toggle as usize,
         sync_enabled_toggle: sync_enabled_toggle as usize,
+        sync_mirror_clipboard_toggle: sync_mirror_toggle as usize,
         sync_device_name_field: sync_device_name_field as usize,
         sync_device_id_field: sync_device_id_field as usize,
         sync_server_url_field: sync_server_url_field as usize,
@@ -803,13 +827,23 @@ fn populate_controls_from_settings() {
                 let slider: id = id_from(controls.max_slider);
                 let _: () = msg_send![slider, setIntValue: settings.max_results as i32];
                 slider_value_changed(slider);
+                let paste_state: i64 = if settings.paste_after_restore { 1 } else { 0 };
                 let esc_state: i64 = if settings.dismiss_on_escape { 1 } else { 0 };
                 let click_state: i64 = if settings.dismiss_on_click_away { 1 } else { 0 };
+                let _: () = msg_send![
+                    id_from(controls.toggle_paste_after_restore),
+                    setState: paste_state
+                ];
                 let _: () = msg_send![id_from(controls.toggle_escape), setState: esc_state];
                 let _: () = msg_send![id_from(controls.toggle_click), setState: click_state];
                 let sync_enabled_state: i64 = if settings.sync.enabled { 1 } else { 0 };
+                let sync_mirror_state: i64 = if settings.sync.mirror_clipboard { 1 } else { 0 };
                 let _: () =
                     msg_send![id_from(controls.sync_enabled_toggle), setState: sync_enabled_state];
+                let _: () = msg_send![
+                    id_from(controls.sync_mirror_clipboard_toggle),
+                    setState: sync_mirror_state
+                ];
                 set_string(
                     id_from(controls.sync_device_name_field),
                     &settings.sync.device_name,
@@ -920,9 +954,12 @@ unsafe fn apply_settings_from_ui() {
         }
         let slider_value: i32 = msg_send![id_from(controls.max_slider), intValue];
         let slider_value = slider_value.clamp(10, 200);
+        let paste_state: i16 = msg_send![id_from(controls.toggle_paste_after_restore), state];
         let esc_state: i16 = msg_send![id_from(controls.toggle_escape), state];
         let click_state: i16 = msg_send![id_from(controls.toggle_click), state];
         let sync_enabled_state: i16 = msg_send![id_from(controls.sync_enabled_toggle), state];
+        let sync_mirror_state: i16 =
+            msg_send![id_from(controls.sync_mirror_clipboard_toggle), state];
         let sync_enabled = sync_enabled_state == 1;
         let sync_device_name = get_string(id_from(controls.sync_device_name_field));
         let sync_server_url_input = get_string(id_from(controls.sync_server_url_field));
@@ -944,9 +981,11 @@ unsafe fn apply_settings_from_ui() {
         };
         current_settings.hotkey = hotkey;
         current_settings.max_results = slider_value as usize;
+        current_settings.paste_after_restore = paste_state == 1;
         current_settings.dismiss_on_escape = esc_state == 1;
         current_settings.dismiss_on_click_away = click_state == 1;
         current_settings.sync.enabled = sync_enabled;
+        current_settings.sync.mirror_clipboard = sync_mirror_state == 1;
         current_settings.sync.device_name = prepared_sync.device_name;
         current_settings.sync.server_url = prepared_sync.server_url;
         current_settings.sync.auth_token = prepared_sync.auth_token;
@@ -1013,7 +1052,7 @@ unsafe fn apply_settings_from_ui() {
             && (old_server_url != current_settings.sync.server_url.clone().unwrap_or_default()
                 || old_auth_token != current_settings.sync.auth_token.clone().unwrap_or_default());
         let sync_message = if connection_changed {
-            "Sync settings saved. Restart Viceroy to apply server URL or token changes."
+            "Sync settings saved. The background worker is reconnecting with the updated server details."
         } else if sync_enabled && !old_enabled {
             "Sync enabled. The background worker will use this server for new uploads."
         } else if !sync_enabled {

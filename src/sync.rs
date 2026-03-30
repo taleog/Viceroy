@@ -629,6 +629,7 @@ pub fn apply_remote_clipboard_record(record: &ClipboardSyncRecord) -> Result<i64
             ],
         )?;
         clipboard::notify_history_changed();
+        maybe_mirror_remote_clipboard_to_system(&conn, record);
         return Ok(id);
     }
 
@@ -667,8 +668,63 @@ pub fn apply_remote_clipboard_record(record: &ClipboardSyncRecord) -> Result<i64
         ],
     )?;
     clipboard::notify_history_changed();
+    maybe_mirror_remote_clipboard_to_system(&conn, record);
 
     Ok(conn.last_insert_rowid())
+}
+
+fn maybe_mirror_remote_clipboard_to_system(conn: &Connection, record: &ClipboardSyncRecord) {
+    if record.deleted_at.is_some() {
+        return;
+    }
+
+    let should_mirror = match should_mirror_remote_clipboard(conn, record) {
+        Ok(should_mirror) => should_mirror,
+        Err(err) => {
+            eprintln!(
+                "Failed to evaluate remote clipboard mirroring for {}: {err:#}",
+                record.sync_id
+            );
+            return;
+        }
+    };
+    if !should_mirror {
+        return;
+    }
+
+    if let Err(err) = clipboard::restore_history_entry_to_clipboard_blocking(
+        &record.content,
+        &record.content_type,
+        record.image_width,
+        record.image_height,
+    ) {
+        eprintln!(
+            "Failed to mirror remote clipboard record {} to the system clipboard: {err:#}",
+            record.sync_id
+        );
+    }
+}
+
+fn should_mirror_remote_clipboard(conn: &Connection, record: &ClipboardSyncRecord) -> Result<bool> {
+    let app_settings = settings::load()?;
+    if !app_settings.sync.enabled || !app_settings.sync.mirror_clipboard {
+        return Ok(false);
+    }
+
+    let latest_sync_id = conn
+        .query_row(
+            "SELECT sync_id
+             FROM clipboard_history
+             WHERE deleted_at IS NULL
+             ORDER BY COALESCE(updated_at, timestamp) DESC, id DESC
+             LIMIT 1",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+
+    Ok(latest_sync_id.as_deref() == Some(record.sync_id.as_str()))
 }
 
 fn status_with_connection(conn: &Connection, device: LocalDevice) -> Result<SyncStatus> {

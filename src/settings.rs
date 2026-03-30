@@ -23,6 +23,7 @@ pub struct Settings {
     pub hotkey: String,
     pub dismiss_on_escape: bool,
     pub dismiss_on_click_away: bool,
+    pub paste_after_restore: bool,
     pub sync: SyncSettings,
 }
 
@@ -44,6 +45,7 @@ pub struct SyncSettings {
     pub server_url: Option<String>,
     pub auth_token: Option<String>,
     pub poll_interval_seconds: u64,
+    pub mirror_clipboard: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +69,7 @@ impl Default for Settings {
             hotkey: DEFAULT_HOTKEY.to_string(),
             dismiss_on_escape: true,
             dismiss_on_click_away: true,
+            paste_after_restore: true,
             sync: SyncSettings::default(),
         }
     }
@@ -92,6 +95,7 @@ impl Default for SyncSettings {
             server_url: None,
             auth_token: None,
             poll_interval_seconds: 15,
+            mirror_clipboard: false,
         }
     }
 }
@@ -442,6 +446,8 @@ mod tests {
         );
         assert_eq!(settings.sync.device_name, "This Mac");
         assert_eq!(settings.sync.auth_token, None);
+        assert!(settings.paste_after_restore);
+        assert!(!settings.sync.mirror_clipboard);
     }
 
     #[test]
@@ -463,6 +469,8 @@ mod tests {
             Some("https://sync.example.com")
         );
         assert_eq!(settings.sync.device_name, "Office Laptop");
+        assert!(settings.paste_after_restore);
+        assert!(!settings.sync.mirror_clipboard);
     }
 
     #[test]
@@ -491,6 +499,8 @@ mod tests {
         assert_eq!(settings.sync.server_url, None);
         assert_eq!(settings.sync.auth_token, None);
         assert_eq!(settings.sync.poll_interval_seconds, 5);
+        assert!(settings.paste_after_restore);
+        assert!(!settings.sync.mirror_clipboard);
     }
 
     #[test]

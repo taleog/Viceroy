@@ -275,9 +275,11 @@ struct ViceroyWindowsApp {
     status: String,
     hotkey: String,
     max_results: usize,
+    paste_after_restore: bool,
     dismiss_on_escape: bool,
     dismiss_on_click_away: bool,
     sync_enabled: bool,
+    sync_mirror_clipboard: bool,
     sync_device_name: String,
     sync_device_id: String,
     sync_server_url: String,
@@ -307,9 +309,11 @@ impl ViceroyWindowsApp {
             status: "Search apps, files, clipboard snippets, commands, and the web.".to_string(),
             hotkey: app_settings.hotkey.clone(),
             max_results: app_settings.max_results,
+            paste_after_restore: app_settings.paste_after_restore,
             dismiss_on_escape: app_settings.dismiss_on_escape,
             dismiss_on_click_away: app_settings.dismiss_on_click_away,
             sync_enabled: app_settings.sync.enabled,
+            sync_mirror_clipboard: app_settings.sync.mirror_clipboard,
             sync_device_name: app_settings.sync.device_name.clone(),
             sync_device_id: app_settings.sync.device_id.clone(),
             sync_server_url: app_settings.sync.server_url.unwrap_or_default(),
@@ -615,9 +619,11 @@ impl ViceroyWindowsApp {
 
                 app_settings.hotkey = self.hotkey.trim().to_string();
                 app_settings.max_results = self.max_results.clamp(10, 200);
+                app_settings.paste_after_restore = self.paste_after_restore;
                 app_settings.dismiss_on_escape = self.dismiss_on_escape;
                 app_settings.dismiss_on_click_away = self.dismiss_on_click_away;
                 app_settings.sync.enabled = self.sync_enabled;
+                app_settings.sync.mirror_clipboard = self.sync_mirror_clipboard;
                 app_settings.sync.device_name = prepared_sync.device_name.clone();
                 app_settings.sync.server_url = prepared_sync.server_url.clone();
                 app_settings.sync.auth_token = prepared_sync.auth_token.clone();
@@ -639,9 +645,11 @@ impl ViceroyWindowsApp {
                 };
                 self.hotkey = app_settings.hotkey.clone();
                 self.max_results = app_settings.max_results;
+                self.paste_after_restore = app_settings.paste_after_restore;
                 self.dismiss_on_escape = app_settings.dismiss_on_escape;
                 self.dismiss_on_click_away = app_settings.dismiss_on_click_away;
                 self.sync_enabled = app_settings.sync.enabled;
+                self.sync_mirror_clipboard = app_settings.sync.mirror_clipboard;
                 self.sync_device_name = app_settings.sync.device_name.clone();
                 self.sync_server_url = app_settings.sync.server_url.clone().unwrap_or_default();
                 self.sync_auth_token = app_settings.sync.auth_token.clone().unwrap_or_default();
@@ -670,7 +678,7 @@ impl ViceroyWindowsApp {
                     && (old_server_url != self.sync_server_url.trim()
                         || old_auth_token != self.sync_auth_token.trim());
                 self.sync_message = if connection_changed {
-                    "Sync settings saved. Restart Viceroy to apply server URL or token changes."
+                    "Sync settings saved. The background worker is reconnecting with the updated server details."
                         .to_string()
                 } else if self.sync_enabled && !old_enabled {
                     "Sync enabled. The background worker will use this server for new uploads."
@@ -1062,7 +1070,7 @@ impl ViceroyWindowsApp {
             SettingsTab::Behavior => {
                 ui.label(windows_style::section_text("Results and Dismissal"));
                 ui.label(windows_style::muted_text(
-                    "Tune how much content the launcher loads and how aggressively it collapses back out of the way.",
+                    "Tune how much content the launcher loads, how aggressively it collapses, and how clipboard restore behaves on macOS.",
                 ));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
@@ -1078,6 +1086,10 @@ impl ViceroyWindowsApp {
                     &mut self.dismiss_on_click_away,
                     "Dismiss on click away",
                 );
+                ui.checkbox(
+                    &mut self.paste_after_restore,
+                    "On macOS, paste immediately after restoring a clipboard item",
+                );
             }
             SettingsTab::Sync => {
                 ui.label(windows_style::section_text("Cross-Device Sync"));
@@ -1087,6 +1099,10 @@ impl ViceroyWindowsApp {
                 ui.add_space(12.0);
                 ui.columns(2, |columns| {
                     columns[0].checkbox(&mut self.sync_enabled, "Enable sync");
+                    columns[0].checkbox(
+                        &mut self.sync_mirror_clipboard,
+                        "Mirror latest synced item to this clipboard",
+                    );
                     columns[0].add_space(8.0);
                     settings_field(
                         &mut columns[0],

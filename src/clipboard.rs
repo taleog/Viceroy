@@ -14,6 +14,7 @@ use std::borrow::Cow;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use tokio::task;
 use tokio::time::{sleep, Duration};
 
@@ -474,13 +475,34 @@ pub async fn paste_to_active_app(
 pub async fn restore_history_entry_to_clipboard(
     content: &str,
     content_type: &str,
+    image_width: Option<i64>,
+    image_height: Option<i64>,
+) -> Result<()> {
+    let content = content.to_string();
+    let content_type = content_type.to_string();
+    task::spawn_blocking(move || {
+        restore_history_entry_to_clipboard_blocking(
+            &content,
+            &content_type,
+            image_width,
+            image_height,
+        )
+    })
+    .await
+    .map_err(|e| anyhow!("clipboard restore task failed: {e}"))??;
+    Ok(())
+}
+
+pub fn restore_history_entry_to_clipboard_blocking(
+    content: &str,
+    content_type: &str,
     _image_width: Option<i64>,
     _image_height: Option<i64>,
 ) -> Result<()> {
     if content_type == "image" {
-        set_image_clipboard(content).await?;
+        set_image_clipboard_blocking(content)?;
     } else {
-        set_text_clipboard(content).await?;
+        set_text_clipboard_blocking(content)?;
     }
     Ok(())
 }
@@ -525,6 +547,14 @@ async fn paste_image_to_active_app(
 }
 
 async fn set_text_clipboard(content: &str) -> Result<()> {
+    let content = content.to_string();
+    task::spawn_blocking(move || set_text_clipboard_blocking(&content))
+        .await
+        .map_err(|e| anyhow!("clipboard text task failed: {e}"))??;
+    Ok(())
+}
+
+fn set_text_clipboard_blocking(content: &str) -> Result<()> {
     let _guard = ClipboardMonitorPauseGuard::new();
     let mut clipboard = Clipboard::new()?;
     clipboard.set_text(content)?;
@@ -533,11 +563,19 @@ async fn set_text_clipboard(content: &str) -> Result<()> {
         *guard = Some((normalize_text(content), Utc::now().timestamp()));
     }
     set_last_observed_text(Some(content.to_string()));
-    wait_for_text_clipboard(content).await?;
+    wait_for_text_clipboard_blocking(content)?;
     Ok(())
 }
 
 async fn set_image_clipboard(content: &str) -> Result<()> {
+    let content = content.to_string();
+    task::spawn_blocking(move || set_image_clipboard_blocking(&content))
+        .await
+        .map_err(|e| anyhow!("clipboard image task failed: {e}"))??;
+    Ok(())
+}
+
+fn set_image_clipboard_blocking(content: &str) -> Result<()> {
     let _guard = ClipboardMonitorPauseGuard::new();
     let image = decode_history_image(content)?;
     let hash = blake3::hash(&image.bytes);
@@ -548,11 +586,11 @@ async fn set_image_clipboard(content: &str) -> Result<()> {
         guard.replace((hash, Utc::now().timestamp()));
     }
     set_last_observed_image_hash(Some(hash));
-    wait_for_image_clipboard(hash).await?;
+    wait_for_image_clipboard_blocking(hash)?;
     Ok(())
 }
 
-async fn wait_for_text_clipboard(expected: &str) -> Result<()> {
+fn wait_for_text_clipboard_blocking(expected: &str) -> Result<()> {
     let expected = normalize_text(expected);
     for _ in 0..20 {
         if let Ok(mut clipboard) = Clipboard::new() {
@@ -562,13 +600,12 @@ async fn wait_for_text_clipboard(expected: &str) -> Result<()> {
                 }
             }
         }
-        sleep(Duration::from_millis(25)).await;
+        thread::sleep(Duration::from_millis(25));
     }
 
     Err(anyhow!("clipboard text did not update in time"))
 }
-
-async fn wait_for_image_clipboard(expected_hash: blake3::Hash) -> Result<()> {
+fn wait_for_image_clipboard_blocking(expected_hash: blake3::Hash) -> Result<()> {
     for _ in 0..20 {
         if let Ok(mut clipboard) = Clipboard::new() {
             if let Ok(image) = clipboard.get_image() {
@@ -577,7 +614,7 @@ async fn wait_for_image_clipboard(expected_hash: blake3::Hash) -> Result<()> {
                 }
             }
         }
-        sleep(Duration::from_millis(25)).await;
+        thread::sleep(Duration::from_millis(25));
     }
 
     Err(anyhow!("clipboard image did not update in time"))

@@ -1,5 +1,6 @@
 use crate::dictionary;
 use crate::search_engine;
+use crate::settings;
 use crate::system_commands;
 use crate::ui::helpers::style;
 use crate::ui::helpers::{run_on_main, wrapped_row};
@@ -1110,20 +1111,34 @@ unsafe fn perform_result_action(index: usize) {
             image_height,
             ..
         } => {
+            let paste_after_restore = settings::load()
+                .map(|settings| settings.paste_after_restore)
+                .unwrap_or(true);
             let target_app = app_launcher::get_frontmost_app();
             hide_window_immediately();
             hide_after_action = false;
             let content_clone = content.clone();
             let content_type_clone = content_type.clone();
             SEARCH_RT.spawn(async move {
-                let _ = crate::clipboard::paste_history_entry(
-                    &content_clone,
-                    &content_type_clone,
-                    image_width,
-                    image_height,
-                    target_app,
-                )
-                .await;
+                let result = if paste_after_restore {
+                    crate::clipboard::paste_history_entry(
+                        &content_clone,
+                        &content_type_clone,
+                        image_width,
+                        image_height,
+                        target_app,
+                    )
+                    .await
+                } else {
+                    crate::clipboard::restore_history_entry_to_clipboard(
+                        &content_clone,
+                        &content_type_clone,
+                        image_width,
+                        image_height,
+                    )
+                    .await
+                };
+                let _ = result;
             });
         }
         search_engine::SearchResult::Command { command, .. } => {
