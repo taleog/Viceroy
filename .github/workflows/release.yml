@@ -63,12 +63,16 @@ jobs:
         run: |
           # Extract changelog section for this version
           VERSION=${{ steps.version.outputs.version }}
-          NOTES=$(awk "/## \[$VERSION\]/,/## \[/" CHANGELOG.md | head -n -1)
-          if [ -z "$NOTES" ]; then
-            NOTES="Release $VERSION"
+          awk -v version="$VERSION" '
+            $0 ~ "^## \\[" version "\\]" { capture=1 }
+            capture && $0 ~ "^## \\[" && $0 !~ "^## \\[" version "\\]" { exit }
+            capture { print }
+          ' CHANGELOG.md > /tmp/release_notes.md
+
+          if [ ! -s /tmp/release_notes.md ]; then
+            echo "Release $VERSION" > /tmp/release_notes.md
           fi
-          # Write to file to handle multiline
-          echo "$NOTES" > /tmp/release_notes.md
+
           echo "Generated release notes for $VERSION"
       
       - name: Create GitHub Release
