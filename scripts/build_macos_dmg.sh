@@ -22,7 +22,8 @@ if [ ! -d "$APP_BUNDLE" ]; then
 fi
 
 mkdir -p "$DIST_DIR" "$STAGING_DIR"
-cp -R "$APP_BUNDLE" "$STAGING_DIR/"
+ditto "$APP_BUNDLE" "$STAGING_DIR/$APP_NAME.app"
+xattr -cr "$STAGING_DIR/$APP_NAME.app"
 ln -s /Applications "$STAGING_DIR/Applications"
 rm -f "$DMG_PATH"
 

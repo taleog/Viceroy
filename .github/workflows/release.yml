@@ -226,7 +226,7 @@ jobs:
 
           Install Notes
 
-          - macOS: open the DMG, drag \`Viceroy.app\` into Applications, then launch it from Applications.
+          - macOS: open the DMG, drag \`Viceroy.app\` into Applications, then launch it from Applications. If Gatekeeper warns on first launch, use right-click -> Open once.
           - Windows: run the setup executable and launch Viceroy from the Start menu.
           - Server: extract and run \`./viceroy-sync-server\`.
           - Current builds are unsigned, so macOS Gatekeeper and Windows SmartScreen may warn on first launch.

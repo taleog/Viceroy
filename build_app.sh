@@ -85,6 +85,15 @@ elif [ -f "$ICON_PNG_SOURCE" ]; then
 fi
 
 echo "✅ App bundle created: $APP_DIR"
+
+echo "🧹 Clearing bundle attributes..."
+xattr -cr "$APP_DIR"
+
+echo "🔏 Applying ad-hoc app bundle signature..."
+codesign --force --deep --sign - "$APP_DIR"
+xattr -cr "$APP_DIR"
+codesign --verify --deep --strict "$APP_DIR"
+
 echo ""
 echo "📌 Next steps:"
 echo "   1. Test: open $APP_DIR"
