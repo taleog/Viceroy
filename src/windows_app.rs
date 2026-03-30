@@ -281,6 +281,7 @@ struct ViceroyWindowsApp {
     sync_server_url: String,
     sync_auth_token: String,
     sync_status: Option<sync::SyncStatus>,
+    sync_test_result: Option<sync::SyncConnectionTestResult>,
     sync_message: String,
     settings_tab: SettingsTab,
     clipboard_editor: Option<ClipboardEditor>,
@@ -311,6 +312,7 @@ impl ViceroyWindowsApp {
             sync_server_url: app_settings.sync.server_url.unwrap_or_default(),
             sync_auth_token: app_settings.sync.auth_token.unwrap_or_default(),
             sync_status: None,
+            sync_test_result: None,
             sync_message: String::new(),
             settings_tab: SettingsTab::General,
             clipboard_editor: None,
@@ -534,7 +536,7 @@ impl ViceroyWindowsApp {
     }
 
     fn refresh_sync_status(&mut self) {
-        match sync::status() {
+        match self.runtime.block_on(sync::refresh_remote_status()) {
             Ok(status) => {
                 self.sync_device_id = status.device.device_id.clone();
                 if self.sync_device_name.trim().is_empty() {
@@ -553,6 +555,29 @@ impl ViceroyWindowsApp {
             Err(err) => {
                 self.sync_status = None;
                 self.sync_message = format!("Failed to load sync status: {err:#}");
+            }
+        }
+    }
+
+    fn test_sync_connection(&mut self) {
+        let auth_token = non_empty(self.sync_auth_token.trim());
+        let result = self.runtime.block_on(sync::test_connection(
+            &self.sync_server_url,
+            auth_token.as_deref(),
+        ));
+
+        if let Some(url) = result.normalized_server_url.clone() {
+            self.sync_server_url = url;
+        }
+
+        self.sync_message = result.message.clone();
+        let ok = result.ok;
+        self.sync_test_result = Some(result);
+        if ok {
+            if self.sync_enabled {
+                self.refresh_sync_status();
+            } else if let Ok(status) = sync::status() {
+                self.sync_status = Some(status);
             }
         }
     }
@@ -637,6 +662,24 @@ impl ViceroyWindowsApp {
                 } else {
                     "Sync settings saved.".to_string()
                 };
+                if self.sync_enabled {
+                    let auth_token = non_empty(self.sync_auth_token.trim());
+                    let result = self.runtime.block_on(sync::test_connection(
+                        &self.sync_server_url,
+                        auth_token.as_deref(),
+                    ));
+                    if let Some(url) = result.normalized_server_url.clone() {
+                        self.sync_server_url = url;
+                    }
+                    self.sync_message = if result.ok {
+                        format!("Sync settings saved. {}", result.message)
+                    } else {
+                        format!("Sync settings saved, but {}", result.message)
+                    };
+                    self.sync_test_result = Some(result);
+                } else {
+                    self.sync_test_result = None;
+                }
                 self.status = "Settings saved.".to_string();
                 self.reload_items(true);
             }
@@ -1021,51 +1064,145 @@ impl ViceroyWindowsApp {
             SettingsTab::Sync => {
                 ui.label(windows_style::section_text("Cross-Device Sync"));
                 ui.label(windows_style::muted_text(
-                    "Point Viceroy at your self-hosted sync server and inspect the current device state.",
+                    "Point Viceroy at your self-hosted sync server, test the connection, and keep an eye on every device tied to it.",
                 ));
                 ui.add_space(12.0);
-                ui.checkbox(&mut self.sync_enabled, "Enable sync");
-                ui.add_space(8.0);
-                settings_field(ui, "Device name", &mut self.sync_device_name, false);
-                settings_field(ui, "Device id", &mut self.sync_device_id, true);
-                settings_field(ui, "Server URL", &mut self.sync_server_url, false);
-                ui.label(windows_style::muted_text("Auth token"));
-                ui.add_sized(
-                    [ui.available_width(), 34.0],
-                    TextEdit::singleline(&mut self.sync_auth_token).password(true),
-                );
+                ui.columns(2, |columns| {
+                    columns[0].checkbox(&mut self.sync_enabled, "Enable sync");
+                    columns[0].add_space(8.0);
+                    settings_field(
+                        &mut columns[0],
+                        "Device name",
+                        &mut self.sync_device_name,
+                        false,
+                    );
+                    settings_field(
+                        &mut columns[0],
+                        "Device id",
+                        &mut self.sync_device_id,
+                        true,
+                    );
+                    settings_field(
+                        &mut columns[0],
+                        "Server URL",
+                        &mut self.sync_server_url,
+                        false,
+                    );
+                    columns[0].label(windows_style::muted_text("Auth token"));
+                    columns[0].add_sized(
+                        [columns[0].available_width(), 34.0],
+                        TextEdit::singleline(&mut self.sync_auth_token).password(true),
+                    );
+
+                    windows_style::card_frame(false).show(&mut columns[1], |ui| {
+                        let tone = sync_indicator_tone(
+                            self.sync_status.as_ref(),
+                            self.sync_test_result.as_ref(),
+                        );
+                        let heading = sync_indicator_heading(
+                            self.sync_status.as_ref(),
+                            self.sync_test_result.as_ref(),
+                        );
+                        ui.horizontal(|ui| {
+                            sync_status_dot(ui, tone);
+                            ui.label(windows_style::section_text(heading));
+                        });
+                        ui.add_space(6.0);
+                        if let Some(status) = &self.sync_status {
+                            for line in [
+                                format!(
+                                    "Current device: {} ({})",
+                                    status.device.device_name, status.device.platform
+                                ),
+                                format!(
+                                    "Server: {}",
+                                    status.server_url.as_deref().unwrap_or("Not configured")
+                                ),
+                                format!(
+                                    "Last successful sync: {}",
+                                    sync::format_timestamp(status.last_successful_sync_at)
+                                ),
+                                format!("Pending operations: {}", status.pending_operations),
+                            ] {
+                                ui.label(windows_style::muted_text(line));
+                            }
+                        } else {
+                            ui.label(windows_style::muted_text(
+                                "Sync status is not available yet.",
+                            ));
+                        }
+                        if let Some(status) = &self.sync_status {
+                            if let Some(error) = &status.last_error {
+                                ui.add_space(8.0);
+                                ui.label(windows_style::status_text(error, BadgeTone::Danger));
+                            }
+                        }
+                        if !self.sync_message.is_empty() {
+                            ui.add_space(8.0);
+                            ui.label(windows_style::status_text(
+                                &self.sync_message,
+                                sync_message_tone(self.sync_test_result.as_ref(), &self.sync_message),
+                            ));
+                        }
+                    });
+                });
+
                 ui.add_space(12.0);
-                if let Some(status) = &self.sync_status {
-                    for line in [
-                        format!(
-                            "Current device: {} ({})",
-                            status.device.device_name, status.device.platform
-                        ),
-                        format!("Connection: {}", status.connection_state.display_label()),
-                        format!(
-                            "Server: {}",
-                            status.server_url.as_deref().unwrap_or("Not configured")
-                        ),
-                        format!(
-                            "Last successful sync: {}",
-                            sync::format_timestamp(status.last_successful_sync_at)
-                        ),
-                        format!("Pending operations: {}", status.pending_operations),
-                        format!(
-                            "Last error: {}",
-                            status.last_error.as_deref().unwrap_or("None")
-                        ),
-                    ] {
-                        ui.label(windows_style::muted_text(line));
-                    }
-                }
-                if !self.sync_message.is_empty() {
+                windows_style::card_frame(false).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(windows_style::section_text("Devices"));
+                        if let Some(status) = &self.sync_status {
+                            ui.label(windows_style::muted_text(format!(
+                                "{} known",
+                                status.known_devices.len()
+                            )));
+                        }
+                    });
                     ui.add_space(8.0);
-                    ui.label(windows_style::status_text(
-                        &self.sync_message,
-                        status_tone(&self.sync_message),
-                    ));
-                }
+                    let known_devices = self
+                        .sync_status
+                        .as_ref()
+                        .map(|status| status.known_devices.as_slice())
+                        .unwrap_or(&[]);
+                    if known_devices.is_empty() {
+                        ui.label(windows_style::muted_text(
+                            "No device roster is cached yet. Run Test connection or Refresh status to load it.",
+                        ));
+                    } else {
+                        ScrollArea::vertical()
+                            .id_salt("sync_devices_scroll")
+                            .max_height(180.0)
+                            .show(ui, |ui| {
+                                for device in known_devices {
+                                    windows_style::card_frame(device.is_current).show(ui, |ui| {
+                                        ui.horizontal_wrapped(|ui| {
+                                            let badge_tone = if device.is_current {
+                                                BadgeTone::Success
+                                            } else {
+                                                BadgeTone::Neutral
+                                            };
+                                            windows_style::badge_frame(badge_tone).show(ui, |ui| {
+                                                ui.label(windows_style::badge_text(
+                                                    if device.is_current { "This device" } else { "Device" },
+                                                    badge_tone,
+                                                ));
+                                            });
+                                            ui.label(windows_style::body_text(format!(
+                                                "{} ({})",
+                                                device.device_name, device.platform
+                                            )));
+                                        });
+                                        ui.add_space(4.0);
+                                        ui.label(windows_style::muted_text(format!(
+                                            "Last seen: {}",
+                                            sync::format_timestamp(Some(device.last_seen_at))
+                                        )));
+                                    });
+                                    ui.add_space(6.0);
+                                }
+                            });
+                    }
+                });
             }
         });
 
@@ -1077,6 +1214,12 @@ impl ViceroyWindowsApp {
                     .clicked()
                 {
                     self.refresh_sync_status();
+                }
+                if ui
+                    .add(windows_style::ghost_button("Test connection"))
+                    .clicked()
+                {
+                    self.test_sync_connection();
                 }
                 if ui
                     .add(windows_style::action_button("Save settings"))
@@ -1291,6 +1434,80 @@ fn status_tone(message: &str) -> BadgeTone {
     } else {
         BadgeTone::Accent
     }
+}
+
+fn sync_indicator_tone(
+    status: Option<&sync::SyncStatus>,
+    test_result: Option<&sync::SyncConnectionTestResult>,
+) -> BadgeTone {
+    if let Some(result) = test_result {
+        return if result.ok {
+            BadgeTone::Success
+        } else {
+            match result.issue {
+                sync::SyncConnectionTestIssue::None => BadgeTone::Success,
+                sync::SyncConnectionTestIssue::ServerUnreachable => BadgeTone::Danger,
+                sync::SyncConnectionTestIssue::AuthenticationFailed => BadgeTone::Danger,
+                sync::SyncConnectionTestIssue::InvalidConfiguration => BadgeTone::Danger,
+                sync::SyncConnectionTestIssue::UnexpectedResponse => BadgeTone::Warning,
+            }
+        };
+    }
+
+    match status.map(|status| &status.connection_state) {
+        Some(sync::SyncConnectionState::Connected) => BadgeTone::Success,
+        Some(sync::SyncConnectionState::Reconnecting) => BadgeTone::Warning,
+        Some(sync::SyncConnectionState::Disabled) => BadgeTone::Neutral,
+        Some(sync::SyncConnectionState::Disconnected) => BadgeTone::Danger,
+        None => BadgeTone::Neutral,
+    }
+}
+
+fn sync_indicator_heading(
+    status: Option<&sync::SyncStatus>,
+    test_result: Option<&sync::SyncConnectionTestResult>,
+) -> &'static str {
+    if let Some(result) = test_result {
+        return if result.ok {
+            "Connection healthy"
+        } else {
+            match result.issue {
+                sync::SyncConnectionTestIssue::None => "Connection healthy",
+                sync::SyncConnectionTestIssue::InvalidConfiguration => "Server URL needs attention",
+                sync::SyncConnectionTestIssue::AuthenticationFailed => "Authentication failed",
+                sync::SyncConnectionTestIssue::ServerUnreachable => "Server unreachable",
+                sync::SyncConnectionTestIssue::UnexpectedResponse => "Server response needs review",
+            }
+        };
+    }
+
+    match status.map(|status| &status.connection_state) {
+        Some(sync::SyncConnectionState::Connected) => "Connected",
+        Some(sync::SyncConnectionState::Reconnecting) => "Reconnecting",
+        Some(sync::SyncConnectionState::Disabled) => "Disabled",
+        Some(sync::SyncConnectionState::Disconnected) => "Disconnected",
+        None => "Status unavailable",
+    }
+}
+
+fn sync_message_tone(
+    test_result: Option<&sync::SyncConnectionTestResult>,
+    message: &str,
+) -> BadgeTone {
+    if let Some(result) = test_result {
+        return if result.ok {
+            BadgeTone::Success
+        } else {
+            sync_indicator_tone(None, Some(result))
+        };
+    }
+    status_tone(message)
+}
+
+fn sync_status_dot(ui: &mut egui::Ui, tone: BadgeTone) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+    ui.painter()
+        .circle_filled(rect.center(), 4.0, tone.stroke());
 }
 
 fn execute_item(runtime: &Runtime, item: &DisplayItem) -> anyhow::Result<String> {

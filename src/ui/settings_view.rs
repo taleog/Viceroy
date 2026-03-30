@@ -7,6 +7,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use tokio::runtime::Runtime;
 
 use crate::settings;
 use crate::sync;
@@ -37,7 +38,9 @@ struct SettingsControls {
     sync_device_id_field: usize,
     sync_server_url_field: usize,
     sync_auth_token_field: usize,
+    sync_indicator_label: usize,
     sync_status_label: usize,
+    sync_devices_label: usize,
     sync_message_label: usize,
 }
 
@@ -303,7 +306,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![behavior_card, addSubview: click_toggle];
 
     // Sync card
-    let sync_card_height = 340.0;
+    let sync_card_height = 430.0;
     let sync_card_y = (card_top - sync_card_height).max(card_margin);
     let sync_card: id = msg_send![class!(NSView), alloc];
     let sync_card: id = msg_send![sync_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, sync_card_y), NSSize::new(card_width, sync_card_height))];
@@ -345,7 +348,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let field_width = left_column_width - left_label_width - 12.0;
 
     let sync_enabled_toggle: id = msg_send![class!(NSButton), alloc];
-    let sync_enabled_toggle: id = msg_send![sync_enabled_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 222.0), NSSize::new(160.0, 28.0))];
+    let sync_enabled_toggle: id = msg_send![sync_enabled_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 320.0), NSSize::new(160.0, 28.0))];
     let _: () = msg_send![sync_enabled_toggle, setButtonType: 3];
     let _: () =
         msg_send![sync_enabled_toggle, setTitle: NSString::alloc(nil).init_str("Enable sync")];
@@ -353,15 +356,22 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_enabled_toggle, setAction: sel!(toggleSetting:)];
 
     let refresh_button: id = msg_send![class!(NSButton), alloc];
-    let refresh_button: id = msg_send![refresh_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 126.0), NSSize::new(120.0, 30.0))];
+    let refresh_button: id = msg_send![refresh_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 314.0), NSSize::new(120.0, 30.0))];
     let _: () = msg_send![refresh_button, setBezelStyle: 1];
     let _: () =
         msg_send![refresh_button, setTitle: NSString::alloc(nil).init_str("Refresh status")];
     let _: () = msg_send![refresh_button, setTarget: target];
     let _: () = msg_send![refresh_button, setAction: sel!(refreshSyncStatus:)];
 
+    let test_button: id = msg_send![class!(NSButton), alloc];
+    let test_button: id = msg_send![test_button, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 276.0), NSSize::new(120.0, 30.0))];
+    let _: () = msg_send![test_button, setBezelStyle: 1];
+    let _: () = msg_send![test_button, setTitle: NSString::alloc(nil).init_str("Test connection")];
+    let _: () = msg_send![test_button, setTarget: target];
+    let _: () = msg_send![test_button, setAction: sel!(testSyncConnection:)];
+
     let device_name_label: id = msg_send![class!(NSTextField), alloc];
-    let device_name_label: id = msg_send![device_name_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 180.0), NSSize::new(left_label_width, 22.0))];
+    let device_name_label: id = msg_send![device_name_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 278.0), NSSize::new(left_label_width, 22.0))];
     let _: () = msg_send![device_name_label, setBezeled: NO];
     let _: () = msg_send![device_name_label, setEditable: NO];
     let _: () = msg_send![device_name_label, setDrawsBackground: NO];
@@ -371,14 +381,14 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     set_string(device_name_label, "Device");
 
     let sync_device_name_field: id = msg_send![class!(NSTextField), alloc];
-    let sync_device_name_field: id = msg_send![sync_device_name_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 174.0), NSSize::new(field_width, 30.0))];
+    let sync_device_name_field: id = msg_send![sync_device_name_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 272.0), NSSize::new(field_width, 30.0))];
     let _: () = msg_send![sync_device_name_field, setBezeled: YES];
     let _: () = msg_send![sync_device_name_field, setEditable: YES];
     let _: () = msg_send![sync_device_name_field, setDrawsBackground: YES];
     let _: () = msg_send![sync_device_name_field, setBordered: YES];
 
     let server_url_label: id = msg_send![class!(NSTextField), alloc];
-    let server_url_label: id = msg_send![server_url_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 132.0), NSSize::new(left_label_width, 22.0))];
+    let server_url_label: id = msg_send![server_url_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 230.0), NSSize::new(left_label_width, 22.0))];
     let _: () = msg_send![server_url_label, setBezeled: NO];
     let _: () = msg_send![server_url_label, setEditable: NO];
     let _: () = msg_send![server_url_label, setDrawsBackground: NO];
@@ -388,14 +398,14 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     set_string(server_url_label, "Server");
 
     let sync_server_url_field: id = msg_send![class!(NSTextField), alloc];
-    let sync_server_url_field: id = msg_send![sync_server_url_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 126.0), NSSize::new(field_width, 30.0))];
+    let sync_server_url_field: id = msg_send![sync_server_url_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 224.0), NSSize::new(field_width, 30.0))];
     let _: () = msg_send![sync_server_url_field, setBezeled: YES];
     let _: () = msg_send![sync_server_url_field, setEditable: YES];
     let _: () = msg_send![sync_server_url_field, setDrawsBackground: YES];
     let _: () = msg_send![sync_server_url_field, setBordered: YES];
 
     let auth_token_label: id = msg_send![class!(NSTextField), alloc];
-    let auth_token_label: id = msg_send![auth_token_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 84.0), NSSize::new(left_label_width, 22.0))];
+    let auth_token_label: id = msg_send![auth_token_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 182.0), NSSize::new(left_label_width, 22.0))];
     let _: () = msg_send![auth_token_label, setBezeled: NO];
     let _: () = msg_send![auth_token_label, setEditable: NO];
     let _: () = msg_send![auth_token_label, setDrawsBackground: NO];
@@ -405,14 +415,24 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     set_string(auth_token_label, "Token");
 
     let sync_auth_token_field: id = msg_send![class!(NSSecureTextField), alloc];
-    let sync_auth_token_field: id = msg_send![sync_auth_token_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 78.0), NSSize::new(field_width, 30.0))];
+    let sync_auth_token_field: id = msg_send![sync_auth_token_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 176.0), NSSize::new(field_width, 30.0))];
     let _: () = msg_send![sync_auth_token_field, setBezeled: YES];
     let _: () = msg_send![sync_auth_token_field, setEditable: YES];
     let _: () = msg_send![sync_auth_token_field, setDrawsBackground: YES];
     let _: () = msg_send![sync_auth_token_field, setBordered: YES];
 
+    let device_id_label: id = msg_send![class!(NSTextField), alloc];
+    let device_id_label: id = msg_send![device_id_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 138.0), NSSize::new(left_label_width, 22.0))];
+    let _: () = msg_send![device_id_label, setBezeled: NO];
+    let _: () = msg_send![device_id_label, setEditable: NO];
+    let _: () = msg_send![device_id_label, setDrawsBackground: NO];
+    let _: () = msg_send![device_id_label, setBordered: NO];
+    let _: () = msg_send![device_id_label, setFont: caption_font];
+    let _: () = msg_send![device_id_label, setTextColor: caption_color];
+    set_string(device_id_label, "Device ID");
+
     let sync_status_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_status_label: id = msg_send![sync_status_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 176.0), NSSize::new(240.0, 78.0))];
+    let sync_status_label: id = msg_send![sync_status_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x + 18.0, 198.0), NSSize::new(222.0, 88.0))];
     let _: () = msg_send![sync_status_label, setBezeled: NO];
     let _: () = msg_send![sync_status_label, setEditable: NO];
     let _: () = msg_send![sync_status_label, setDrawsBackground: NO];
@@ -423,7 +443,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_status_label, setTextColor: caption_color];
 
     let sync_device_id_field: id = msg_send![class!(NSTextField), alloc];
-    let sync_device_id_field: id = msg_send![sync_device_id_field, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 88.0), NSSize::new(240.0, 30.0))];
+    let sync_device_id_field: id = msg_send![sync_device_id_field, initWithFrame:NSRect::new(NSPoint::new(card_inset + left_label_width + 12.0, 132.0), NSSize::new(field_width, 30.0))];
     let _: () = msg_send![sync_device_id_field, setBezeled: NO];
     let _: () = msg_send![sync_device_id_field, setEditable: NO];
     let _: () = msg_send![sync_device_id_field, setDrawsBackground: NO];
@@ -432,8 +452,20 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![sync_device_id_field, setFont: caption_font];
     let _: () = msg_send![sync_device_id_field, setTextColor: caption_color];
 
+    let sync_indicator_label: id = msg_send![class!(NSTextField), alloc];
+    let sync_indicator_label: id = msg_send![sync_indicator_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 258.0), NSSize::new(18.0, 22.0))];
+    let _: () = msg_send![sync_indicator_label, setBezeled: NO];
+    let _: () = msg_send![sync_indicator_label, setEditable: NO];
+    let _: () = msg_send![sync_indicator_label, setDrawsBackground: NO];
+    let _: () = msg_send![sync_indicator_label, setBordered: NO];
+    let _: () = msg_send![sync_indicator_label, setSelectable: NO];
+    let indicator_font: id = msg_send![class!(NSFont), boldSystemFontOfSize:14.0];
+    let _: () = msg_send![sync_indicator_label, setFont: indicator_font];
+    let _: () = msg_send![sync_indicator_label, setAlignment: 1];
+    let _: () = msg_send![sync_indicator_label, setStringValue: NSString::alloc(nil).init_str("●")];
+
     let sync_message_label: id = msg_send![class!(NSTextField), alloc];
-    let sync_message_label: id = msg_send![sync_message_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 22.0), NSSize::new(240.0, 52.0))];
+    let sync_message_label: id = msg_send![sync_message_label, initWithFrame:NSRect::new(NSPoint::new(right_column_x, 144.0), NSSize::new(240.0, 44.0))];
     let _: () = msg_send![sync_message_label, setBezeled: NO];
     let _: () = msg_send![sync_message_label, setEditable: NO];
     let _: () = msg_send![sync_message_label, setDrawsBackground: NO];
@@ -445,19 +477,47 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let message_color: id = msg_send![class!(NSColor), colorWithCalibratedRed:0.51f64 green:0.76f64 blue:1.0f64 alpha:1.0f64];
     let _: () = msg_send![sync_message_label, setTextColor: message_color];
 
+    let devices_heading: id = msg_send![class!(NSTextField), alloc];
+    let devices_heading: id = msg_send![devices_heading, initWithFrame:NSRect::new(NSPoint::new(card_inset, 108.0), NSSize::new(card_width - card_inset * 2.0, 20.0))];
+    let _: () = msg_send![devices_heading, setBezeled: NO];
+    let _: () = msg_send![devices_heading, setEditable: NO];
+    let _: () = msg_send![devices_heading, setDrawsBackground: NO];
+    let _: () = msg_send![devices_heading, setBordered: NO];
+    let _: () = msg_send![devices_heading, setFont: general_font];
+    let _: () = msg_send![devices_heading, setTextColor: heading_color];
+    let _: () =
+        msg_send![devices_heading, setStringValue: NSString::alloc(nil).init_str("Devices")];
+
+    let sync_devices_label: id = msg_send![class!(NSTextField), alloc];
+    let sync_devices_label: id = msg_send![sync_devices_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 22.0), NSSize::new(card_width - card_inset * 2.0, 82.0))];
+    let _: () = msg_send![sync_devices_label, setBezeled: NO];
+    let _: () = msg_send![sync_devices_label, setEditable: NO];
+    let _: () = msg_send![sync_devices_label, setDrawsBackground: NO];
+    let _: () = msg_send![sync_devices_label, setBordered: NO];
+    let _: () = msg_send![sync_devices_label, setSelectable: NO];
+    let _: () = msg_send![sync_devices_label, setUsesSingleLineMode: NO];
+    let _: () = msg_send![sync_devices_label, setLineBreakMode: 4];
+    let _: () = msg_send![sync_devices_label, setFont: caption_font];
+    let _: () = msg_send![sync_devices_label, setTextColor: caption_color];
+
     let _: () = msg_send![sync_card, addSubview: sync_heading];
     let _: () = msg_send![sync_card, addSubview: sync_caption];
     let _: () = msg_send![sync_card, addSubview: sync_enabled_toggle];
     let _: () = msg_send![sync_card, addSubview: refresh_button];
+    let _: () = msg_send![sync_card, addSubview: test_button];
     let _: () = msg_send![sync_card, addSubview: device_name_label];
     let _: () = msg_send![sync_card, addSubview: sync_device_name_field];
     let _: () = msg_send![sync_card, addSubview: server_url_label];
     let _: () = msg_send![sync_card, addSubview: sync_server_url_field];
     let _: () = msg_send![sync_card, addSubview: auth_token_label];
     let _: () = msg_send![sync_card, addSubview: sync_auth_token_field];
+    let _: () = msg_send![sync_card, addSubview: device_id_label];
+    let _: () = msg_send![sync_card, addSubview: sync_indicator_label];
     let _: () = msg_send![sync_card, addSubview: sync_status_label];
     let _: () = msg_send![sync_card, addSubview: sync_device_id_field];
     let _: () = msg_send![sync_card, addSubview: sync_message_label];
+    let _: () = msg_send![sync_card, addSubview: devices_heading];
+    let _: () = msg_send![sync_card, addSubview: sync_devices_label];
 
     let save_button_frame = NSRect::new(
         NSPoint::new(bounds.size.width - card_margin - 160.0, 40.0),
@@ -508,7 +568,9 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
         sync_device_id_field: sync_device_id_field as usize,
         sync_server_url_field: sync_server_url_field as usize,
         sync_auth_token_field: sync_auth_token_field as usize,
+        sync_indicator_label: sync_indicator_label as usize,
         sync_status_label: sync_status_label as usize,
+        sync_devices_label: sync_devices_label as usize,
         sync_message_label: sync_message_label as usize,
     };
     let _ = SETTINGS_CONTROLS.set(controls);
@@ -571,8 +633,18 @@ fn populate_controls_from_settings() {
                     last_successful_sync_at: None,
                     last_error: None,
                     pending_operations: 0,
+                    known_devices: Vec::new(),
                 });
                 set_string(id_from(controls.sync_status_label), &summary);
+                set_sync_devices_summary(&[]);
+                set_sync_indicator(
+                    if settings.sync.enabled {
+                        sync::SyncConnectionState::Disconnected
+                    } else {
+                        sync::SyncConnectionState::Disabled
+                    },
+                    None,
+                );
                 set_sync_message(
                     "Sync status loaded. Save settings after changing server details.",
                 );
@@ -730,7 +802,38 @@ unsafe fn apply_settings_from_ui() {
         if let Ok(status) = sync::status() {
             set_sync_summary(&status);
         }
-        set_sync_message(sync_message);
+        if sync_enabled {
+            match Runtime::new() {
+                Ok(runtime) => {
+                    let auth_token = non_empty(sync_auth_token.trim());
+                    let result = runtime.block_on(sync::test_connection(
+                        current_settings.sync.server_url.as_deref().unwrap_or(""),
+                        auth_token.as_deref(),
+                    ));
+                    if let Some(normalized) = result.normalized_server_url.as_deref() {
+                        set_string(id_from(controls.sync_server_url_field), normalized);
+                    }
+                    set_sync_indicator_from_test_result(&result);
+                    if result.ok {
+                        refresh_sync_status_controls(Some(&format!(
+                            "Sync settings saved. {}",
+                            result.message
+                        )));
+                    } else {
+                        set_sync_message(&format!("Sync settings saved, but {}", result.message));
+                    }
+                }
+                Err(err) => {
+                    set_sync_message(&format!(
+                        "{sync_message} Connection test could not run: {err:#}"
+                    ));
+                }
+            }
+        } else {
+            set_sync_indicator(sync::SyncConnectionState::Disabled, None);
+            set_sync_devices_summary(&[]);
+            set_sync_message(sync_message);
+        }
         slider_value_changed(id_from(controls.max_slider));
     }
 }
@@ -740,7 +843,12 @@ unsafe fn refresh_sync_status_controls(message: Option<&str>) {
         return;
     };
 
-    match sync::status() {
+    let status_result = match Runtime::new() {
+        Ok(runtime) => runtime.block_on(sync::refresh_remote_status()),
+        Err(err) => Err(anyhow::anyhow!("failed to create sync runtime: {err:#}")),
+    };
+
+    match status_result {
         Ok(status) => {
             set_sync_summary(&status);
             set_string(
@@ -757,6 +865,8 @@ unsafe fn refresh_sync_status_controls(message: Option<&str>) {
                 id_from(controls.sync_status_label),
                 "Sync status is not available yet.",
             );
+            set_sync_devices_summary(&[]);
+            set_sync_indicator(sync::SyncConnectionState::Disconnected, None);
             if let Some(message) = message {
                 set_sync_message(message);
             } else {
@@ -768,7 +878,9 @@ unsafe fn refresh_sync_status_controls(message: Option<&str>) {
 
 unsafe fn set_sync_message(message: &str) {
     if let Some(controls) = SETTINGS_CONTROLS.get() {
-        set_string(id_from(controls.sync_message_label), message);
+        let message_view = id_from(controls.sync_message_label);
+        set_string(message_view, message);
+        let _: () = msg_send![message_view, setTextColor: sync_message_color(message)];
     }
 }
 
@@ -807,6 +919,8 @@ unsafe fn set_sync_summary(status: &sync::SyncStatus) {
             id_from(controls.sync_status_label),
             &build_sync_summary(status),
         );
+        set_sync_devices_summary(&status.known_devices);
+        set_sync_indicator(status.connection_state.clone(), None);
     }
 }
 
@@ -819,6 +933,127 @@ fn build_sync_summary(status: &sync::SyncStatus) -> String {
         status.pending_operations,
         status.last_error.as_deref().unwrap_or("None"),
     )
+}
+
+unsafe fn set_sync_devices_summary(devices: &[sync::KnownSyncDevice]) {
+    if let Some(controls) = SETTINGS_CONTROLS.get() {
+        set_string(
+            id_from(controls.sync_devices_label),
+            &build_device_summary(devices),
+        );
+    }
+}
+
+unsafe fn set_sync_indicator(
+    state: sync::SyncConnectionState,
+    test_result: Option<&sync::SyncConnectionTestResult>,
+) {
+    if let Some(controls) = SETTINGS_CONTROLS.get() {
+        let indicator = id_from(controls.sync_indicator_label);
+        let _: () = msg_send![indicator, setStringValue: NSString::alloc(nil).init_str("●")];
+        let _: () = msg_send![indicator, setTextColor: sync_indicator_color(state, test_result)];
+    }
+}
+
+unsafe fn set_sync_indicator_from_test_result(result: &sync::SyncConnectionTestResult) {
+    let state = if result.ok {
+        sync::SyncConnectionState::Connected
+    } else {
+        match result.issue {
+            sync::SyncConnectionTestIssue::None => sync::SyncConnectionState::Connected,
+            sync::SyncConnectionTestIssue::ServerUnreachable => {
+                sync::SyncConnectionState::Disconnected
+            }
+            sync::SyncConnectionTestIssue::AuthenticationFailed => {
+                sync::SyncConnectionState::Disconnected
+            }
+            sync::SyncConnectionTestIssue::InvalidConfiguration => {
+                sync::SyncConnectionState::Disconnected
+            }
+            sync::SyncConnectionTestIssue::UnexpectedResponse => {
+                sync::SyncConnectionState::Reconnecting
+            }
+        }
+    };
+    set_sync_indicator(state, Some(result));
+}
+
+fn build_device_summary(devices: &[sync::KnownSyncDevice]) -> String {
+    if devices.is_empty() {
+        return "No device roster is cached yet. Use Test connection or Refresh status to load it."
+            .to_string();
+    }
+
+    devices
+        .iter()
+        .take(4)
+        .map(|device| {
+            let current = if device.is_current {
+                "  This device"
+            } else {
+                ""
+            };
+            format!(
+                "{} ({}){}  Last seen {}",
+                device.device_name,
+                device.platform,
+                current,
+                sync::format_timestamp(Some(device.last_seen_at))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+unsafe fn sync_indicator_color(
+    state: sync::SyncConnectionState,
+    test_result: Option<&sync::SyncConnectionTestResult>,
+) -> id {
+    if let Some(result) = test_result {
+        return if result.ok {
+            color_rgb(0.37, 0.79, 0.50)
+        } else {
+            match result.issue {
+                sync::SyncConnectionTestIssue::None => color_rgb(0.37, 0.79, 0.50),
+                sync::SyncConnectionTestIssue::UnexpectedResponse => color_rgb(0.95, 0.75, 0.30),
+                sync::SyncConnectionTestIssue::InvalidConfiguration
+                | sync::SyncConnectionTestIssue::AuthenticationFailed
+                | sync::SyncConnectionTestIssue::ServerUnreachable => color_rgb(1.0, 0.49, 0.49),
+            }
+        };
+    }
+
+    match state {
+        sync::SyncConnectionState::Connected => color_rgb(0.37, 0.79, 0.50),
+        sync::SyncConnectionState::Reconnecting => color_rgb(0.95, 0.75, 0.30),
+        sync::SyncConnectionState::Disabled => color_rgb(0.60, 0.63, 0.70),
+        sync::SyncConnectionState::Disconnected => color_rgb(1.0, 0.49, 0.49),
+    }
+}
+
+unsafe fn color_rgb(red: f64, green: f64, blue: f64) -> id {
+    msg_send![class!(NSColor), colorWithCalibratedRed:red green:green blue:blue alpha:1.0f64]
+}
+
+unsafe fn sync_message_color(message: &str) -> id {
+    let lower = message.to_lowercase();
+    if lower.contains("saved")
+        || lower.contains("succeeded")
+        || lower.contains("loaded")
+        || lower.contains("enabled")
+    {
+        color_rgb(0.37, 0.79, 0.50)
+    } else if lower.contains("unreachable") || lower.contains("reconnecting") {
+        color_rgb(0.95, 0.75, 0.30)
+    } else if lower.contains("failed")
+        || lower.contains("invalid")
+        || lower.contains("rejected")
+        || lower.contains("error")
+    {
+        color_rgb(1.0, 0.49, 0.49)
+    } else {
+        color_rgb(0.51, 0.76, 1.0)
+    }
 }
 
 unsafe fn register_action_class() -> id {
@@ -863,6 +1098,46 @@ unsafe fn register_action_class() -> id {
             }
         }
 
+        extern "C" fn test_sync_connection_action(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                let Some(controls) = SETTINGS_CONTROLS.get() else {
+                    return;
+                };
+                let server_url = get_string(id_from(controls.sync_server_url_field));
+                let auth_token = get_string(id_from(controls.sync_auth_token_field));
+                let sync_enabled_state: i16 =
+                    msg_send![id_from(controls.sync_enabled_toggle), state];
+                match Runtime::new() {
+                    Ok(runtime) => {
+                        let auth_token = non_empty(auth_token.trim());
+                        let result = runtime
+                            .block_on(sync::test_connection(&server_url, auth_token.as_deref()));
+                        if let Some(normalized) = result.normalized_server_url.as_deref() {
+                            set_string(id_from(controls.sync_server_url_field), normalized);
+                        }
+                        set_sync_message(&result.message);
+                        set_sync_indicator_from_test_result(&result);
+                        if result.ok {
+                            if sync_enabled_state == 1 {
+                                refresh_sync_status_controls(Some("Connection test succeeded."));
+                            } else if let Ok(status) = sync::status() {
+                                set_string(
+                                    id_from(controls.sync_device_id_field),
+                                    &status.device.device_id,
+                                );
+                                set_sync_devices_summary(&status.known_devices);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        set_sync_message(&format!(
+                            "Connection test could not run because the sync runtime failed to start: {err:#}"
+                        ));
+                    }
+                }
+            }
+        }
+
         decl.add_method(
             sel!(closeSettingsPanel:),
             close_panel as extern "C" fn(&Object, Sel, id),
@@ -886,6 +1161,10 @@ unsafe fn register_action_class() -> id {
         decl.add_method(
             sel!(refreshSyncStatus:),
             refresh_sync_status_action as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(testSyncConnection:),
+            test_sync_connection_action as extern "C" fn(&Object, Sel, id),
         );
         decl.register();
     }

@@ -40,6 +40,35 @@ pub struct LocalDevice {
     pub platform: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnownSyncDevice {
+    pub device_id: String,
+    pub device_name: String,
+    pub platform: String,
+    pub is_current: bool,
+    pub first_seen_at: i64,
+    pub last_seen_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncConnectionTestIssue {
+    None,
+    InvalidConfiguration,
+    AuthenticationFailed,
+    ServerUnreachable,
+    UnexpectedResponse,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConnectionTestResult {
+    pub ok: bool,
+    pub issue: SyncConnectionTestIssue,
+    pub message: String,
+    pub normalized_server_url: Option<String>,
+    pub checked_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncOperationKind {
@@ -84,6 +113,7 @@ pub struct SyncStatus {
     pub last_successful_sync_at: Option<i64>,
     pub last_error: Option<String>,
     pub pending_operations: usize,
+    pub known_devices: Vec<KnownSyncDevice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -138,6 +168,11 @@ struct SyncRuntimeConfig {
     device: LocalDevice,
     server_url: String,
     auth_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeviceListResponse {
+    devices: Vec<KnownSyncDevice>,
 }
 
 pub fn init() -> Result<SyncStatus> {
@@ -234,6 +269,169 @@ pub fn status() -> Result<SyncStatus> {
     let conn = database::get_connection()?;
     let device = ensure_local_device(&conn)?;
     status_with_connection(&conn, device)
+}
+
+pub async fn refresh_remote_status() -> Result<SyncStatus> {
+    if let Some(config) = runtime_config()? {
+        let client = sync_http_client(Some(Duration::from_secs(5)))?;
+        refresh_known_devices(&client, &config).await?;
+    }
+    status()
+}
+
+pub async fn test_connection(
+    server_url_input: &str,
+    auth_token_input: Option<&str>,
+) -> SyncConnectionTestResult {
+    let checked_at = now_ts();
+    let normalized_server_url = match normalize_server_url(server_url_input) {
+        Ok(url) => url,
+        Err(err) => {
+            return SyncConnectionTestResult {
+                ok: false,
+                issue: SyncConnectionTestIssue::InvalidConfiguration,
+                message: format!("Invalid sync server URL: {err:#}"),
+                normalized_server_url: None,
+                checked_at,
+            };
+        }
+    };
+
+    if let Err(err) = validate_server_url_for_local_device(&normalized_server_url) {
+        return SyncConnectionTestResult {
+            ok: false,
+            issue: SyncConnectionTestIssue::InvalidConfiguration,
+            message: format!("Invalid sync server URL: {err:#}"),
+            normalized_server_url: Some(normalized_server_url),
+            checked_at,
+        };
+    }
+
+    let device = match database::get_connection() {
+        Ok(conn) => match ensure_local_device(&conn) {
+            Ok(device) => device,
+            Err(err) => {
+                return SyncConnectionTestResult {
+                    ok: false,
+                    issue: SyncConnectionTestIssue::UnexpectedResponse,
+                    message: format!("Unable to load local sync identity: {err:#}"),
+                    normalized_server_url: Some(normalized_server_url),
+                    checked_at,
+                };
+            }
+        },
+        Err(err) => {
+            return SyncConnectionTestResult {
+                ok: false,
+                issue: SyncConnectionTestIssue::UnexpectedResponse,
+                message: format!("Unable to open the local database: {err:#}"),
+                normalized_server_url: Some(normalized_server_url),
+                checked_at,
+            };
+        }
+    };
+
+    let client = match sync_http_client(Some(Duration::from_secs(4))) {
+        Ok(client) => client,
+        Err(err) => {
+            return SyncConnectionTestResult {
+                ok: false,
+                issue: SyncConnectionTestIssue::UnexpectedResponse,
+                message: format!("Unable to create sync HTTP client: {err:#}"),
+                normalized_server_url: Some(normalized_server_url),
+                checked_at,
+            };
+        }
+    };
+
+    let config = SyncRuntimeConfig {
+        device,
+        server_url: normalized_server_url.clone(),
+        auth_token: auth_token_input.and_then(|token| {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }),
+    };
+
+    let url = match api_base_url(&config.server_url).and_then(|base| {
+        base.join("devices")
+            .context("failed to build sync device list URL")
+    }) {
+        Ok(url) => url,
+        Err(err) => {
+            return SyncConnectionTestResult {
+                ok: false,
+                issue: SyncConnectionTestIssue::InvalidConfiguration,
+                message: format!("Invalid sync server URL: {err:#}"),
+                normalized_server_url: Some(normalized_server_url),
+                checked_at,
+            };
+        }
+    };
+
+    let response = match authorized_request(client.get(url), &config).send().await {
+        Ok(response) => response,
+        Err(err) => {
+            return SyncConnectionTestResult {
+                ok: false,
+                issue: classify_connection_issue(&err),
+                message: connection_send_error_message(&err),
+                normalized_server_url: Some(normalized_server_url),
+                checked_at,
+            };
+        }
+    };
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return SyncConnectionTestResult {
+            ok: false,
+            issue: classify_status_issue(status),
+            message: connection_status_message(status, &body),
+            normalized_server_url: Some(normalized_server_url),
+            checked_at,
+        };
+    }
+
+    let body: DeviceListResponse = match response.json().await {
+        Ok(body) => body,
+        Err(err) => {
+            return SyncConnectionTestResult {
+                ok: false,
+                issue: SyncConnectionTestIssue::UnexpectedResponse,
+                message: format!(
+                    "The sync server responded, but the device list could not be parsed: {err:#}"
+                ),
+                normalized_server_url: Some(normalized_server_url),
+                checked_at,
+            };
+        }
+    };
+
+    if let Ok(conn) = database::get_connection() {
+        let _ = store_known_devices(&conn, &config.device.device_id, &body.devices);
+    }
+
+    let device_count = body.devices.len();
+    let noun = if device_count == 1 {
+        "device"
+    } else {
+        "devices"
+    };
+    SyncConnectionTestResult {
+        ok: true,
+        issue: SyncConnectionTestIssue::None,
+        message: format!(
+            "Connection succeeded. {device_count} {noun} are visible on the sync server."
+        ),
+        normalized_server_url: Some(normalized_server_url),
+        checked_at,
+    }
 }
 
 pub fn queue_local_clipboard_upsert(entry_id: i64) -> Result<()> {
@@ -478,13 +676,12 @@ fn status_with_connection(conn: &Connection, device: LocalDevice) -> Result<Sync
         last_successful_sync_at: read_state_i64(conn, STATE_LAST_SUCCESS_KEY)?,
         last_error: read_state_string(conn, STATE_LAST_ERROR_KEY)?,
         pending_operations: pending_operations as usize,
+        known_devices: load_known_devices(conn)?,
     })
 }
 
 async fn run_background_loop(config: SyncRuntimeConfig) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .build()
-        .context("failed to create sync HTTP client")?;
+    let client = sync_http_client(None)?;
 
     loop {
         let _ = set_connection_state(SyncConnectionState::Reconnecting);
@@ -498,6 +695,8 @@ async fn run_background_loop(config: SyncRuntimeConfig) -> Result<()> {
 }
 
 async fn run_sync_session(client: &reqwest::Client, config: &SyncRuntimeConfig) -> Result<()> {
+    refresh_known_devices(client, config).await?;
+    mark_sync_success()?;
     catch_up_once(client, config).await?;
     mark_sync_success()?;
     process_outbox(client, config).await?;
@@ -627,6 +826,13 @@ async fn process_outbox_batch(
     Ok(())
 }
 
+async fn refresh_known_devices(client: &reqwest::Client, config: &SyncRuntimeConfig) -> Result<()> {
+    let devices = request_known_devices(client, config).await?;
+    let conn = database::get_connection()?;
+    store_known_devices(&conn, &config.device.device_id, &devices)?;
+    Ok(())
+}
+
 async fn catch_up_once(client: &reqwest::Client, config: &SyncRuntimeConfig) -> Result<()> {
     let cursor = current_cursor()?.unwrap_or(0);
     let mut url = api_base_url(&config.server_url)?.join("clipboard/changes")?;
@@ -656,6 +862,25 @@ async fn catch_up_once(client: &reqwest::Client, config: &SyncRuntimeConfig) -> 
     }
     update_cursor(newest_cursor)?;
     Ok(())
+}
+
+async fn request_known_devices(
+    client: &reqwest::Client,
+    config: &SyncRuntimeConfig,
+) -> Result<Vec<KnownSyncDevice>> {
+    let url = api_base_url(&config.server_url)?.join("devices")?;
+    let response = authorized_request(client.get(url), config)
+        .send()
+        .await
+        .context("failed to request sync device list")?
+        .error_for_status()
+        .context("sync device list request failed")?;
+
+    let body: DeviceListResponse = response
+        .json()
+        .await
+        .context("failed to parse sync device list response")?;
+    Ok(body.devices)
 }
 
 async fn handle_ws_message(message: Message) -> Result<Option<i64>> {
@@ -703,6 +928,14 @@ fn runtime_config() -> Result<Option<SyncRuntimeConfig>> {
     }))
 }
 
+fn sync_http_client(timeout: Option<Duration>) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    if let Some(timeout) = timeout {
+        builder = builder.timeout(timeout);
+    }
+    builder.build().context("failed to create sync HTTP client")
+}
+
 fn ensure_local_device(conn: &Connection) -> Result<LocalDevice> {
     let mut app_settings = settings::load()?;
     let mut changed = false;
@@ -748,6 +981,69 @@ fn ensure_local_device(conn: &Connection) -> Result<LocalDevice> {
     )?;
 
     Ok(device)
+}
+
+fn load_known_devices(conn: &Connection) -> Result<Vec<KnownSyncDevice>> {
+    let mut stmt = conn.prepare(
+        "SELECT device_id, device_name, platform, is_current, first_seen_at, last_seen_at
+         FROM sync_devices
+         ORDER BY last_seen_at DESC, device_id ASC",
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(KnownSyncDevice {
+            device_id: row.get(0)?,
+            device_name: row.get(1)?,
+            platform: row.get(2)?,
+            is_current: row.get::<_, i64>(3)? == 1,
+            first_seen_at: row.get(4)?,
+            last_seen_at: row.get(5)?,
+        })
+    })?;
+
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn store_known_devices(
+    conn: &Connection,
+    current_device_id: &str,
+    devices: &[KnownSyncDevice],
+) -> Result<()> {
+    conn.execute(
+        "UPDATE sync_devices
+         SET is_current = CASE WHEN device_id = ?1 THEN 1 ELSE 0 END",
+        params![current_device_id],
+    )?;
+
+    for device in devices {
+        let is_current = device.device_id == current_device_id;
+        conn.execute(
+            "INSERT INTO sync_devices (
+                device_id,
+                device_name,
+                platform,
+                is_current,
+                first_seen_at,
+                last_seen_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(device_id) DO UPDATE SET
+                device_name = excluded.device_name,
+                platform = excluded.platform,
+                is_current = excluded.is_current,
+                first_seen_at = MIN(sync_devices.first_seen_at, excluded.first_seen_at),
+                last_seen_at = MAX(sync_devices.last_seen_at, excluded.last_seen_at)",
+            params![
+                device.device_id,
+                device.device_name,
+                device.platform,
+                is_current as i64,
+                device.first_seen_at,
+                device.last_seen_at
+            ],
+        )?;
+    }
+
+    Ok(())
 }
 
 fn ensure_entry_identity(
@@ -1052,6 +1348,62 @@ fn default_device_name() -> String {
 
 fn default_platform() -> &'static str {
     std::env::consts::OS
+}
+
+fn classify_connection_issue(error: &reqwest::Error) -> SyncConnectionTestIssue {
+    if error.is_connect() || error.is_timeout() {
+        SyncConnectionTestIssue::ServerUnreachable
+    } else {
+        SyncConnectionTestIssue::UnexpectedResponse
+    }
+}
+
+fn classify_status_issue(status: reqwest::StatusCode) -> SyncConnectionTestIssue {
+    match status {
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
+            SyncConnectionTestIssue::AuthenticationFailed
+        }
+        reqwest::StatusCode::NOT_FOUND => SyncConnectionTestIssue::InvalidConfiguration,
+        _ => SyncConnectionTestIssue::UnexpectedResponse,
+    }
+}
+
+fn connection_send_error_message(error: &reqwest::Error) -> String {
+    if error.is_connect() {
+        "Could not reach the sync server. Check that the host, port, and firewall settings are correct."
+            .to_string()
+    } else if error.is_timeout() {
+        "The sync server did not respond in time. Check the server URL and whether the server is reachable from this device."
+            .to_string()
+    } else {
+        format!("The sync server request failed before a response was returned: {error:#}")
+    }
+}
+
+fn connection_status_message(status: reqwest::StatusCode, body: &str) -> String {
+    let detail = body
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(160)
+        .collect::<String>();
+
+    match status {
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
+            "The sync server rejected the credentials. Check that the auth token matches the server configuration."
+                .to_string()
+        }
+        reqwest::StatusCode::NOT_FOUND => {
+            "The server responded, but `/api/v1/sync/devices` was not found. Point the server URL at the Viceroy sync server root."
+                .to_string()
+        }
+        _ if detail.is_empty() => format!(
+            "The sync server returned {}. Check that the URL points at your Viceroy sync server and that the server is healthy.",
+            status
+        ),
+        _ => format!("The sync server returned {}. {}", status, detail.trim()),
+    }
 }
 
 fn now_ts() -> i64 {
