@@ -1105,6 +1105,7 @@ unsafe fn perform_result_action(index: usize) {
             let _ = app_launcher::open_file(&path);
         }
         search_engine::SearchResult::Clipboard {
+            id,
             content,
             content_type,
             image_width,
@@ -1121,7 +1122,8 @@ unsafe fn perform_result_action(index: usize) {
             let content_type_clone = content_type.clone();
             SEARCH_RT.spawn(async move {
                 let result = if paste_after_restore {
-                    crate::clipboard::paste_history_entry(
+                    crate::clipboard::paste_saved_history_entry(
+                        id,
                         &content_clone,
                         &content_type_clone,
                         image_width,
@@ -1130,7 +1132,8 @@ unsafe fn perform_result_action(index: usize) {
                     )
                     .await
                 } else {
-                    crate::clipboard::restore_history_entry_to_clipboard(
+                    crate::clipboard::restore_saved_history_entry_to_clipboard(
+                        id,
                         &content_clone,
                         &content_type_clone,
                         image_width,

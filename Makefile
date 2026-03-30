@@ -14,7 +14,7 @@ MOCK_SERVER_LOG ?= /tmp/viceroy-mock-server.log
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup fmt lint test test-updater run release app install-app clean mock-server mock-update-check mock-e2e check version bump-version
+.PHONY: help setup fmt lint test test-updater run dev dev-watch release app install-app clean mock-server mock-update-check mock-e2e check version bump-version
 
 help:
 	@echo "Viceroy Development Commands (v$(VERSION))"
@@ -22,6 +22,8 @@ help:
 	@echo "Setup & Development:"
 	@echo "  make setup                                 # Set up development environment (git hooks, etc.)"
 	@echo "  make run RUN_ARGS='--silent-update-check'  # Run Viceroy with optional CLI args"
+	@echo "  make dev                                  # Fast debug run via ./dev_open.sh"
+	@echo "  make dev-watch                            # Auto-rebuild and restart on changes"
 	@echo "  make fmt                                   # Format Rust sources"
 	@echo "  make lint                                  # Run cargo clippy with -D warnings"
 	@echo "  make test                                  # Run the full test suite"
@@ -64,6 +66,12 @@ test-updater:
 
 run:
 	$(CARGO) run $(if $(RUN_ARGS),-- $(RUN_ARGS))
+
+dev:
+	./dev_open.sh $(if $(RUN_ARGS),-- $(RUN_ARGS))
+
+dev-watch:
+	./dev_open.sh --watch $(if $(RUN_ARGS),-- $(RUN_ARGS))
 
 $(RELEASE_BIN):
 	$(CARGO) build --release

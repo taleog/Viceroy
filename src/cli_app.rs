@@ -258,13 +258,15 @@ fn execute_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Result<St
             Ok(format!("Opened {name}"))
         }
         SearchResult::Clipboard {
+            id,
             content,
             content_type,
             image_width,
             image_height,
             ..
         } => {
-            runtime.block_on(clipboard::restore_history_entry_to_clipboard(
+            runtime.block_on(clipboard::restore_saved_history_entry_to_clipboard(
+                *id,
                 content,
                 content_type,
                 *image_width,
@@ -301,13 +303,15 @@ fn copy_result_payload(runtime: &Runtime, result: &SearchResult) -> anyhow::Resu
             Ok("Path copied to the clipboard".to_string())
         }
         SearchResult::Clipboard {
+            id,
             content,
             content_type,
             image_width,
             image_height,
             ..
         } => {
-            runtime.block_on(clipboard::restore_history_entry_to_clipboard(
+            runtime.block_on(clipboard::restore_saved_history_entry_to_clipboard(
+                *id,
                 content,
                 content_type,
                 *image_width,

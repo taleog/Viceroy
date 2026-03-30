@@ -8,7 +8,7 @@ use base64::Engine;
 use chrono::Utc;
 use lazy_static::lazy_static;
 use regex::Regex;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::io::Cursor;
@@ -96,6 +96,12 @@ pub async fn start_monitor() -> Result<()> {
 
         // Text capture
         if let Ok(content) = clipboard.get_text() {
+            if last_observed_text().is_none()
+                && latest_history_matches_text(&content).unwrap_or(false)
+            {
+                set_last_observed_text(Some(content));
+                continue;
+            }
             let changed = last_observed_text()
                 .map(|last| last != content)
                 .unwrap_or(true);
@@ -117,6 +123,12 @@ pub async fn start_monitor() -> Result<()> {
         // Image capture
         if let Ok(image) = clipboard.get_image() {
             let hash = blake3::hash(&image.bytes);
+            if last_observed_image_hash().is_none()
+                && latest_history_matches_image(&hash).unwrap_or(false)
+            {
+                set_last_observed_image_hash(Some(hash));
+                continue;
+            }
             let changed = last_observed_image_hash()
                 .map(|last| last != hash)
                 .unwrap_or(true);
@@ -213,49 +225,139 @@ fn should_skip_programmatic_image(hash: &blake3::Hash) -> bool {
     false
 }
 
-fn should_skip_duplicate_text(
+fn find_duplicate_text_entry_id(
     conn: &rusqlite::Connection,
     content: &str,
     app_name: &Option<String>,
-    timestamp: i64,
-) -> Result<bool> {
+    _timestamp: i64,
+) -> Result<Option<i64>> {
     let normalized_new = normalize_text(content);
-    // Check against last 5 entries to catch duplicates more reliably
     let mut stmt = conn.prepare(
-        "SELECT content, content_type, app_name, timestamp 
+        "SELECT id, content, content_type, app_name, timestamp
          FROM clipboard_history 
          WHERE deleted_at IS NULL
-         ORDER BY id DESC 
-         LIMIT 5",
+         ORDER BY timestamp DESC, id DESC
+         LIMIT 100",
     )?;
 
-    let previous_entries: Vec<(String, String, Option<String>, i64)> = stmt
+    let previous_entries: Vec<(i64, String, String, Option<String>, i64)> = stmt
         .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    for (prev_content, prev_type, prev_app, prev_ts) in previous_entries {
+    for (prev_id, prev_content, prev_type, prev_app, prev_ts) in previous_entries {
         if prev_type != "text" {
             continue;
         }
         let normalized_prev = normalize_text(&prev_content);
         let _same_app = prev_app == *app_name;
-        let close_in_time = timestamp.saturating_sub(prev_ts) <= 120; // 2-minute window
-                                                                      // Check both same-app and app-agnostic duplicates
-        if normalized_prev == normalized_new && close_in_time {
-            return Ok(true);
+        let _recency_hint = prev_ts;
+        if normalized_prev == normalized_new {
+            return Ok(Some(prev_id));
         }
     }
 
-    Ok(false)
+    Ok(None)
+}
+
+fn find_duplicate_image_entry_id(
+    conn: &rusqlite::Connection,
+    content: &str,
+    _timestamp: i64,
+) -> Result<Option<i64>> {
+    let new_hash = history_image_hash(content)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, content, content_type, timestamp
+         FROM clipboard_history
+         WHERE deleted_at IS NULL
+         ORDER BY timestamp DESC, id DESC
+         LIMIT 50",
+    )?;
+
+    let previous_entries: Vec<(i64, String, String, i64)> = stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for (prev_id, prev_content, prev_type, prev_ts) in previous_entries {
+        if prev_type != "image" {
+            continue;
+        }
+        let _recency_hint = prev_ts;
+        if history_image_hash(&prev_content)? == new_hash {
+            return Ok(Some(prev_id));
+        }
+    }
+
+    Ok(None)
+}
+
+fn latest_history_matches_text(content: &str) -> Result<bool> {
+    let conn = database::get_connection()?;
+    match latest_history_signature(&conn)? {
+        Some(StoredClipboardSignature::Text(previous)) => Ok(previous == normalize_text(content)),
+        _ => Ok(false),
+    }
+}
+
+fn latest_history_matches_image(hash: &blake3::Hash) -> Result<bool> {
+    let conn = database::get_connection()?;
+    match latest_history_signature(&conn)? {
+        Some(StoredClipboardSignature::Image(previous_hash)) => Ok(previous_hash == *hash),
+        _ => Ok(false),
+    }
+}
+
+enum StoredClipboardSignature {
+    Text(String),
+    Image(blake3::Hash),
+}
+
+fn latest_history_signature(
+    conn: &rusqlite::Connection,
+) -> Result<Option<StoredClipboardSignature>> {
+    let mut stmt = conn.prepare(
+        "SELECT content, content_type
+         FROM clipboard_history
+         WHERE deleted_at IS NULL
+         ORDER BY timestamp DESC, id DESC
+         LIMIT 1",
+    )?;
+    let latest = stmt
+        .query_row([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .optional()?;
+
+    let Some((content, content_type)) = latest else {
+        return Ok(None);
+    };
+
+    match content_type.as_str() {
+        "text" => Ok(Some(StoredClipboardSignature::Text(normalize_text(
+            &content,
+        )))),
+        "image" => Ok(Some(StoredClipboardSignature::Image(history_image_hash(
+            &content,
+        )?))),
+        _ => Ok(None),
+    }
 }
 
 async fn save_clipboard_entry(content: &str, app_name: &Option<String>) -> Result<()> {
     let conn = database::get_connection()?;
     let timestamp = Utc::now().timestamp();
 
-    if should_skip_duplicate_text(&conn, content, app_name, timestamp)? {
+    if let Some(existing_id) = find_duplicate_text_entry_id(&conn, content, app_name, timestamp)? {
+        promote_existing_entry(&conn, existing_id, app_name, timestamp)?;
         return Ok(());
     }
 
@@ -292,6 +394,10 @@ async fn save_clipboard_image(image: &ImageData<'_>, app_name: &Option<String>) 
         writer.write_image_data(&image.bytes)?;
     }
     let b64 = STANDARD.encode(&png_bytes);
+    if let Some(existing_id) = find_duplicate_image_entry_id(&conn, &b64, timestamp)? {
+        promote_existing_entry(&conn, existing_id, app_name, timestamp)?;
+        return Ok(());
+    }
     conn.execute(
         "INSERT INTO clipboard_history (content, content_type, app_name, timestamp, image_width, image_height) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
@@ -493,6 +599,18 @@ pub async fn restore_history_entry_to_clipboard(
     Ok(())
 }
 
+pub async fn restore_saved_history_entry_to_clipboard(
+    id: i64,
+    content: &str,
+    content_type: &str,
+    image_width: Option<i64>,
+    image_height: Option<i64>,
+) -> Result<()> {
+    restore_history_entry_to_clipboard(content, content_type, image_width, image_height).await?;
+    touch_history_entry(id).await?;
+    Ok(())
+}
+
 pub fn restore_history_entry_to_clipboard_blocking(
     content: &str,
     content_type: &str,
@@ -504,6 +622,13 @@ pub fn restore_history_entry_to_clipboard_blocking(
     } else {
         set_text_clipboard_blocking(content)?;
     }
+    Ok(())
+}
+
+pub async fn touch_history_entry(id: i64) -> Result<()> {
+    task::spawn_blocking(move || touch_history_entry_blocking(id))
+        .await
+        .map_err(|e| anyhow!("clipboard touch task failed: {e}"))??;
     Ok(())
 }
 
@@ -527,6 +652,19 @@ pub async fn paste_history_entry(
         send_paste_keystroke()?;
     }
     sleep(Duration::from_millis(200)).await;
+    Ok(())
+}
+
+pub async fn paste_saved_history_entry(
+    id: i64,
+    content: &str,
+    content_type: &str,
+    image_width: Option<i64>,
+    image_height: Option<i64>,
+    target_app: Option<app_launcher::FrontmostApp>,
+) -> Result<()> {
+    paste_history_entry(content, content_type, image_width, image_height, target_app).await?;
+    touch_history_entry(id).await?;
     Ok(())
 }
 
@@ -641,6 +779,54 @@ fn decode_history_image(content: &str) -> Result<ImageData<'static>> {
     })
 }
 
+fn history_image_hash(content: &str) -> Result<blake3::Hash> {
+    let image = decode_history_image(content)?;
+    Ok(blake3::hash(&image.bytes))
+}
+
+fn promote_existing_entry(
+    conn: &rusqlite::Connection,
+    id: i64,
+    app_name: &Option<String>,
+    timestamp: i64,
+) -> Result<()> {
+    let rows_updated = conn.execute(
+        "UPDATE clipboard_history
+         SET timestamp = ?1,
+             app_name = COALESCE(?2, app_name)
+         WHERE id = ?3 AND deleted_at IS NULL",
+        params![timestamp, app_name, id],
+    )?;
+    if rows_updated > 0 {
+        notify_history_changed();
+        if let Err(err) = sync::queue_local_clipboard_upsert(id) {
+            eprintln!("Failed to queue clipboard sync for promoted entry {id}: {err:#}");
+        }
+    }
+    Ok(())
+}
+
+fn touch_existing_entry(conn: &rusqlite::Connection, id: i64, timestamp: i64) -> Result<()> {
+    let rows_updated = conn.execute(
+        "UPDATE clipboard_history
+         SET timestamp = ?1
+         WHERE id = ?2 AND deleted_at IS NULL",
+        params![timestamp, id],
+    )?;
+    if rows_updated > 0 {
+        notify_history_changed();
+        if let Err(err) = sync::queue_local_clipboard_upsert(id) {
+            eprintln!("Failed to queue clipboard sync for touched entry {id}: {err:#}");
+        }
+    }
+    Ok(())
+}
+
+fn touch_history_entry_blocking(id: i64) -> Result<()> {
+    let conn = database::get_connection()?;
+    touch_existing_entry(&conn, id, Utc::now().timestamp())
+}
+
 fn activate_app(app: &app_launcher::FrontmostApp) -> Result<()> {
     app_launcher::activate_frontmost_app(app).context("failed to activate paste target")
 }
@@ -685,5 +871,170 @@ fn send_paste_keystroke() -> Result<()> {
             return Ok(());
         }
         Err(anyhow!("paste keystroke command failed"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        find_duplicate_image_entry_id, find_duplicate_text_entry_id, history_image_hash,
+        latest_history_signature, normalize_text, promote_existing_entry, touch_existing_entry,
+        StoredClipboardSignature,
+    };
+    use anyhow::Result;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    use rusqlite::{params, Connection};
+
+    #[test]
+    fn latest_history_signature_matches_normalized_text() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        create_history_table(&conn)?;
+        conn.execute(
+            "INSERT INTO clipboard_history (content, content_type, timestamp) VALUES (?1, 'text', 100)",
+            params!["  hello   world  "],
+        )?;
+
+        let signature = latest_history_signature(&conn)?;
+        match signature {
+            Some(StoredClipboardSignature::Text(text)) => {
+                assert_eq!(text, normalize_text("hello world"));
+            }
+            _ => panic!("expected text signature"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn latest_history_signature_hashes_images() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        create_history_table(&conn)?;
+        let image_b64 = sample_png_base64(&[255, 0, 0, 255])?;
+        conn.execute(
+            "INSERT INTO clipboard_history (content, content_type, timestamp) VALUES (?1, 'image', 100)",
+            params![image_b64],
+        )?;
+
+        let signature = latest_history_signature(&conn)?;
+        match signature {
+            Some(StoredClipboardSignature::Image(hash)) => {
+                assert_eq!(
+                    hash,
+                    history_image_hash(&sample_png_base64(&[255, 0, 0, 255])?)?
+                );
+            }
+            _ => panic!("expected image signature"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_images_match_existing_entries() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        create_history_table(&conn)?;
+        let image_b64 = sample_png_base64(&[255, 0, 0, 255])?;
+        conn.execute(
+            "INSERT INTO clipboard_history (content, content_type, timestamp) VALUES (?1, 'image', 100)",
+            params![image_b64.clone()],
+        )?;
+
+        assert!(find_duplicate_image_entry_id(&conn, &image_b64, 150)?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_text_matches_existing_entries() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        create_history_table(&conn)?;
+        conn.execute(
+            "INSERT INTO clipboard_history (content, content_type, app_name, timestamp) VALUES (?1, 'text', NULL, 100)",
+            params!["hello   world"],
+        )?;
+
+        assert!(find_duplicate_text_entry_id(&conn, "  hello world ", &None, 150)?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn promoting_existing_entry_moves_it_to_the_top() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        create_history_table(&conn)?;
+        conn.execute(
+            "INSERT INTO clipboard_history (content, content_type, app_name, timestamp) VALUES (?1, 'text', 'App One', 100)",
+            params!["hello world"],
+        )?;
+
+        promote_existing_entry(&conn, 1, &Some("App Two".to_string()), 200)?;
+
+        let (timestamp, app_name): (i64, Option<String>) = conn.query_row(
+            "SELECT timestamp, app_name FROM clipboard_history WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(timestamp, 200);
+        assert_eq!(app_name.as_deref(), Some("App Two"));
+        Ok(())
+    }
+
+    #[test]
+    fn touching_existing_entry_refreshes_timestamp_without_replacing_metadata() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        create_history_table(&conn)?;
+        conn.execute(
+            "INSERT INTO clipboard_history (content, content_type, app_name, timestamp, custom_name, is_pinned)
+             VALUES (?1, 'text', 'App One', 100, 'Pinned note', 1)",
+            params!["hello world"],
+        )?;
+
+        touch_existing_entry(&conn, 1, 200)?;
+
+        let (timestamp, app_name, custom_name, is_pinned): (i64, Option<String>, Option<String>, i64) =
+            conn.query_row(
+                "SELECT timestamp, app_name, custom_name, is_pinned FROM clipboard_history WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        assert_eq!(timestamp, 200);
+        assert_eq!(app_name.as_deref(), Some("App One"));
+        assert_eq!(custom_name.as_deref(), Some("Pinned note"));
+        assert_eq!(is_pinned, 1);
+        Ok(())
+    }
+
+    fn create_history_table(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE clipboard_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                app_name TEXT,
+                timestamp INTEGER NOT NULL,
+                custom_name TEXT,
+                is_favorite INTEGER DEFAULT 0,
+                is_pinned INTEGER DEFAULT 0,
+                image_width INTEGER,
+                image_height INTEGER,
+                sync_id TEXT,
+                source_device_id TEXT,
+                source_device_name TEXT,
+                updated_at INTEGER,
+                deleted_at INTEGER
+            );",
+        )?;
+        Ok(())
+    }
+
+    fn sample_png_base64(rgba: &[u8; 4]) -> Result<String> {
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header()?;
+            writer.write_image_data(rgba)?;
+        }
+        Ok(STANDARD.encode(png_bytes))
     }
 }

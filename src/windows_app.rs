@@ -1650,7 +1650,8 @@ fn execute_item(runtime: &Runtime, item: &DisplayItem) -> anyhow::Result<String>
     match item {
         DisplayItem::Search(result) => execute_search_result(runtime, result),
         DisplayItem::History(entry) => {
-            runtime.block_on(clipboard::restore_history_entry_to_clipboard(
+            runtime.block_on(clipboard::restore_saved_history_entry_to_clipboard(
+                entry.id,
                 &entry.content,
                 &entry.content_type,
                 entry.image_width,
@@ -1673,13 +1674,15 @@ fn execute_search_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Re
             Ok(format!("Opened {name}"))
         }
         SearchResult::Clipboard {
+            id,
             content,
             content_type,
             image_width,
             image_height,
             ..
         } => {
-            runtime.block_on(clipboard::restore_history_entry_to_clipboard(
+            runtime.block_on(clipboard::restore_saved_history_entry_to_clipboard(
+                *id,
                 content,
                 content_type,
                 *image_width,
@@ -1713,7 +1716,8 @@ fn copy_item(runtime: &Runtime, item: &DisplayItem) -> anyhow::Result<String> {
     match item {
         DisplayItem::Search(result) => copy_search_result(runtime, result),
         DisplayItem::History(entry) => {
-            runtime.block_on(clipboard::restore_history_entry_to_clipboard(
+            runtime.block_on(clipboard::restore_saved_history_entry_to_clipboard(
+                entry.id,
                 &entry.content,
                 &entry.content_type,
                 entry.image_width,
@@ -1731,13 +1735,15 @@ fn copy_search_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Resul
             Ok("Path copied to the clipboard".to_string())
         }
         SearchResult::Clipboard {
+            id,
             content,
             content_type,
             image_width,
             image_height,
             ..
         } => {
-            runtime.block_on(clipboard::restore_history_entry_to_clipboard(
+            runtime.block_on(clipboard::restore_saved_history_entry_to_clipboard(
+                *id,
                 content,
                 content_type,
                 *image_width,

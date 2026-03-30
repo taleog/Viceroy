@@ -2,18 +2,26 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
-APP_NAME="Viceroy"
+APP_NAME="${VICEROY_APP_NAME:-Viceroy}"
 BUNDLE_ID="com.viceroy.app"
 ICON_ICNS_SOURCE="$PROJECT_ROOT/icons/icon.icns"
 ICON_PNG_SOURCE="$PROJECT_ROOT/icons/icon.png"
 OUTPUT_ROOT="${VICEROY_APP_OUT_DIR:-$PROJECT_ROOT}"
 OUTPUT_APP_DIR="$OUTPUT_ROOT/$APP_NAME.app"
+BUILD_PROFILE="${VICEROY_BUILD_PROFILE:-release}"
 STAGING_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/viceroy-app.XXXXXX")"
 STAGING_APP_DIR="$STAGING_ROOT/$APP_NAME.app"
 CONTENTS_DIR="$STAGING_APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 export COPYFILE_DISABLE=1
+
+if [[ "$BUILD_PROFILE" == "release" ]]; then
+    CARGO_BUILD_ARGS=(--release)
+    BINARY_PATH="$PROJECT_ROOT/target/release/viceroy"
+else
+    BINARY_PATH="$PROJECT_ROOT/target/debug/viceroy"
+fi
 
 cleanup() {
     rm -rf "$STAGING_ROOT"
@@ -23,15 +31,23 @@ trap cleanup EXIT
 # Extract version from Cargo.toml
 VERSION=$(grep '^version = ' "$PROJECT_ROOT/Cargo.toml" | head -1 | sed 's/version = "\(.*\)"/\1/')
 
-echo "🔨 Building release binary..."
-cargo build --release
+if [[ "$BUILD_PROFILE" == "release" ]]; then
+    echo "🔨 Building release binary..."
+else
+    echo "🔨 Building $BUILD_PROFILE binary..."
+fi
+if [[ "$BUILD_PROFILE" == "release" ]]; then
+    cargo build --release
+else
+    cargo build
+fi
 
 echo "📦 Creating app bundle structure..."
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
 echo "📋 Copying binary..."
-/bin/cp -X "$PROJECT_ROOT/target/release/viceroy" "$MACOS_DIR/$APP_NAME"
+/bin/cp -X "$BINARY_PATH" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
 echo "📝 Creating Info.plist..."
@@ -98,9 +114,11 @@ echo "🧹 Clearing bundle attributes..."
 /usr/bin/xattr -d com.apple.provenance "$STAGING_APP_DIR" 2>/dev/null || true
 /usr/bin/find "$STAGING_APP_DIR" -exec /usr/bin/xattr -c {} + 2>/dev/null || true
 
-echo "🔏 Applying ad-hoc app bundle signature..."
-/usr/bin/codesign --force --deep --sign - "$STAGING_APP_DIR"
-/usr/bin/codesign --verify --deep --strict "$STAGING_APP_DIR"
+if [[ "${VICEROY_SKIP_CODESIGN:-0}" != "1" ]]; then
+    echo "🔏 Applying ad-hoc app bundle signature..."
+    /usr/bin/codesign --force --deep --sign - "$STAGING_APP_DIR"
+    /usr/bin/codesign --verify --deep --strict "$STAGING_APP_DIR"
+fi
 
 echo "📤 Exporting app bundle..."
 mkdir -p "$OUTPUT_ROOT"

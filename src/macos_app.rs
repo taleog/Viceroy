@@ -20,7 +20,7 @@ use crate::settings;
 use crate::sync;
 use crate::ui;
 use log::{error, info};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use ui::clipboard_view::{
     apply_clipboard_history_state, build_clipboard_history_payload, create_clipboard_preview_view,
     show_clipboard_history_view, update_clipboard_preview_selection,
@@ -31,6 +31,10 @@ use ui::state::*;
 use ui::table;
 use viceroy::updater;
 use viceroy::updater::{UPDATE_CHECK_DISABLED_ENV, UPDATE_METADATA_URL_ENV, UPDATE_SILENT_ENV};
+
+const SHOW_ON_LAUNCH_ENV: &str = "VICEROY_SHOW_ON_LAUNCH";
+const SHOW_ON_LAUNCH_ARG: &str = "--dev-show-on-launch";
+static SHOW_ON_LAUNCH: AtomicBool = AtomicBool::new(false);
 
 struct ViceroyApp;
 
@@ -140,6 +144,13 @@ impl AppDelegate for ViceroyApp {
 
             // Create menu bar icon
             create_status_bar_item();
+
+            if SHOW_ON_LAUNCH.load(Ordering::Relaxed) {
+                if let Ok(mut showing) = WINDOW_SHOWING.lock() {
+                    *showing = true;
+                }
+                bring_window_to_front_with_search_reset(ns_window);
+            }
 
             // Retain the window so it doesn't get deallocated
             let _: id = msg_send![ns_window, retain];
@@ -1840,6 +1851,15 @@ pub fn run() {
         });
     }
 
+    SHOW_ON_LAUNCH.store(show_on_launch_enabled(&args), Ordering::Relaxed);
     let app = App::new("com.viceroy.app", ViceroyApp);
     app.run();
+}
+
+fn show_on_launch_enabled(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == SHOW_ON_LAUNCH_ARG)
+        || matches!(
+            std::env::var(SHOW_ON_LAUNCH_ENV).as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        )
 }
