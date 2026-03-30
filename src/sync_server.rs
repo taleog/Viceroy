@@ -926,4 +926,5 @@ mod tests {
         assert!(disabled.is_disabled);
         assert!(ensure_device_enabled(&disabled).is_err());
     }
+
 }

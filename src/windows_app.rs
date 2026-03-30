@@ -585,32 +585,25 @@ impl ViceroyWindowsApp {
     fn save_settings(&mut self) {
         match settings::load() {
             Ok(mut app_settings) => {
+                if self.hotkey.trim().is_empty() {
+                    self.sync_message = "Hotkey cannot be empty.".to_string();
+                    return;
+                }
                 let old_enabled = app_settings.sync.enabled;
                 let old_server_url = app_settings.sync.server_url.clone().unwrap_or_default();
                 let old_auth_token = app_settings.sync.auth_token.clone().unwrap_or_default();
 
-                let normalized_server_url = if self.sync_enabled {
-                    let input = self.sync_server_url.trim();
-                    if input.is_empty() {
-                        self.sync_message =
-                            "Enter a sync server URL before enabling sync.".to_string();
+                let prepared_sync = match settings::prepare_sync_settings(
+                    self.sync_enabled,
+                    &self.sync_device_name,
+                    &self.sync_server_url,
+                    &self.sync_auth_token,
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(err) => {
+                        self.sync_message = format!("{err:#}");
                         return;
                     }
-                    match sync::normalize_server_url(input) {
-                        Ok(url) => {
-                            if let Err(err) = sync::validate_server_url_for_local_device(&url) {
-                                self.sync_message = format!("Invalid sync server URL: {err:#}");
-                                return;
-                            }
-                            url
-                        }
-                        Err(err) => {
-                            self.sync_message = format!("Invalid sync server URL: {err:#}");
-                            return;
-                        }
-                    }
-                } else {
-                    self.sync_server_url.trim().to_string()
                 };
 
                 app_settings.hotkey = self.hotkey.trim().to_string();
@@ -618,15 +611,33 @@ impl ViceroyWindowsApp {
                 app_settings.dismiss_on_escape = self.dismiss_on_escape;
                 app_settings.dismiss_on_click_away = self.dismiss_on_click_away;
                 app_settings.sync.enabled = self.sync_enabled;
-                app_settings.sync.device_name = self.sync_device_name.trim().to_string();
-                app_settings.sync.server_url = non_empty(normalized_server_url.trim());
-                app_settings.sync.auth_token = non_empty(self.sync_auth_token.trim());
-                self.sync_server_url = normalized_server_url;
+                app_settings.sync.device_name = prepared_sync.device_name.clone();
+                app_settings.sync.server_url = prepared_sync.server_url.clone();
+                app_settings.sync.auth_token = prepared_sync.auth_token.clone();
+                self.sync_device_name = prepared_sync.device_name;
+                self.sync_server_url = prepared_sync.server_url.unwrap_or_default();
+                self.sync_auth_token = prepared_sync.auth_token.unwrap_or_default();
 
                 if let Err(err) = settings::save(&app_settings) {
                     self.sync_message = format!("Failed to save settings: {err:#}");
                     return;
                 }
+                app_settings = match settings::load() {
+                    Ok(settings) => settings,
+                    Err(err) => {
+                        self.sync_message =
+                            format!("Settings were written, but reloading them failed: {err:#}");
+                        return;
+                    }
+                };
+                self.hotkey = app_settings.hotkey.clone();
+                self.max_results = app_settings.max_results;
+                self.dismiss_on_escape = app_settings.dismiss_on_escape;
+                self.dismiss_on_click_away = app_settings.dismiss_on_click_away;
+                self.sync_enabled = app_settings.sync.enabled;
+                self.sync_device_name = app_settings.sync.device_name.clone();
+                self.sync_server_url = app_settings.sync.server_url.clone().unwrap_or_default();
+                self.sync_auth_token = app_settings.sync.auth_token.clone().unwrap_or_default();
                 match sync::init() {
                     Ok(status) => {
                         self.sync_status = Some(status.clone());

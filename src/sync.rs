@@ -32,8 +32,9 @@ const STATE_CONNECTION_KEY: &str = "connection_state";
 const STATE_LAST_SUCCESS_KEY: &str = "last_successful_sync_at";
 const STATE_LAST_ERROR_KEY: &str = "last_error";
 const PERMANENT_ERROR_PREFIX: &str = "permanent:";
+const MAX_RECORDED_ERROR_CHARS: usize = 320;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalDevice {
     pub device_id: String,
     pub device_name: String,
@@ -163,11 +164,16 @@ pub struct CatchUpResponse {
     pub events: Vec<SyncEnvelope>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SyncRuntimeConfig {
     device: LocalDevice,
     server_url: String,
     auth_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncSessionExit {
+    Reconfigure,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,20 +257,20 @@ pub fn validate_server_url_for_local_device(server_url: &str) -> Result<()> {
 }
 
 pub fn start_background_worker() -> Result<()> {
-    let Some(config) = runtime_config()? else {
-        return Ok(());
-    };
-
     if SYNC_WORKER_STARTED.swap(true, Ordering::SeqCst) {
+        notify_worker();
         return Ok(());
     }
 
-    let _ = set_connection_state(SyncConnectionState::Reconnecting);
+    if runtime_config()?.is_none() {
+        SYNC_WORKER_STARTED.store(false, Ordering::SeqCst);
+        return Ok(());
+    }
 
     thread::spawn(move || {
         let runtime = Runtime::new().expect("failed to create sync runtime");
         runtime.block_on(async move {
-            if let Err(err) = run_background_loop(config).await {
+            if let Err(err) = run_background_loop().await {
                 log::error!("Sync worker exited: {err:#}");
             }
         });
@@ -549,6 +555,7 @@ pub fn mark_operation_sent(operation_id: i64) -> Result<()> {
 
 pub fn mark_operation_failed(operation_id: i64, error: &str) -> Result<()> {
     let conn = database::get_connection()?;
+    let error = compact_error_message(error);
     conn.execute(
         "UPDATE sync_outbox
          SET attempts = attempts + 1,
@@ -695,21 +702,33 @@ fn status_with_connection(conn: &Connection, device: LocalDevice) -> Result<Sync
     })
 }
 
-async fn run_background_loop(config: SyncRuntimeConfig) -> Result<()> {
+async fn run_background_loop() -> Result<()> {
     let client = sync_http_client(None)?;
 
     loop {
+        let Some(config) = runtime_config()? else {
+            let _ = set_connection_state(desired_idle_connection_state()?);
+            SYNC_NOTIFY.notified().await;
+            continue;
+        };
+
         let _ = set_connection_state(SyncConnectionState::Reconnecting);
-        if let Err(err) = run_sync_session(&client, &config).await {
-            let error_message = format!("{err:#}");
-            let _ = record_sync_error(&error_message);
-            log::error!("Sync session failed: {err:#}");
+        match run_sync_session(&client, &config).await {
+            Ok(SyncSessionExit::Reconfigure) => continue,
+            Err(err) => {
+                let error_message = format!("{err:#}");
+                let _ = record_sync_error(&error_message);
+                log::error!("Sync session failed: {err:#}");
+            }
         }
         sleep(Duration::from_secs(RECONNECT_DELAY_SECONDS)).await;
     }
 }
 
-async fn run_sync_session(client: &reqwest::Client, config: &SyncRuntimeConfig) -> Result<()> {
+async fn run_sync_session(
+    client: &reqwest::Client,
+    config: &SyncRuntimeConfig,
+) -> Result<SyncSessionExit> {
     refresh_known_devices(client, config).await?;
     mark_sync_success()?;
     catch_up_once(client, config).await?;
@@ -739,6 +758,9 @@ async fn run_sync_session(client: &reqwest::Client, config: &SyncRuntimeConfig) 
     loop {
         tokio::select! {
             _ = SYNC_NOTIFY.notified() => {
+                if should_reconfigure_session(config)? {
+                    return Ok(SyncSessionExit::Reconfigure);
+                }
                 process_outbox(client, config).await?;
                 mark_sync_success()?;
             }
@@ -831,7 +853,7 @@ async fn process_outbox_batch(
         let error = response
             .error_for_status()
             .expect_err("non-success response should produce an error");
-        let message = format!("{error:#}");
+        let message = compact_error_message(&format!("{error:#}"));
         for operation in &batch {
             let _ = mark_operation_failed(operation.id, &message);
         }
@@ -939,12 +961,35 @@ fn runtime_config() -> Result<Option<SyncRuntimeConfig>> {
     }
 
     let server_url = normalize_server_url(&server_url)?;
+    validate_server_url_for_local_device(&server_url)?;
 
     Ok(Some(SyncRuntimeConfig {
         device,
         server_url,
         auth_token: app_settings.sync.auth_token.clone(),
     }))
+}
+
+fn desired_idle_connection_state() -> Result<SyncConnectionState> {
+    let app_settings = settings::load()?;
+    if !app_settings.sync.enabled {
+        Ok(SyncConnectionState::Disabled)
+    } else if app_settings
+        .sync
+        .server_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        Ok(SyncConnectionState::Disconnected)
+    } else {
+        Ok(SyncConnectionState::Reconnecting)
+    }
+}
+
+fn should_reconfigure_session(active_config: &SyncRuntimeConfig) -> Result<bool> {
+    Ok(runtime_config()?.as_ref() != Some(active_config))
 }
 
 fn sync_http_client(timeout: Option<Duration>) -> Result<reqwest::Client> {
@@ -1303,13 +1348,27 @@ fn mark_sync_success() -> Result<()> {
 
 fn record_sync_error(error: &str) -> Result<()> {
     let conn = database::get_connection()?;
+    let error = compact_error_message(error);
     write_state_value(
         &conn,
         STATE_CONNECTION_KEY,
         SyncConnectionState::Disconnected.storage_value(),
     )?;
-    write_state_value(&conn, STATE_LAST_ERROR_KEY, error)?;
+    write_state_value(&conn, STATE_LAST_ERROR_KEY, &error)?;
     Ok(())
+}
+
+fn compact_error_message(error: &str) -> String {
+    let trimmed = error.trim();
+    if trimmed.chars().count() <= MAX_RECORDED_ERROR_CHARS {
+        return trimmed.to_string();
+    }
+
+    let compact = trimmed
+        .chars()
+        .take(MAX_RECORDED_ERROR_CHARS.saturating_sub(1))
+        .collect::<String>();
+    format!("{compact}…")
 }
 
 fn update_cursor(cursor: i64) -> Result<()> {

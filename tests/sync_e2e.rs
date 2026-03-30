@@ -281,6 +281,53 @@ async fn sync_round_trip_persists_and_delivers_changes() -> Result<()> {
         == SyncOperationKind::DeleteClipboardEntry
         && event.record.sync_id == remote_sync_id));
 
+    let replacement_server =
+        start_sync_server(temp.path().join("replacement-server.db"), "replacement-token").await?;
+    wait_for_server_health(&client, &replacement_server.base_url).await?;
+
+    app_settings.sync.server_url = Some(replacement_server.base_url.clone());
+    app_settings.sync.auth_token = Some("replacement-token".to_string());
+    settings::save(&app_settings)?;
+    sync::start_background_worker()?;
+
+    let reconfigured_entry_id = insert_local_clipboard_entry("local clip after reconfigure")?;
+    sync::queue_local_clipboard_upsert(reconfigured_entry_id)?;
+    let reconfigured_sync_id = load_sync_id_for_entry(reconfigured_entry_id)?;
+
+    wait_until(Duration::from_secs(20), || {
+        Ok(sync::status()?.pending_operations == 0)
+    })
+    .await?;
+
+    wait_for_remote_sync_id(
+        &client,
+        &replacement_server.base_url,
+        &reconfigured_sync_id,
+        "replacement-observer",
+        "Replacement Observer",
+        "linux",
+        "replacement-token",
+    )
+    .await?;
+
+    let old_server_changes = fetch_changes(
+        &client,
+        &server.base_url,
+        final_catch_up.cursor.unwrap_or(0),
+        "observer-device",
+        "Observer Device",
+        "linux",
+        "sync-test-token",
+    )
+    .await?;
+    assert!(
+        !old_server_changes
+            .events
+            .iter()
+            .any(|event| event.record.sync_id == reconfigured_sync_id),
+        "reconfigured sync event should not be delivered to the previous server"
+    );
+
     assert!(!local_status.device.device_id.trim().is_empty());
     Ok(())
 }
@@ -536,6 +583,15 @@ fn load_local_clipboard_row(sync_id: &str) -> Result<Option<LocalClipboardRow>> 
     Ok(row)
 }
 
+fn load_sync_id_for_entry(entry_id: i64) -> Result<String> {
+    let conn = database::get_connection()?;
+    Ok(conn.query_row(
+        "SELECT sync_id FROM clipboard_history WHERE id = ?1",
+        params![entry_id],
+        |row| row.get(0),
+    )?)
+}
+
 fn count_rows_by_sync_id(sync_id: &str) -> Result<i64> {
     let conn = database::get_connection()?;
     let count = conn.query_row(
@@ -553,6 +609,34 @@ async fn wait_until(
     timeout(timeout_duration, async {
         loop {
             if check()? {
+                return Ok::<(), anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+async fn wait_for_remote_sync_id(
+    client: &Client,
+    base_url: &str,
+    sync_id: &str,
+    device_id: &str,
+    device_name: &str,
+    platform: &str,
+    token: &str,
+) -> Result<()> {
+    timeout(Duration::from_secs(20), async {
+        loop {
+            let response =
+                fetch_changes(client, base_url, 0, device_id, device_name, platform, token)
+                    .await?;
+            if response
+                .events
+                .iter()
+                .any(|event| event.record.sync_id == sync_id)
+            {
                 return Ok::<(), anyhow::Error>(());
             }
             sleep(Duration::from_millis(50)).await;

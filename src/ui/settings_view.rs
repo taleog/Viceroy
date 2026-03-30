@@ -914,6 +914,10 @@ unsafe fn apply_settings_from_ui() {
         let mut current_settings =
             settings::load().unwrap_or_else(|_| settings::Settings::default());
         let hotkey = get_string(id_from(controls.hotkey_field));
+        if hotkey.trim().is_empty() {
+            set_sync_message("Hotkey cannot be empty.");
+            return;
+        }
         let slider_value: i32 = msg_send![id_from(controls.max_slider), intValue];
         let slider_value = slider_value.clamp(10, 200);
         let esc_state: i16 = msg_send![id_from(controls.toggle_escape), state];
@@ -926,50 +930,60 @@ unsafe fn apply_settings_from_ui() {
         let old_enabled = current_settings.sync.enabled;
         let old_server_url = current_settings.sync.server_url.clone().unwrap_or_default();
         let old_auth_token = current_settings.sync.auth_token.clone().unwrap_or_default();
-        let normalized_server_url = if sync_enabled {
-            let input = sync_server_url_input.trim();
-            if input.is_empty() {
-                set_sync_message("Enter a sync server URL before enabling sync.");
+        let prepared_sync = match settings::prepare_sync_settings(
+            sync_enabled,
+            &sync_device_name,
+            &sync_server_url_input,
+            &sync_auth_token,
+        ) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                set_sync_message(&format!("{err:#}"));
                 return;
             }
-            match sync::normalize_server_url(input) {
-                Ok(url) => {
-                    if let Err(err) = sync::validate_server_url_for_local_device(&url) {
-                        set_sync_message(&format!("Invalid sync server URL: {err:#}"));
-                        return;
-                    }
-                    url
-                }
-                Err(err) => {
-                    set_sync_message(&format!("Invalid sync server URL: {err:#}"));
-                    return;
-                }
-            }
-        } else {
-            sync_server_url_input.trim().to_string()
         };
         current_settings.hotkey = hotkey;
         current_settings.max_results = slider_value as usize;
         current_settings.dismiss_on_escape = esc_state == 1;
         current_settings.dismiss_on_click_away = click_state == 1;
         current_settings.sync.enabled = sync_enabled;
-        current_settings.sync.device_name = sync_device_name.trim().to_string();
-        current_settings.sync.server_url = non_empty(normalized_server_url.trim());
-        current_settings.sync.auth_token = non_empty(sync_auth_token.trim());
+        current_settings.sync.device_name = prepared_sync.device_name;
+        current_settings.sync.server_url = prepared_sync.server_url;
+        current_settings.sync.auth_token = prepared_sync.auth_token;
         if let Err(err) = settings::save(&current_settings) {
             set_sync_message(&format!("Failed to save settings: {err:#}"));
             eprintln!("Failed to save settings: {}", err);
             return;
         }
+        current_settings = match settings::load() {
+            Ok(settings) => settings,
+            Err(err) => {
+                set_sync_message(&format!(
+                    "Settings were written, but reloading them failed: {err:#}"
+                ));
+                return;
+            }
+        };
         if let Ok(mut esc_guard) = DISMISS_ON_ESCAPE.lock() {
             *esc_guard = current_settings.dismiss_on_escape;
         }
         if let Ok(mut click_guard) = DISMISS_ON_CLICK_AWAY.lock() {
             *click_guard = current_settings.dismiss_on_click_away;
         }
+        set_string(id_from(controls.hotkey_field), &current_settings.hotkey);
+        let slider: id = id_from(controls.max_slider);
+        let _: () = msg_send![slider, setIntValue: current_settings.max_results as i32];
         set_string(
             id_from(controls.sync_server_url_field),
             current_settings.sync.server_url.as_deref().unwrap_or(""),
+        );
+        set_string(
+            id_from(controls.sync_device_name_field),
+            &current_settings.sync.device_name,
+        );
+        set_string(
+            id_from(controls.sync_auth_token_field),
+            current_settings.sync.auth_token.as_deref().unwrap_or(""),
         );
         match sync::init() {
             Ok(status) => {
@@ -1013,10 +1027,9 @@ unsafe fn apply_settings_from_ui() {
         if sync_enabled {
             match Runtime::new() {
                 Ok(runtime) => {
-                    let auth_token = non_empty(sync_auth_token.trim());
                     let result = runtime.block_on(sync::test_connection(
                         current_settings.sync.server_url.as_deref().unwrap_or(""),
-                        auth_token.as_deref(),
+                        current_settings.sync.auth_token.as_deref(),
                     ));
                     if let Some(normalized) = result.normalized_server_url.as_deref() {
                         set_string(id_from(controls.sync_server_url_field), normalized);
@@ -1256,6 +1269,8 @@ unsafe fn sync_message_color(message: &str) -> id {
     } else if lower.contains("failed")
         || lower.contains("invalid")
         || lower.contains("rejected")
+        || lower.contains("cannot")
+        || lower.contains("empty")
         || lower.contains("error")
     {
         color_rgb(1.0, 0.49, 0.49)
