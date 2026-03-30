@@ -486,10 +486,6 @@ impl ViceroyWindowsApp {
         }
     }
 
-    fn preview_card(&self) -> &PreviewCard {
-        &self.preview_cache_card
-    }
-
     fn preview_cache_key_for_selected_item(&self) -> PreviewCacheKey {
         match self.selected_item() {
             Some(DisplayItem::History(entry)) => PreviewCacheKey::HistoryEntry(entry.id),
@@ -1030,13 +1026,9 @@ impl ViceroyWindowsApp {
             } else {
                 self.refresh_preview_card_cache();
                 let ctx = ui.ctx().clone();
-                let preview = self.preview_card();
-                windows_preview::render_preview_panel(
-                    ui,
-                    &ctx,
-                    &mut self.preview_state,
-                    Some(preview),
-                );
+                let preview = &self.preview_cache_card;
+                let preview_state = &mut self.preview_state;
+                windows_preview::render_preview_panel(ui, &ctx, preview_state, Some(preview));
             }
 
             ui.add_space(12.0);
