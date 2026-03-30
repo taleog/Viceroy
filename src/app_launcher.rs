@@ -1,16 +1,18 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
     pub name: String,
     pub path: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FrontmostApp {
+    pub name: String,
+    pub pid: i32,
 }
 
 lazy_static::lazy_static! {
@@ -76,11 +78,19 @@ pub fn get_frontmost_app_name() -> Option<String> {
     platform::get_frontmost_app_name()
 }
 
+pub fn get_frontmost_app() -> Option<FrontmostApp> {
+    platform::get_frontmost_app()
+}
+
+pub fn activate_frontmost_app(app: &FrontmostApp) -> Result<()> {
+    platform::activate_frontmost_app(app)
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::AppInfo;
+    use super::{AppInfo, FrontmostApp};
     use anyhow::Result;
-    use cocoa::base::{id, nil};
+    use cocoa::base::{id, nil, BOOL, YES};
     use cocoa::foundation::{NSAutoreleasePool, NSString};
     use objc::{class, msg_send, sel, sel_impl};
     use std::process::Command;
@@ -137,12 +147,17 @@ mod platform {
     }
 
     pub fn get_frontmost_app_name() -> Option<String> {
+        get_frontmost_app().map(|app| app.name)
+    }
+
+    pub fn get_frontmost_app() -> Option<FrontmostApp> {
         unsafe {
             let _pool = NSAutoreleasePool::new(nil);
             let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
             let frontmost_app: id = msg_send![workspace, frontmostApplication];
 
             if frontmost_app != nil {
+                let pid: i32 = msg_send![frontmost_app, processIdentifier];
                 let localized_name: id = msg_send![frontmost_app, localizedName];
                 if localized_name != nil {
                     let name_ptr: *const i8 = msg_send![localized_name, UTF8String];
@@ -150,7 +165,7 @@ mod platform {
                         let name = std::ffi::CStr::from_ptr(name_ptr)
                             .to_string_lossy()
                             .to_string();
-                        return Some(name);
+                        return Some(FrontmostApp { name, pid });
                     }
                 }
             }
@@ -158,12 +173,45 @@ mod platform {
 
         None
     }
+
+    pub fn activate_frontmost_app(app: &FrontmostApp) -> Result<()> {
+        unsafe {
+            let _pool = NSAutoreleasePool::new(nil);
+            let running_app_class = class!(NSRunningApplication);
+            let running_app: id = msg_send![
+                running_app_class,
+                runningApplicationWithProcessIdentifier: app.pid
+            ];
+
+            if running_app != nil {
+                let options: u64 = 1 << 1;
+                let activated: BOOL = msg_send![running_app, activateWithOptions: options];
+                if activated == YES {
+                    return Ok(());
+                }
+            }
+        }
+
+        let script = format!(
+            r#"tell application "{}" to activate"#,
+            app.name.replace('\"', "\\\"")
+        );
+        let status = Command::new("osascript").arg("-e").arg(&script).status()?;
+        if status.success() {
+            return Ok(());
+        }
+
+        anyhow::bail!("failed to activate app: {}", app.name)
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    use super::{launch_via_shell, AppInfo, HashSet, Path, PathBuf, WalkDir};
+    use super::{launch_via_shell, AppInfo, FrontmostApp};
     use anyhow::Result;
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+    use walkdir::WalkDir;
 
     pub fn discover_apps() -> Result<Vec<AppInfo>> {
         let mut apps = Vec::new();
@@ -215,6 +263,14 @@ mod platform {
 
     pub fn get_frontmost_app_name() -> Option<String> {
         None
+    }
+
+    pub fn get_frontmost_app() -> Option<FrontmostApp> {
+        None
+    }
+
+    pub fn activate_frontmost_app(_app: &FrontmostApp) -> Result<()> {
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
@@ -281,7 +337,7 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 fn launch_via_shell(target: &str) -> Result<()> {
-    Command::new("cmd")
+    std::process::Command::new("cmd")
         .args(["/C", "start", "", target])
         .spawn()?;
     Ok(())
@@ -289,6 +345,6 @@ fn launch_via_shell(target: &str) -> Result<()> {
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn launch_via_shell(target: &str) -> Result<()> {
-    Command::new("xdg-open").arg(target).spawn()?;
+    std::process::Command::new("xdg-open").arg(target).spawn()?;
     Ok(())
 }

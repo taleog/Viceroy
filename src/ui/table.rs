@@ -1093,6 +1093,7 @@ unsafe fn perform_result_action(index: usize) {
         return;
     }
     let result = results[index].clone();
+    let mut hide_after_action = true;
 
     match result {
         search_engine::SearchResult::App { path, .. } => {
@@ -1109,7 +1110,9 @@ unsafe fn perform_result_action(index: usize) {
             image_height,
             ..
         } => {
+            let target_app = app_launcher::get_frontmost_app();
             hide_window_immediately();
+            hide_after_action = false;
             let content_clone = content.clone();
             let content_type_clone = content_type.clone();
             SEARCH_RT.spawn(async move {
@@ -1118,6 +1121,7 @@ unsafe fn perform_result_action(index: usize) {
                     &content_type_clone,
                     image_width,
                     image_height,
+                    target_app,
                 )
                 .await;
             });
@@ -1128,17 +1132,21 @@ unsafe fn perform_result_action(index: usize) {
             });
         }
         search_engine::SearchResult::Calculator { result, .. } => {
+            let target_app = app_launcher::get_frontmost_app();
             hide_window_immediately();
+            hide_after_action = false;
             let to_paste = result.clone();
             SEARCH_RT.spawn(async move {
-                let _ = crate::clipboard::paste_to_active_app(&to_paste).await;
+                let _ = crate::clipboard::paste_to_active_app(&to_paste, target_app).await;
             });
         }
         search_engine::SearchResult::Emoji { emoji, .. } => {
+            let target_app = app_launcher::get_frontmost_app();
             hide_window_immediately();
+            hide_after_action = false;
             let to_paste = emoji.clone();
             SEARCH_RT.spawn(async move {
-                let _ = crate::clipboard::paste_to_active_app(&to_paste).await;
+                let _ = crate::clipboard::paste_to_active_app(&to_paste, target_app).await;
             });
         }
         search_engine::SearchResult::Dictionary { word, .. } => {
@@ -1150,5 +1158,7 @@ unsafe fn perform_result_action(index: usize) {
     }
 
     // Non-paste actions hide after triggering.
-    hide_window_immediately();
+    if hide_after_action {
+        hide_window_immediately();
+    }
 }
