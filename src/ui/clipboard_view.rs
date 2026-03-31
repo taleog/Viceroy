@@ -4,8 +4,9 @@ use crate::search_engine;
 use crate::ui::helpers::run_on_main;
 use crate::ui::helpers::style;
 use crate::ui::state::{
-    ClipboardPreviewRefs, TableMode, CLIPBOARD_PREVIEW, ICON_CACHE, SEARCH_FIELD, SEARCH_RT,
-    TABLE_DATA, TABLE_MODE, TABLE_RESULTS, WINDOW_IS_OPEN,
+    ClipboardPreviewRefs, TableMode, CLIPBOARD_CACHE_DATA, CLIPBOARD_CACHE_RESULTS,
+    CLIPBOARD_PREVIEW, ICON_CACHE, SEARCH_FIELD, SEARCH_RT, TABLE_DATA, TABLE_MODE, TABLE_RESULTS,
+    WINDOW_IS_OPEN,
 };
 use crate::ui::table::{reload_table, schedule_table_update_next_tick};
 use base64::engine::general_purpose::STANDARD;
@@ -136,6 +137,7 @@ pub fn apply_clipboard_history_state(
     rows: Vec<(String, String)>,
     results: Vec<search_engine::SearchResult>,
 ) {
+    cache_clipboard_history_state(&rows, &results);
     let selection = next_clipboard_selection(&results);
     if let Ok(mut mode) = TABLE_MODE.lock() {
         *mode = TableMode::ClipboardHistory;
@@ -172,6 +174,7 @@ fn apply_clipboard_history_state_if_still_visible(
         return;
     }
 
+    cache_clipboard_history_state(&rows, &results);
     let selection = next_clipboard_selection(&results);
     if let Ok(mut tr) = TABLE_RESULTS.lock() {
         *tr = results;
@@ -190,7 +193,48 @@ fn apply_clipboard_history_state_if_still_visible(
 
 pub fn show_clipboard_history_view() {
     start_history_refresh_watcher();
-    request_clipboard_history_refresh(true);
+    apply_cached_clipboard_history_state();
+    request_clipboard_history_refresh();
+}
+
+fn cache_clipboard_history_state(
+    rows: &[(String, String)],
+    results: &[search_engine::SearchResult],
+) {
+    if let Ok(mut cache_rows) = CLIPBOARD_CACHE_DATA.lock() {
+        *cache_rows = rows.to_vec();
+    }
+    if let Ok(mut cache_results) = CLIPBOARD_CACHE_RESULTS.lock() {
+        *cache_results = results.to_vec();
+    }
+}
+
+fn apply_cached_clipboard_history_state() {
+    let cached_rows = CLIPBOARD_CACHE_DATA
+        .lock()
+        .map(|rows| rows.clone())
+        .unwrap_or_default();
+    let cached_results = CLIPBOARD_CACHE_RESULTS
+        .lock()
+        .map(|results| results.clone())
+        .unwrap_or_default();
+
+    let selection = next_clipboard_selection(&cached_results);
+    if let Ok(mut mode) = TABLE_MODE.lock() {
+        *mode = TableMode::ClipboardHistory;
+    }
+    if let Ok(mut tr) = TABLE_RESULTS.lock() {
+        *tr = cached_results;
+    }
+    if let Ok(mut td) = TABLE_DATA.lock() {
+        *td = cached_rows;
+    }
+    unsafe {
+        reload_table();
+        schedule_table_update_next_tick();
+    }
+    crate::ui::table::update_preview_layout(true);
+    update_clipboard_preview_selection(selection);
 }
 
 fn preview_refs() -> Option<ClipboardPreviewRefs> {
@@ -301,12 +345,12 @@ fn start_history_refresh_watcher() {
                 continue;
             }
 
-            request_clipboard_history_refresh(false);
+            request_clipboard_history_refresh();
         }
     });
 }
 
-fn request_clipboard_history_refresh(force_show_mode: bool) {
+fn request_clipboard_history_refresh() {
     if HISTORY_REFRESH_IN_FLIGHT.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -323,15 +367,7 @@ fn request_clipboard_history_refresh(force_show_mode: bool) {
             Ok(entries) => {
                 let (rows, results) = build_clipboard_history_payload(entries);
                 run_on_main(move || {
-                    if force_show_mode {
-                        apply_clipboard_history_state(rows, results);
-                    } else {
-                        apply_clipboard_history_state_if_still_visible(
-                            rows,
-                            results,
-                            query_snapshot,
-                        );
-                    }
+                    apply_clipboard_history_state_if_still_visible(rows, results, query_snapshot);
                     HISTORY_REFRESH_IN_FLIGHT.store(false, Ordering::SeqCst);
                 });
             }
