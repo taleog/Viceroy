@@ -20,6 +20,7 @@ use crate::settings;
 use crate::sync;
 use crate::ui;
 use log::{error, info};
+use std::ffi::{c_char, CStr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use ui::clipboard_view::{
     apply_clipboard_history_state, build_clipboard_history_payload, create_clipboard_preview_view,
@@ -35,6 +36,19 @@ use viceroy::updater::{UPDATE_CHECK_DISABLED_ENV, UPDATE_METADATA_URL_ENV, UPDAT
 const SHOW_ON_LAUNCH_ENV: &str = "VICEROY_SHOW_ON_LAUNCH";
 const SHOW_ON_LAUNCH_ARG: &str = "--dev-show-on-launch";
 static SHOW_ON_LAUNCH: AtomicBool = AtomicBool::new(false);
+
+unsafe fn nsstring_to_rust_string(value: id) -> Option<String> {
+    if value == nil {
+        return None;
+    }
+
+    let cstr: *const c_char = msg_send![value, UTF8String];
+    if cstr.is_null() {
+        return None;
+    }
+
+    Some(CStr::from_ptr(cstr).to_string_lossy().into_owned())
+}
 
 struct ViceroyApp;
 
@@ -540,10 +554,18 @@ unsafe fn register_escape_textfield_class() {
 
     extern "C" fn perform_key_equivalent(this: &Object, _cmd: Sel, event: id) -> BOOL {
         unsafe {
+            if event == nil {
+                let superclass = class!(NSTextField);
+                return msg_send![super(this, superclass), performKeyEquivalent:event];
+            }
+
             let flags: u64 = msg_send![event, modifierFlags];
             let chars: id = msg_send![event, charactersIgnoringModifiers];
-            let s: *const i8 = msg_send![chars, UTF8String];
-            let s = std::ffi::CStr::from_ptr(s).to_str().unwrap_or("");
+            let Some(s) = nsstring_to_rust_string(chars) else {
+                // Some AppKit events do not carry a UTF-8 text payload.
+                let superclass = class!(NSTextField);
+                return msg_send![super(this, superclass), performKeyEquivalent:event];
+            };
 
             if (flags & (1 << 20)) != 0 {
                 // Command key
