@@ -1392,11 +1392,9 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
             }
 
             clear_active_clipboard_link_preview();
-            if let Some((title, subtitle, maybe_text)) = detail_label_for_entry(&entry) {
-                if let Some(text_body) = maybe_text {
-                    show_text_preview(&title, &subtitle, &text_body, true);
-                    return;
-                }
+            if let Some((title, subtitle, Some(text_body))) = detail_label_for_entry(&entry) {
+                show_text_preview(&title, &subtitle, &text_body, true);
+                return;
             }
         }
     }
