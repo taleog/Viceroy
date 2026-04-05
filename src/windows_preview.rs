@@ -183,6 +183,30 @@ impl PreviewCard {
 
     pub fn from_search_result(result: &SearchResult) -> Self {
         match result {
+            SearchResult::Link {
+                url,
+                display_url,
+                host,
+            } => Self {
+                badge: "LINK".to_string(),
+                title: format!("Open {host}"),
+                subtitle: display_url.clone(),
+                metadata: vec![
+                    PreviewMetadata {
+                        label: "Host".to_string(),
+                        value: host.clone(),
+                    },
+                    PreviewMetadata {
+                        label: "URL".to_string(),
+                        value: url.clone(),
+                    },
+                ],
+                body: PreviewBody::Text {
+                    text: url.clone(),
+                    monospace: true,
+                },
+                footer: Some("Press Enter to open".to_string()),
+            },
             SearchResult::App { name, path, .. } => Self {
                 badge: "APP".to_string(),
                 title: name.clone(),

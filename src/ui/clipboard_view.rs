@@ -9,17 +9,20 @@ use crate::ui::state::{
     WINDOW_IS_OPEN,
 };
 use crate::ui::table::{reload_table, schedule_table_update_next_tick};
+use crate::web_search::{self, LinkPreviewData, LinkTarget};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{Local, LocalResult, TimeZone, Utc};
 use cocoa::base::{id, nil, BOOL, NO, YES};
 use cocoa::foundation::{NSPoint, NSRange, NSRect, NSSize, NSString};
+use lazy_static::lazy_static;
 use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 const MAX_PREVIEW_CHARS: usize = 5000;
 const PREVIEW_HEADER_HEIGHT: f64 = 86.0;
@@ -32,6 +35,16 @@ const PREVIEW_ACTION_EDIT_WIDTH: f64 = 64.0;
 const PREVIEW_ACTION_REMOVE_WIDTH: f64 = 82.0;
 const PREVIEW_ACTION_SAVE_WIDTH: f64 = 70.0;
 const PREVIEW_ACTION_CANCEL_WIDTH: f64 = 84.0;
+const PREVIEW_LINK_BUTTON_WIDTH: f64 = 98.0;
+const PREVIEW_LINK_BUTTON_HEIGHT: f64 = 28.0;
+const PREVIEW_HEADER_BUTTON_GAP: f64 = 12.0;
+
+#[derive(Clone)]
+struct CachedClipboardLinkPreview {
+    metadata: LinkPreviewData,
+    image_bytes: Option<Vec<u8>>,
+    icon_bytes: Option<Vec<u8>>,
+}
 
 static PREVIEW_HOVERED: AtomicBool = AtomicBool::new(false);
 static PREVIEW_SELECTED_ROW: AtomicI64 = AtomicI64::new(-1);
@@ -41,6 +54,13 @@ static EDIT_MODE: AtomicBool = AtomicBool::new(false);
 static HISTORY_REFRESH_WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
 static HISTORY_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static LAST_RENDERED_HISTORY_REVISION: AtomicU64 = AtomicU64::new(0);
+static CLIPBOARD_LINK_PREVIEW_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
+
+lazy_static! {
+    static ref CLIPBOARD_LINK_PREVIEW_CACHE: Mutex<HashMap<String, CachedClipboardLinkPreview>> =
+        Mutex::new(HashMap::new());
+    static ref ACTIVE_CLIPBOARD_LINK_URL: Mutex<Option<String>> = Mutex::new(None);
+}
 
 pub fn format_clipboard_relative_time(timestamp: i64, now: i64) -> String {
     let delta = (now - timestamp).max(0);
@@ -63,6 +83,36 @@ fn truncate_text(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
 
+fn is_remote_clipboard_source(app_name: &Option<String>) -> bool {
+    app_name
+        .as_deref()
+        .map(|name| {
+            let trimmed = name.trim();
+            trimmed == "Another Device" || trimmed.ends_with("(another device)")
+        })
+        .unwrap_or(false)
+}
+
+fn history_source_label(app_name: &Option<String>) -> String {
+    match app_name.as_deref().map(str::trim) {
+        Some("Another Device") => "Another Device".to_string(),
+        Some(name) if name.ends_with("(another device)") => name.to_string(),
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => "Unknown App".to_string(),
+    }
+}
+
+fn display_host_label(host: &str) -> String {
+    truncate_text(host.trim_start_matches("www."), 52)
+}
+
+fn history_link_title(content: &str, custom_name: Option<&String>) -> Option<String> {
+    if let Some(name) = custom_name {
+        return Some(name.clone());
+    }
+    web_search::detect_direct_link(content).map(|target| display_host_label(&target.host))
+}
+
 pub fn build_clipboard_history_payload(
     entries: Vec<clipboard::ClipboardEntry>,
 ) -> (Vec<(String, String)>, Vec<search_engine::SearchResult>) {
@@ -71,10 +121,7 @@ pub fn build_clipboard_history_payload(
     let mut results = Vec::with_capacity(entries.len());
 
     for entry in entries.into_iter() {
-        let app_label = entry
-            .app_name
-            .clone()
-            .unwrap_or_else(|| "Unknown App".to_string());
+        let app_label = history_source_label(&entry.app_name);
         let time_label = format_clipboard_relative_time(entry.timestamp, now);
         let detail_label = if entry.content_type == "image" {
             if let (Some(width), Some(height)) = (entry.image_width, entry.image_height) {
@@ -106,13 +153,15 @@ pub fn build_clipboard_history_payload(
             truncate_text(&entry.content, 100)
         };
 
-        let title = entry.custom_name.clone().unwrap_or_else(|| {
-            if entry.content_type == "image" {
-                image_title.clone()
-            } else {
-                truncate_text(&entry.content, 60)
-            }
-        });
+        let title = if entry.content_type == "image" {
+            entry
+                .custom_name
+                .clone()
+                .unwrap_or_else(|| image_title.clone())
+        } else {
+            history_link_title(&entry.content, entry.custom_name.as_ref())
+                .unwrap_or_else(|| truncate_text(&entry.content, 60))
+        };
 
         rows.push((title, subtitle));
         results.push(search_engine::SearchResult::Clipboard {
@@ -237,19 +286,19 @@ fn apply_cached_clipboard_history_state() {
     update_clipboard_preview_selection(selection);
 }
 
-fn preview_refs() -> Option<ClipboardPreviewRefs> {
+pub(crate) fn preview_refs() -> Option<ClipboardPreviewRefs> {
     CLIPBOARD_PREVIEW.get().cloned()
 }
 
-unsafe fn id_from(ptr: usize) -> id {
+pub(crate) unsafe fn id_from(ptr: usize) -> id {
     ptr as id
 }
 
-unsafe fn set_hidden(view: id, hidden: bool) {
+pub(crate) unsafe fn set_hidden(view: id, hidden: bool) {
     let _: () = msg_send![view, setHidden: if hidden { YES } else { NO }];
 }
 
-unsafe fn set_string(view: id, value: &str) {
+pub(crate) unsafe fn set_string(view: id, value: &str) {
     let ns_string = NSString::alloc(nil).init_str(value);
     let _: () = msg_send![view, setStringValue: ns_string];
 }
@@ -436,6 +485,7 @@ fn apply_edit_mode(enabled: bool, is_text: bool) {
             set_hidden(cancel_button, !enabled);
         }
     }
+    refresh_preview_link_interactivity();
 }
 
 fn exit_edit_mode() {
@@ -710,9 +760,7 @@ fn labels_for_clipboard_entry(
     image_height: Option<i64>,
 ) -> (String, String, String) {
     let now = Utc::now().timestamp();
-    let app_label = app_name
-        .clone()
-        .unwrap_or_else(|| "Unknown App".to_string());
+    let app_label = history_source_label(app_name);
     let time_label = format_clipboard_relative_time(timestamp, now);
     let detail_label = if content_type == "image" {
         if let (Some(width), Some(height)) = (image_width, image_height) {
@@ -741,15 +789,117 @@ fn labels_for_clipboard_entry(
         truncate_text(content, 100)
     };
 
-    let title = custom_name.cloned().unwrap_or_else(|| {
-        if content_type == "image" {
-            image_title.clone()
-        } else {
-            truncate_text(content, 60)
-        }
-    });
+    let title = if content_type == "image" {
+        custom_name.cloned().unwrap_or_else(|| image_title.clone())
+    } else {
+        history_link_title(content, custom_name)
+            .unwrap_or_else(|| truncate_text(content, 60))
+    };
 
     (title, subtitle, preview)
+}
+
+fn clipboard_link_target_for_entry(entry: &search_engine::SearchResult) -> Option<LinkTarget> {
+    match entry {
+        search_engine::SearchResult::Clipboard {
+            content,
+            content_type,
+            ..
+        } if content_type == "text" => web_search::detect_direct_link(content),
+        _ => None,
+    }
+}
+
+fn clipboard_link_subtitle(
+    app_name: &Option<String>,
+    timestamp: i64,
+    host: &str,
+) -> String {
+    let app_label = app_name
+        .clone()
+        .unwrap_or_else(|| "Unknown App".to_string());
+    let time_label = format_clipboard_relative_time(timestamp, Utc::now().timestamp());
+    format!("{app_label} · {time_label} · {host}")
+}
+
+fn clipboard_link_body(preview: &LinkPreviewData, loading: bool) -> String {
+    if let Some(description) = preview.description.as_deref() {
+        description.to_string()
+    } else if loading {
+        "Fetching link preview...".to_string()
+    } else {
+        "This site does not expose a description preview.".to_string()
+    }
+}
+
+fn clean_link_title(preview: &LinkPreviewData) -> String {
+    let candidate = preview
+        .site_name
+        .as_deref()
+        .or(preview.title.as_deref())
+        .unwrap_or(&preview.host)
+        .trim();
+
+    let shortened = candidate
+        .split(" - ")
+        .next()
+        .unwrap_or(candidate)
+        .split(" | ")
+        .next()
+        .unwrap_or(candidate)
+        .trim();
+
+    if shortened.is_empty() {
+        preview.host.clone()
+    } else {
+        truncate_text(shortened, 48)
+    }
+}
+
+fn clear_active_clipboard_link_preview() {
+    if let Ok(mut active) = ACTIVE_CLIPBOARD_LINK_URL.lock() {
+        *active = None;
+    }
+    refresh_preview_link_interactivity();
+}
+
+fn active_clipboard_link_url() -> Option<String> {
+    ACTIVE_CLIPBOARD_LINK_URL
+        .lock()
+        .ok()
+        .and_then(|active| active.clone())
+}
+
+fn refresh_preview_link_interactivity() {
+    if let Some(refs) = preview_refs() {
+        unsafe {
+            let root = id_from(refs.root);
+            let open_link_button = id_from(refs.open_link_button);
+            let interactive_url = if EDIT_MODE.load(Ordering::SeqCst) {
+                None
+            } else {
+                active_clipboard_link_url()
+            };
+            let tooltip: id = if let Some(url) = interactive_url.as_deref() {
+                NSString::alloc(nil).init_str(&format!("Open in browser ({url}) - Use Open Link or press Shift+Enter"))
+            } else {
+                nil
+            };
+            let _: () = msg_send![root, setToolTip: tooltip];
+            set_hidden(open_link_button, interactive_url.is_none());
+            let button_tooltip: id = if interactive_url.is_some() { tooltip } else { nil };
+            let _: () = msg_send![open_link_button, setToolTip: button_tooltip];
+
+            if PREVIEW_HOVERED.load(Ordering::SeqCst) {
+                let cursor: id = if interactive_url.is_some() {
+                    msg_send![class!(NSCursor), pointingHandCursor]
+                } else {
+                    msg_send![class!(NSCursor), arrowCursor]
+                };
+                let _: () = msg_send![cursor, set];
+            }
+        }
+    }
 }
 
 unsafe fn register_preview_action_class() -> id {
@@ -781,14 +931,61 @@ unsafe fn register_preview_action_class() -> id {
             }
         }
 
+        extern "C" fn open_clipboard_link_button(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                if EDIT_MODE.load(Ordering::SeqCst) || active_clipboard_link_url().is_none() {
+                    return;
+                }
+                let _ = crate::ui::table::open_selected_clipboard_link();
+            }
+        }
+
+        extern "C" fn open_clipboard_link(_this: &Object, _cmd: Sel, sender: id) {
+            unsafe {
+                if EDIT_MODE.load(Ordering::SeqCst) || active_clipboard_link_url().is_none() {
+                    return;
+                }
+
+                if sender != nil {
+                    let owner_view: id = msg_send![sender, view];
+                    if owner_view != nil {
+                        let point: NSPoint = msg_send![sender, locationInView: owner_view];
+                        if let Some(refs) = preview_refs() {
+                            let action_bar = id_from(refs.action_bar);
+                            let action_hidden: BOOL = msg_send![action_bar, isHidden];
+                            if action_hidden == NO {
+                                let frame: NSRect = msg_send![action_bar, frame];
+                                let inside_action_bar = point.x >= frame.origin.x
+                                    && point.x <= frame.origin.x + frame.size.width
+                                    && point.y >= frame.origin.y
+                                    && point.y <= frame.origin.y + frame.size.height;
+                                if inside_action_bar {
+                                    return;
+                                }
+                            }
+
+                        }
+                    }
+                }
+
+                let _ = crate::ui::table::open_selected_clipboard_link();
+            }
+        }
+
         extern "C" fn mouse_entered(_this: &Object, _cmd: Sel, _event: id) {
             PREVIEW_HOVERED.store(true, Ordering::SeqCst);
             refresh_action_bar_visibility();
+            refresh_preview_link_interactivity();
         }
 
         extern "C" fn mouse_exited(_this: &Object, _cmd: Sel, _event: id) {
             PREVIEW_HOVERED.store(false, Ordering::SeqCst);
             refresh_action_bar_visibility();
+            unsafe {
+                let cursor: id = msg_send![class!(NSCursor), arrowCursor];
+                let _: () = msg_send![cursor, set];
+            }
+            refresh_preview_link_interactivity();
         }
 
         decl.add_method(
@@ -806,6 +1003,14 @@ unsafe fn register_preview_action_class() -> id {
         decl.add_method(
             sel!(cancelClipboardEdit:),
             cancel_clipboard_edit as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(openClipboardLinkButton:),
+            open_clipboard_link_button as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(openClipboardLink:),
+            open_clipboard_link as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(
             sel!(mouseEntered:),
@@ -926,7 +1131,20 @@ fn set_placeholder_for_mode(mode: TableMode) {
     }
 }
 
-fn show_text_preview(title: &str, subtitle: &str, body: &str) {
+unsafe fn configure_preview_text_view(text_view: id, monospace: bool) {
+    let font: id = if monospace {
+        msg_send![class!(NSFont), monospacedSystemFontOfSize:13.0 weight:0.0]
+    } else {
+        msg_send![class!(NSFont), systemFontOfSize:14.0]
+    };
+    let _: () = msg_send![text_view, setFont: font];
+    let _: () = msg_send![
+        text_view,
+        setTextContainerInset: NSSize::new(8.0, if monospace { 10.0 } else { 12.0 })
+    ];
+}
+
+fn show_text_preview(title: &str, subtitle: &str, body: &str, monospace: bool) {
     if let Some(refs) = preview_refs() {
         unsafe {
             let title_field = id_from(refs.title_field);
@@ -946,6 +1164,7 @@ fn show_text_preview(title: &str, subtitle: &str, body: &str) {
 
             set_string(title_field, title);
             set_string(detail_field, subtitle);
+            configure_preview_text_view(text_view, monospace);
             let ns_body = NSString::alloc(nil).init_str(body);
             let _: () = msg_send![text_view, setString: ns_body];
             reset_text_scroll_position(text_scroll, text_view);
@@ -979,6 +1198,138 @@ fn show_image_preview(title: &str, subtitle: &str, image: id) {
     }
 }
 
+fn show_loading_link_preview(
+    target: &LinkTarget,
+    app_name: &Option<String>,
+    timestamp: i64,
+) {
+    let preview = LinkPreviewData {
+        url: target.url.clone(),
+        display_url: target.display_url.clone(),
+        host: target.host.clone(),
+        title: Some(format!("Open {}", target.host)),
+        description: Some("Fetching page title, description, and thumbnail...".to_string()),
+        site_name: None,
+        image_url: None,
+        icon_url: None,
+    };
+    let subtitle = clipboard_link_subtitle(app_name, timestamp, &preview.host);
+    let body = clipboard_link_body(&preview, true);
+    show_text_preview(
+        preview.title.as_deref().unwrap_or(&preview.host),
+        &subtitle,
+        &body,
+        false,
+    );
+}
+
+fn show_clipboard_link_preview(
+    preview: &LinkPreviewData,
+    image_bytes: Option<&[u8]>,
+    icon_bytes: Option<&[u8]>,
+    app_name: &Option<String>,
+    timestamp: i64,
+    custom_name: Option<&String>,
+) {
+    let title = custom_name
+        .map(|name| name.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| clean_link_title(preview));
+    let subtitle = clipboard_link_subtitle(app_name, timestamp, &preview.host);
+
+    if let Some(image_bytes) = image_bytes {
+        if let Some(image) = image_from_bytes(image_bytes) {
+            show_image_preview(&title, &subtitle, image);
+            return;
+        }
+    }
+
+    if preview.description.is_none() {
+        if let Some(image) = placeholder_link_image(preview, icon_bytes) {
+            show_image_preview(&title, &subtitle, image);
+            return;
+        }
+    }
+
+    let body = clipboard_link_body(preview, false);
+    show_text_preview(&title, &subtitle, &body, false);
+}
+
+fn load_clipboard_link_preview(
+    target: LinkTarget,
+    app_name: Option<String>,
+    timestamp: i64,
+    custom_name: Option<String>,
+) {
+    if let Ok(mut active) = ACTIVE_CLIPBOARD_LINK_URL.lock() {
+        *active = Some(target.url.clone());
+    }
+    refresh_preview_link_interactivity();
+
+    if let Some(cached) = CLIPBOARD_LINK_PREVIEW_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&target.url).cloned())
+    {
+        show_clipboard_link_preview(
+            &cached.metadata,
+            cached.image_bytes.as_deref(),
+            cached.icon_bytes.as_deref(),
+            &app_name,
+            timestamp,
+            custom_name.as_ref(),
+        );
+        return;
+    }
+
+    show_loading_link_preview(&target, &app_name, timestamp);
+
+    let request_id = CLIPBOARD_LINK_PREVIEW_REQUEST_ID.fetch_add(1, Ordering::SeqCst) + 1;
+    SEARCH_RT.spawn(async move {
+        let metadata = web_search::fetch_link_preview(&target).await;
+        let image_bytes = match metadata.image_url.as_deref() {
+            Some(image_url) => web_search::fetch_link_preview_image(image_url).await,
+            None => None,
+        };
+        let icon_bytes = match metadata.icon_url.as_deref() {
+            Some(icon_url) => web_search::fetch_link_preview_image(icon_url).await,
+            _ => None,
+        };
+        let cached = CachedClipboardLinkPreview {
+            metadata: metadata.clone(),
+            image_bytes,
+            icon_bytes,
+        };
+        if let Ok(mut cache) = CLIPBOARD_LINK_PREVIEW_CACHE.lock() {
+            cache.insert(metadata.url.clone(), cached.clone());
+        }
+
+        run_on_main(move || {
+            let active_url = ACTIVE_CLIPBOARD_LINK_URL
+                .lock()
+                .ok()
+                .and_then(|guard| guard.clone());
+            let is_latest =
+                CLIPBOARD_LINK_PREVIEW_REQUEST_ID.load(Ordering::SeqCst) == request_id;
+            let is_clipboard_mode = TABLE_MODE
+                .lock()
+                .map(|mode| *mode == TableMode::ClipboardHistory)
+                .unwrap_or(false);
+
+            if is_latest && is_clipboard_mode && active_url.as_deref() == Some(&metadata.url) {
+                show_clipboard_link_preview(
+                    &cached.metadata,
+                    cached.image_bytes.as_deref(),
+                    cached.icon_bytes.as_deref(),
+                    &app_name,
+                    timestamp,
+                    custom_name.as_ref(),
+                );
+            }
+        });
+    });
+}
+
 pub fn update_clipboard_preview_selection(row: Option<usize>) {
     let mode = match TABLE_MODE.lock() {
         Ok(m) => *m,
@@ -1003,40 +1354,62 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
     }
     refresh_action_bar_visibility();
     if row.is_none() {
+        clear_active_clipboard_link_preview();
         set_placeholder_for_mode(mode);
         return;
     }
     if mode != TableMode::ClipboardHistory {
+        clear_active_clipboard_link_preview();
         set_placeholder_for_mode(mode);
         return;
     }
     let selected_row = row.unwrap();
     if let Some(entry) = preview_data_for_row(selected_row) {
-        if let Some((title, subtitle, maybe_text)) = detail_label_for_entry(&entry) {
-            if let search_engine::SearchResult::Clipboard {
-                content,
-                content_type,
-                ..
-            } = entry
-            {
-                if content_type == "image" {
+        if let search_engine::SearchResult::Clipboard {
+            content,
+            content_type,
+            app_name,
+            timestamp,
+            custom_name,
+            ..
+        } = &entry
+        {
+            if content_type == "image" {
+                clear_active_clipboard_link_preview();
+                if let Some((title, subtitle, _)) = detail_label_for_entry(&entry) {
                     let placeholder = placeholder_image_icon();
                     show_image_preview(&title, &subtitle, placeholder);
-                    if let Some(image) = image_from_clipboard_content(&content) {
+                    if let Some(image) = image_from_clipboard_content(content) {
                         show_image_preview(&title, &subtitle, image);
                     }
-                    return;
-                } else if let Some(text_body) = maybe_text {
-                    show_text_preview(&title, &subtitle, &text_body);
+                }
+                return;
+            }
+
+            if let Some(target) = clipboard_link_target_for_entry(&entry) {
+                load_clipboard_link_preview(
+                    target,
+                    app_name.clone(),
+                    *timestamp,
+                    custom_name.clone(),
+                );
+                return;
+            }
+
+            clear_active_clipboard_link_preview();
+            if let Some((title, subtitle, maybe_text)) = detail_label_for_entry(&entry) {
+                if let Some(text_body) = maybe_text {
+                    show_text_preview(&title, &subtitle, &text_body, true);
                     return;
                 }
             }
         }
     }
+    clear_active_clipboard_link_preview();
     set_placeholder_for_mode(mode);
 }
 
-fn reset_text_scroll_position(text_scroll: id, text_view: id) {
+pub(crate) fn reset_text_scroll_position(text_scroll: id, text_view: id) {
     unsafe {
         let start = NSRange::new(0, 0);
         let _: () = msg_send![text_view, setSelectedRange: start];
@@ -1103,6 +1476,7 @@ unsafe fn apply_preview_subview_layout(bounds: NSRect, refs: &ClipboardPreviewRe
     let text_area_frame = preview_content_frame(bounds);
     let title_field = id_from(refs.title_field);
     let detail_field = id_from(refs.detail_field);
+    let open_link_button = id_from(refs.open_link_button);
     let action_bar = id_from(refs.action_bar);
     let edit_button = id_from(refs.edit_button);
     let remove_button = id_from(refs.remove_button);
@@ -1118,11 +1492,15 @@ unsafe fn apply_preview_subview_layout(bounds: NSRect, refs: &ClipboardPreviewRe
     let text_size = NSSize::new((text_width - 20.0).max(40.0), text_area_frame.size.height);
     let placeholder_height = 80.0;
     let content_inset = style::PREVIEW_CONTENT_INSET;
-    let label_width = (bounds.size.width - content_inset * 2.0).max(40.0);
+    let header_button_x =
+        (bounds.size.width - content_inset - PREVIEW_LINK_BUTTON_WIDTH).max(content_inset);
+    let label_width = (header_button_x - PREVIEW_HEADER_BUTTON_GAP - content_inset).max(40.0);
     let title_height = 26.0;
     let detail_height = 20.0;
     let title_origin_y = bounds.size.height - content_inset - title_height;
     let detail_origin_y = (title_origin_y - detail_height - 4.0).max(content_inset);
+    let header_button_y =
+        (title_origin_y + (title_height - PREVIEW_LINK_BUTTON_HEIGHT) / 2.0).max(content_inset);
     let placeholder_origin_y =
         text_area_frame.origin.y + (text_area_frame.size.height - placeholder_height) / 2.0;
 
@@ -1133,6 +1511,10 @@ unsafe fn apply_preview_subview_layout(bounds: NSRect, refs: &ClipboardPreviewRe
     let detail_frame = NSRect::new(
         NSPoint::new(content_inset, detail_origin_y),
         NSSize::new(label_width, detail_height),
+    );
+    let open_link_frame = NSRect::new(
+        NSPoint::new(header_button_x, header_button_y),
+        NSSize::new(PREVIEW_LINK_BUTTON_WIDTH, PREVIEW_LINK_BUTTON_HEIGHT),
     );
     let action_frame = preview_action_frame(bounds);
     let button_y = (action_frame.size.height - PREVIEW_ACTION_BUTTON_HEIGHT) / 2.0;
@@ -1176,6 +1558,7 @@ unsafe fn apply_preview_subview_layout(bounds: NSRect, refs: &ClipboardPreviewRe
     let _: () = msg_send![placeholder, setFrame: placeholder_frame];
     let _: () = msg_send![title_field, setFrame: title_frame];
     let _: () = msg_send![detail_field, setFrame: detail_frame];
+    let _: () = msg_send![open_link_button, setFrame: open_link_frame];
     let _: () = msg_send![action_bar, setFrame: action_frame];
     let _: () = msg_send![edit_button, setFrame: edit_frame];
     let _: () = msg_send![remove_button, setFrame: remove_frame];
@@ -1309,6 +1692,23 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let _: () = msg_send![detail_field, setHidden: YES];
     let _: () = msg_send![preview, addSubview: detail_field];
 
+    let actions_target = preview_actions();
+
+    let open_link_button: id = msg_send![class!(NSButton), alloc];
+    let open_link_button: id = msg_send![open_link_button, initWithFrame:NSRect::new(NSPoint::new(frame.size.width - content_inset - PREVIEW_LINK_BUTTON_WIDTH, frame.size.height - content_inset - PREVIEW_LINK_BUTTON_HEIGHT), NSSize::new(PREVIEW_LINK_BUTTON_WIDTH, PREVIEW_LINK_BUTTON_HEIGHT))];
+    let _: () = msg_send![open_link_button, setBezelStyle: 1];
+    let _: () = msg_send![open_link_button, setBordered: YES];
+    let _: () = msg_send![open_link_button, setTitle: NSString::alloc(nil).init_str("Open Link")];
+    let open_link_font: id = msg_send![class!(NSFont), systemFontOfSize:12.0 weight:0.52];
+    let open_link_color: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.92f64];
+    set_button_title(open_link_button, "Open Link", open_link_font, open_link_color);
+    let _: () = msg_send![open_link_button, setContentTintColor: open_link_color];
+    let _: () = msg_send![open_link_button, setTarget: actions_target];
+    let _: () = msg_send![open_link_button, setAction: sel!(openClipboardLinkButton:)];
+    let _: () = msg_send![open_link_button, setHidden: YES];
+    let _: () = msg_send![preview, addSubview: open_link_button];
+
     // Action bar (Edit / Remove / Save / Cancel), shown on hover when a row is selected
     let action_frame = preview_action_frame(frame);
     let action_bar: id = msg_send![class!(NSView), alloc];
@@ -1320,8 +1720,6 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let _: () = msg_send![action_layer, setBackgroundColor: action_bg_cg];
     let _: () = msg_send![action_layer, setCornerRadius: 12.0f64];
     let _: () = msg_send![action_bar, setHidden: YES];
-
-    let actions_target = preview_actions();
 
     let edit_button: id = msg_send![class!(NSButton), alloc];
     let edit_button: id = msg_send![edit_button, initWithFrame:NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PREVIEW_ACTION_EDIT_WIDTH, PREVIEW_ACTION_BUTTON_HEIGHT))];
@@ -1449,6 +1847,7 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
         root: preview as usize,
         title_field: title_field as usize,
         detail_field: detail_field as usize,
+        open_link_button: open_link_button as usize,
         action_bar: action_bar as usize,
         edit_button: edit_button as usize,
         remove_button: remove_button as usize,
@@ -1478,27 +1877,138 @@ fn placeholder_image_icon() -> id {
     }
 }
 
-fn image_from_clipboard_content(content: &str) -> Option<id> {
-    if let Ok(bytes) = STANDARD.decode(content) {
-        if bytes.is_empty() {
+fn placeholder_link_icon() -> id {
+    unsafe {
+        let symbol_name = NSString::alloc(nil).init_str("globe");
+        msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil]
+    }
+}
+
+fn placeholder_link_image(preview: &LinkPreviewData, icon_bytes: Option<&[u8]>) -> Option<id> {
+    unsafe {
+        let size = NSSize::new(1200.0, 760.0);
+        let canvas: id = msg_send![class!(NSImage), alloc];
+        let canvas: id = msg_send![canvas, initWithSize:size];
+        if canvas == nil {
             return None;
         }
-        unsafe {
-            let data: id = msg_send![class!(NSData), alloc];
-            let data: id = msg_send![data, initWithBytes:bytes.as_ptr() length:bytes.len() as u64];
-            if data == nil {
-                return None;
-            }
-            let image: id = msg_send![class!(NSImage), alloc];
-            let image: id = msg_send![image, initWithData:data];
-            if image == nil {
-                return None;
-            }
-            Some(image)
+
+        let _: () = msg_send![canvas, lockFocus];
+
+        let outer_rect = NSRect::new(NSPoint::new(0.0, 0.0), size);
+        let outer_color: id = msg_send![
+            class!(NSColor),
+            colorWithCalibratedRed:0.13f64 green:0.13f64 blue:0.15f64 alpha:1.0f64
+        ];
+        let _: () = msg_send![outer_color, setFill];
+        let outer_path: id = msg_send![
+            class!(NSBezierPath),
+            bezierPathWithRoundedRect:outer_rect
+            xRadius:40.0f64
+            yRadius:40.0f64
+        ];
+        let _: () = msg_send![outer_path, fill];
+
+        let inset = 78.0;
+        let card_rect = NSRect::new(
+            NSPoint::new(inset, inset),
+            NSSize::new(size.width - inset * 2.0, size.height - inset * 2.0),
+        );
+        let card_color: id = msg_send![
+            class!(NSColor),
+            colorWithCalibratedRed:0.17f64 green:0.18f64 blue:0.21f64 alpha:1.0f64
+        ];
+        let _: () = msg_send![card_color, setFill];
+        let card_path: id = msg_send![
+            class!(NSBezierPath),
+            bezierPathWithRoundedRect:card_rect
+            xRadius:34.0f64
+            yRadius:34.0f64
+        ];
+        let _: () = msg_send![card_path, fill];
+
+        let icon_image = icon_bytes
+            .and_then(image_from_bytes)
+            .unwrap_or_else(|| {
+                let symbol_name = NSString::alloc(nil).init_str("globe");
+                msg_send![
+                    class!(NSImage),
+                    imageWithSystemSymbolName:symbol_name
+                    accessibilityDescription:nil
+                ]
+            });
+
+        if icon_image != nil {
+            let icon_size = 132.0;
+            let icon_rect = NSRect::new(
+                NSPoint::new(
+                    card_rect.origin.x + (card_rect.size.width - icon_size) / 2.0,
+                    card_rect.origin.y + card_rect.size.height * 0.56,
+                ),
+                NSSize::new(icon_size, icon_size),
+            );
+            let _: () = msg_send![icon_image, drawInRect:icon_rect];
         }
-    } else {
-        None
+
+        let title = clean_link_title(preview);
+        let subtitle = truncate_text(&preview.display_url, 44);
+
+        let title_attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
+        let title_font: id = msg_send![class!(NSFont), systemFontOfSize:42.0 weight:0.62];
+        let title_color: id = msg_send![class!(NSColor), whiteColor];
+        let _: () = msg_send![title_attrs, setObject:title_font forKey:NSString::alloc(nil).init_str("NSFont")];
+        let _: () = msg_send![title_attrs, setObject:title_color forKey:NSString::alloc(nil).init_str("NSColor")];
+
+        let subtitle_attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
+        let subtitle_font: id = msg_send![class!(NSFont), systemFontOfSize:22.0 weight:0.35];
+        let subtitle_color: id =
+            msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.72f64];
+        let _: () = msg_send![subtitle_attrs, setObject:subtitle_font forKey:NSString::alloc(nil).init_str("NSFont")];
+        let _: () = msg_send![subtitle_attrs, setObject:subtitle_color forKey:NSString::alloc(nil).init_str("NSColor")];
+
+        let title_rect = NSRect::new(
+            NSPoint::new(card_rect.origin.x + 48.0, card_rect.origin.y + 170.0),
+            NSSize::new(card_rect.size.width - 96.0, 58.0),
+        );
+        let subtitle_rect = NSRect::new(
+            NSPoint::new(card_rect.origin.x + 48.0, card_rect.origin.y + 118.0),
+            NSSize::new(card_rect.size.width - 96.0, 34.0),
+        );
+
+        let title_ns = NSString::alloc(nil).init_str(&title);
+        let subtitle_ns = NSString::alloc(nil).init_str(&subtitle);
+        let _: () = msg_send![title_ns, drawInRect:title_rect withAttributes:title_attrs];
+        let _: () = msg_send![subtitle_ns, drawInRect:subtitle_rect withAttributes:subtitle_attrs];
+
+        let _: () = msg_send![canvas, unlockFocus];
+        Some(canvas)
     }
+}
+
+fn image_from_bytes(bytes: &[u8]) -> Option<id> {
+    if bytes.is_empty() {
+        return None;
+    }
+    unsafe {
+        let data: id = msg_send![class!(NSData), alloc];
+        let data: id = msg_send![data, initWithBytes:bytes.as_ptr() length:bytes.len() as u64];
+        if data == nil {
+            return None;
+        }
+        let image: id = msg_send![class!(NSImage), alloc];
+        let image: id = msg_send![image, initWithData:data];
+        if image == nil {
+            return None;
+        }
+        Some(image)
+    }
+}
+
+fn image_from_clipboard_content(content: &str) -> Option<id> {
+    STANDARD
+        .decode(content)
+        .ok()
+        .and_then(|bytes| image_from_bytes(&bytes))
 }
 
 fn schedule_app_icon_fetch(path: String, row: isize) {
@@ -1533,13 +2043,84 @@ fn app_icon_for_name(app_name: &str, row: isize) -> id {
     placeholder_clipboard_icon()
 }
 
+fn link_icon_cache_key(target: &LinkTarget) -> String {
+    format!("link-icon:{}", target.url)
+}
+
+fn schedule_link_icon_fetch(target: LinkTarget, cache_key: String, row: isize) {
+    SEARCH_RT.spawn(async move {
+        let cached_preview = CLIPBOARD_LINK_PREVIEW_CACHE
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&target.url).cloned());
+
+        let icon_bytes = if let Some(cached) = cached_preview {
+            match (&cached.icon_bytes, cached.metadata.icon_url.as_deref()) {
+                (Some(bytes), _) => Some(bytes.clone()),
+                (None, Some(icon_url)) => web_search::fetch_link_preview_image(icon_url).await,
+                (None, None) => None,
+            }
+        } else {
+            let metadata = web_search::fetch_link_preview(&target).await;
+            let icon_bytes = match metadata.icon_url.as_deref() {
+                Some(icon_url) => web_search::fetch_link_preview_image(icon_url).await,
+                None => None,
+            };
+            let cached = CachedClipboardLinkPreview {
+                metadata: metadata.clone(),
+                image_bytes: None,
+                icon_bytes: icon_bytes.clone(),
+            };
+            if let Ok(mut cache) = CLIPBOARD_LINK_PREVIEW_CACHE.lock() {
+                cache.insert(metadata.url.clone(), cached);
+            }
+            icon_bytes
+        };
+
+        run_on_main(move || unsafe {
+            let image = icon_bytes
+                .as_deref()
+                .and_then(image_from_bytes)
+                .unwrap_or_else(placeholder_link_icon);
+            if image != nil {
+                let _: id = msg_send![image, retain];
+                if let Ok(mut cache) = ICON_CACHE.lock() {
+                    cache.insert(cache_key.clone(), image as usize);
+                }
+                crate::ui::table::set_icon_for_row_from_cache(&cache_key, row);
+            }
+        });
+    });
+}
+
 pub fn icon_for_history_entry(entry: &search_engine::SearchResult, row: isize) -> id {
     if let search_engine::SearchResult::Clipboard {
+        content,
         content_type,
         app_name,
         ..
     } = entry
     {
+        if content_type == "text" {
+            if let Some(target) = web_search::detect_direct_link(content) {
+                let cache_key = link_icon_cache_key(&target);
+                if let Ok(cache) = ICON_CACHE.lock() {
+                    if let Some(&cached) = cache.get(&cache_key) {
+                        return cached as id;
+                    }
+                }
+
+                let placeholder = placeholder_link_icon();
+                if placeholder != nil {
+                    let _: id = unsafe { msg_send![placeholder, retain] };
+                    if let Ok(mut cache) = ICON_CACHE.lock() {
+                        cache.insert(cache_key.clone(), placeholder as usize);
+                    }
+                }
+                schedule_link_icon_fetch(target, cache_key, row);
+                return placeholder;
+            }
+        }
         if let Some(name) = app_name.as_ref() {
             return app_icon_for_name(name, row);
         }
@@ -1548,4 +2129,12 @@ pub fn icon_for_history_entry(entry: &search_engine::SearchResult, row: isize) -
         }
     }
     placeholder_clipboard_icon()
+}
+
+pub fn shows_remote_badge_for_history_entry(entry: &search_engine::SearchResult) -> bool {
+    matches!(
+        entry,
+        search_engine::SearchResult::Clipboard { app_name, .. }
+            if is_remote_clipboard_source(app_name)
+    )
 }

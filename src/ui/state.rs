@@ -40,6 +40,7 @@ pub struct ClipboardPreviewRefs {
     pub root: usize,
     pub title_field: usize,
     pub detail_field: usize,
+    pub open_link_button: usize,
     pub action_bar: usize,
     pub edit_button: usize,
     pub remove_button: usize,

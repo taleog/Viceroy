@@ -197,6 +197,9 @@ fn print_results(results: &[SearchResult]) {
 
 fn render_result(result: &SearchResult) -> String {
     match result {
+        SearchResult::Link {
+            host, display_url, ..
+        } => format!("[link] {host} ({display_url})"),
         SearchResult::App { name, path, .. } => format!("[app] {name} ({path})"),
         SearchResult::File { name, path, .. } => format!("[file] {name} ({path})"),
         SearchResult::Clipboard {
@@ -248,6 +251,10 @@ fn copy_result(runtime: &Runtime, results: &[SearchResult], index: usize) {
 
 fn execute_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Result<String> {
     match result {
+        SearchResult::Link { url, host, .. } => {
+            web_search::open_web_search(url)?;
+            Ok(format!("Opened {host}"))
+        }
         SearchResult::App { name, path, .. } => {
             usage::record_app_launch(path);
             app_launcher::launch(path)?;
@@ -298,6 +305,10 @@ fn execute_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Result<St
 
 fn copy_result_payload(runtime: &Runtime, result: &SearchResult) -> anyhow::Result<String> {
     match result {
+        SearchResult::Link { url, .. } => {
+            copy_text(url)?;
+            Ok("Link copied to the clipboard".to_string())
+        }
         SearchResult::App { path, .. } | SearchResult::File { path, .. } => {
             copy_text(path)?;
             Ok("Path copied to the clipboard".to_string())

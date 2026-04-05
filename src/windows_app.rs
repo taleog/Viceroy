@@ -40,6 +40,7 @@ impl DisplayItem {
     fn primary_text(&self) -> String {
         match self {
             Self::Search(result) => match result {
+                SearchResult::Link { host, .. } => format!("Open {host}"),
                 SearchResult::App { name, .. } => name.clone(),
                 SearchResult::File { name, .. } => name.clone(),
                 SearchResult::Clipboard {
@@ -64,6 +65,7 @@ impl DisplayItem {
     fn secondary_text(&self) -> String {
         match self {
             Self::Search(result) => match result {
+                SearchResult::Link { url, .. } => url.clone(),
                 SearchResult::App { path, .. } => path.clone(),
                 SearchResult::File { path, .. } => path.clone(),
                 SearchResult::Clipboard {
@@ -96,6 +98,7 @@ impl DisplayItem {
     fn badge(&self) -> &'static str {
         match self {
             Self::Search(result) => match result {
+                SearchResult::Link { .. } => "LINK",
                 SearchResult::App { .. } => "APP",
                 SearchResult::File { .. } => "FILE",
                 SearchResult::Clipboard { content_type, .. } => {
@@ -124,6 +127,7 @@ impl DisplayItem {
     fn badge_tone(&self) -> BadgeTone {
         match self {
             Self::Search(result) => match result {
+                SearchResult::Link { .. } => BadgeTone::Neutral,
                 SearchResult::App { .. } => BadgeTone::Accent,
                 SearchResult::File { .. } => BadgeTone::Neutral,
                 SearchResult::Clipboard { .. } => BadgeTone::Accent,
@@ -181,6 +185,7 @@ enum PreviewCacheKey {
     EmptyClipboard,
     EmptySettings,
     SearchClipboard(i64),
+    SearchLink(u64),
     HistoryEntry(i64),
     SearchApp(u64),
     SearchFile(u64),
@@ -491,6 +496,9 @@ impl ViceroyWindowsApp {
             Some(DisplayItem::History(entry)) => PreviewCacheKey::HistoryEntry(entry.id),
             Some(DisplayItem::Search(result)) => match result {
                 SearchResult::Clipboard { id, .. } => PreviewCacheKey::SearchClipboard(*id),
+                SearchResult::Link { url, .. } => {
+                    PreviewCacheKey::SearchLink(stable_preview_hash(url))
+                }
                 SearchResult::App { path, .. } => {
                     PreviewCacheKey::SearchApp(stable_preview_hash(path))
                 }
@@ -1664,6 +1672,10 @@ fn execute_item(runtime: &Runtime, item: &DisplayItem) -> anyhow::Result<String>
 
 fn execute_search_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Result<String> {
     match result {
+        SearchResult::Link { url, host, .. } => {
+            web_search::open_web_search(url)?;
+            Ok(format!("Opened {host}"))
+        }
         SearchResult::App { name, path, .. } => {
             usage::record_app_launch(path);
             app_launcher::launch(path)?;
@@ -1730,6 +1742,10 @@ fn copy_item(runtime: &Runtime, item: &DisplayItem) -> anyhow::Result<String> {
 
 fn copy_search_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Result<String> {
     match result {
+        SearchResult::Link { url, .. } => {
+            copy_text(url)?;
+            Ok("Link copied to the clipboard".to_string())
+        }
         SearchResult::App { path, .. } | SearchResult::File { path, .. } => {
             copy_text(path)?;
             Ok("Path copied to the clipboard".to_string())
