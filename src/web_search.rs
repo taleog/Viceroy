@@ -140,11 +140,9 @@ pub async fn fetch_link_preview(target: &LinkTarget) -> LinkPreviewData {
     );
     preview.site_name =
         extract_meta_content(&html, &["og:site_name", "application-name", "twitter:site"]);
-    preview.image_url = extract_meta_content(
-        &html,
-        &["og:image", "twitter:image", "twitter:image:src"],
-    )
-    .and_then(|value| resolve_link(value, &response_url));
+    preview.image_url =
+        extract_meta_content(&html, &["og:image", "twitter:image", "twitter:image:src"])
+            .and_then(|value| resolve_link(value, &response_url));
     preview.icon_url = extract_icon_url(&html, &response_url);
 
     preview
@@ -395,9 +393,7 @@ fn extract_icon_url(html: &str, base: &Url) -> Option<String> {
         }
     }
 
-    base.join("/favicon.ico")
-        .ok()
-        .map(|url| url.to_string())
+    base.join("/favicon.ico").ok().map(|url| url.to_string())
 }
 
 fn clean_html_text(raw: &str) -> Option<String> {

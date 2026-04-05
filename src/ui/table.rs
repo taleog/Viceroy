@@ -681,7 +681,8 @@ pub unsafe fn register_table_delegate_class() {
                         _ => "Text".to_string(),
                     };
                     icon_image = icon_for_history_entry(&results[row as usize], row);
-                    show_remote_badge = shows_remote_badge_for_history_entry(&results[row as usize]);
+                    show_remote_badge =
+                        shows_remote_badge_for_history_entry(&results[row as usize]);
                     handled_history = true;
                 }
             }

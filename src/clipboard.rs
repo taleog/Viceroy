@@ -185,7 +185,7 @@ fn should_skip_app(app_name: &Option<String>) -> bool {
 fn clipboard_app_label(frontmost_app: Option<String>) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        return macos_clipboard_app_label(frontmost_app);
+        macos_clipboard_app_label(frontmost_app)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -194,6 +194,7 @@ fn clipboard_app_label(frontmost_app: Option<String>) -> Option<String> {
     }
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn resolve_clipboard_source_label(
     is_remote_clipboard: bool,
     source_bundle_id: Option<&str>,
@@ -221,6 +222,7 @@ fn resolve_clipboard_source_label(
     frontmost_app
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn infer_bundle_display_name(bundle_id: &str) -> Option<String> {
     let normalized = bundle_id.trim().to_ascii_lowercase();
     let known = match normalized.as_str() {
@@ -281,9 +283,7 @@ fn infer_bundle_display_name(bundle_id: &str) -> Option<String> {
                 .map(|word| {
                     let mut chars = word.chars();
                     match chars.next() {
-                        Some(first) => {
-                            first.to_uppercase().collect::<String>() + chars.as_str()
-                        }
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
                         None => String::new(),
                     }
                 })
@@ -308,9 +308,9 @@ fn macos_clipboard_app_label(frontmost_app: Option<String>) -> Option<String> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn resolve_macos_bundle_display_name(_bundle_id: &str) -> Option<String> {
-    None
+#[cfg(all(not(target_os = "macos"), test))]
+fn resolve_macos_bundle_display_name(bundle_id: &str) -> Option<String> {
+    infer_bundle_display_name(bundle_id)
 }
 
 #[cfg(target_os = "macos")]
@@ -1140,11 +1140,7 @@ mod tests {
 
     #[test]
     fn remote_clipboard_without_source_app_uses_another_device_label() {
-        let label = resolve_clipboard_source_label(
-            true,
-            None,
-            Some("Safari".to_string()),
-        );
+        let label = resolve_clipboard_source_label(true, None, Some("Safari".to_string()));
 
         assert_eq!(label.as_deref(), Some("Another Device"));
     }
@@ -1161,7 +1157,7 @@ mod tests {
         assert_eq!(label.as_deref(), Some("Safari (another device)"));
 
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(label.as_deref(), Some("Another Device"));
+        assert_eq!(label.as_deref(), Some("Safari (another device)"));
     }
 
     #[test]

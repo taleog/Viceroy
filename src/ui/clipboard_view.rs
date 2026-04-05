@@ -792,8 +792,7 @@ fn labels_for_clipboard_entry(
     let title = if content_type == "image" {
         custom_name.cloned().unwrap_or_else(|| image_title.clone())
     } else {
-        history_link_title(content, custom_name)
-            .unwrap_or_else(|| truncate_text(content, 60))
+        history_link_title(content, custom_name).unwrap_or_else(|| truncate_text(content, 60))
     };
 
     (title, subtitle, preview)
@@ -810,11 +809,7 @@ fn clipboard_link_target_for_entry(entry: &search_engine::SearchResult) -> Optio
     }
 }
 
-fn clipboard_link_subtitle(
-    app_name: &Option<String>,
-    timestamp: i64,
-    host: &str,
-) -> String {
+fn clipboard_link_subtitle(app_name: &Option<String>, timestamp: i64, host: &str) -> String {
     let app_label = app_name
         .clone()
         .unwrap_or_else(|| "Unknown App".to_string());
@@ -881,13 +876,19 @@ fn refresh_preview_link_interactivity() {
                 active_clipboard_link_url()
             };
             let tooltip: id = if let Some(url) = interactive_url.as_deref() {
-                NSString::alloc(nil).init_str(&format!("Open in browser ({url}) - Use Open Link or press Shift+Enter"))
+                NSString::alloc(nil).init_str(&format!(
+                    "Open in browser ({url}) - Use Open Link or press Shift+Enter"
+                ))
             } else {
                 nil
             };
             let _: () = msg_send![root, setToolTip: tooltip];
             set_hidden(open_link_button, interactive_url.is_none());
-            let button_tooltip: id = if interactive_url.is_some() { tooltip } else { nil };
+            let button_tooltip: id = if interactive_url.is_some() {
+                tooltip
+            } else {
+                nil
+            };
             let _: () = msg_send![open_link_button, setToolTip: button_tooltip];
 
             if PREVIEW_HOVERED.load(Ordering::SeqCst) {
@@ -963,7 +964,6 @@ unsafe fn register_preview_action_class() -> id {
                                     return;
                                 }
                             }
-
                         }
                     }
                 }
@@ -1198,11 +1198,7 @@ fn show_image_preview(title: &str, subtitle: &str, image: id) {
     }
 }
 
-fn show_loading_link_preview(
-    target: &LinkTarget,
-    app_name: &Option<String>,
-    timestamp: i64,
-) {
+fn show_loading_link_preview(target: &LinkTarget, app_name: &Option<String>, timestamp: i64) {
     let preview = LinkPreviewData {
         url: target.url.clone(),
         display_url: target.display_url.clone(),
@@ -1309,8 +1305,7 @@ fn load_clipboard_link_preview(
                 .lock()
                 .ok()
                 .and_then(|guard| guard.clone());
-            let is_latest =
-                CLIPBOARD_LINK_PREVIEW_REQUEST_ID.load(Ordering::SeqCst) == request_id;
+            let is_latest = CLIPBOARD_LINK_PREVIEW_REQUEST_ID.load(Ordering::SeqCst) == request_id;
             let is_clipboard_mode = TABLE_MODE
                 .lock()
                 .map(|mode| *mode == TableMode::ClipboardHistory)
@@ -1702,7 +1697,12 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     let open_link_font: id = msg_send![class!(NSFont), systemFontOfSize:12.0 weight:0.52];
     let open_link_color: id =
         msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.92f64];
-    set_button_title(open_link_button, "Open Link", open_link_font, open_link_color);
+    set_button_title(
+        open_link_button,
+        "Open Link",
+        open_link_font,
+        open_link_color,
+    );
     let _: () = msg_send![open_link_button, setContentTintColor: open_link_color];
     let _: () = msg_send![open_link_button, setTarget: actions_target];
     let _: () = msg_send![open_link_button, setAction: sel!(openClipboardLinkButton:)];
@@ -1927,16 +1927,14 @@ fn placeholder_link_image(preview: &LinkPreviewData, icon_bytes: Option<&[u8]>) 
         ];
         let _: () = msg_send![card_path, fill];
 
-        let icon_image = icon_bytes
-            .and_then(image_from_bytes)
-            .unwrap_or_else(|| {
-                let symbol_name = NSString::alloc(nil).init_str("globe");
-                msg_send![
-                    class!(NSImage),
-                    imageWithSystemSymbolName:symbol_name
-                    accessibilityDescription:nil
-                ]
-            });
+        let icon_image = icon_bytes.and_then(image_from_bytes).unwrap_or_else(|| {
+            let symbol_name = NSString::alloc(nil).init_str("globe");
+            msg_send![
+                class!(NSImage),
+                imageWithSystemSymbolName:symbol_name
+                accessibilityDescription:nil
+            ]
+        });
 
         if icon_image != nil {
             let icon_size = 132.0;
