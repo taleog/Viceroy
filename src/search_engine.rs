@@ -25,6 +25,11 @@ pub enum SearchMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SearchResult {
+    Link {
+        url: String,
+        display_url: String,
+        host: String,
+    },
     App {
         name: String,
         path: String,
@@ -99,6 +104,8 @@ async fn run_search(
     if query.is_empty() {
         return Ok(Vec::new());
     }
+
+    let direct_link = web_search::detect_direct_link(query);
 
     let matcher = SkimMatcherV2::default().ignore_case();
 
@@ -327,8 +334,7 @@ async fn run_search(
             || query_lower.ends_with(".rs")
             || query_lower.ends_with(".js")
             || query_lower.ends_with(".py"));
-    let is_url =
-        query.starts_with("http://") || query.starts_with("https://") || query.contains("://");
+    let is_url = direct_link.is_some();
     let is_short_query = query.len() <= 3;
 
     let query_context = QueryContext {
@@ -386,6 +392,20 @@ async fn run_search(
     let mut scored_clips = score_and_sort(clip_results, query, &matcher, &query_context);
     let mut scored_cmds = score_and_sort(cmd_results, query, &matcher, &query_context);
     let mut scored_calcs = score_and_sort(calc_results, query, &matcher, &query_context);
+    let mut scored_links = direct_link
+        .into_iter()
+        .map(|link| SearchResult::Link {
+            url: link.url,
+            display_url: link.display_url,
+            host: link.host,
+        })
+        .map(|result| {
+            (
+                get_smart_score(&result, query, &matcher, &query_context),
+                result,
+            )
+        })
+        .collect::<Vec<_>>();
 
     truncate_scored(&mut scored_apps, max_per_category.0);
     truncate_scored(&mut scored_files, max_per_category.1);
@@ -398,6 +418,7 @@ async fn run_search(
     results.append(&mut scored_clips);
     results.append(&mut scored_cmds);
     results.append(&mut scored_calcs);
+    results.append(&mut scored_links);
 
     // Smart ranking based on query context and match quality
     results.sort_by(|a, b| b.0.cmp(&a.0));
@@ -536,6 +557,23 @@ fn get_smart_score(
     let query_len = query.len();
 
     let base_score = match result {
+        SearchResult::Link {
+            url,
+            display_url,
+            host,
+        } => {
+            let mut boost = i64::MAX - 10_000;
+            if context.is_url {
+                boost += 5_000;
+            }
+            let query_lower = query_lower.trim();
+            if url.eq_ignore_ascii_case(query) || display_url.eq_ignore_ascii_case(query) {
+                boost += 2_500;
+            } else if host.eq_ignore_ascii_case(query_lower) {
+                boost += 2_000;
+            }
+            boost
+        }
         SearchResult::App {
             name, path, score, ..
         } => {
@@ -890,6 +928,11 @@ mod tests {
         let matcher = SkimMatcherV2::default().ignore_case();
         let query = "https://example.com";
         let ctx = context_for(query, false, true, false);
+        let link = SearchResult::Link {
+            url: "https://example.com/".to_string(),
+            display_url: "example.com".to_string(),
+            host: "example.com".to_string(),
+        };
         let clipboard = SearchResult::Clipboard {
             id: 1,
             content: "https://example.com/page".to_string(),
@@ -912,6 +955,18 @@ mod tests {
 
         let clip_score = get_smart_score(&clipboard, query, &matcher, &ctx);
         let cmd_score = get_smart_score(&command, query, &matcher, &ctx);
+        let link_score = get_smart_score(&link, query, &matcher, &ctx);
         assert!(clip_score > cmd_score);
+        assert!(link_score > clip_score);
+    }
+
+    #[test]
+    fn bare_domains_are_recognized_as_links() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let results = runtime.block_on(search("example.com")).unwrap();
+        assert!(results.iter().any(|result| matches!(
+            result,
+            SearchResult::Link { host, .. } if host == "example.com"
+        )));
     }
 }

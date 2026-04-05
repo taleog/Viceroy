@@ -461,7 +461,29 @@ unsafe fn register_escape_textfield_class() {
 
     extern "C" fn insert_newline(_this: &Object, _cmd: Sel, _sender: id) {
         unsafe {
-            table::activate_selected_row_or_first();
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let event: id = msg_send![app, currentEvent];
+            let flags: u64 = if event == nil {
+                0
+            } else {
+                msg_send![event, modifierFlags]
+            };
+            let shift_pressed = (flags & (1 << 17)) != 0;
+            table::activate_selected_row_or_first_with_alternate(shift_pressed);
+        }
+    }
+
+    extern "C" fn insert_line_break(_this: &Object, _cmd: Sel, _sender: id) {
+        unsafe {
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let event: id = msg_send![app, currentEvent];
+            let flags: u64 = if event == nil {
+                0
+            } else {
+                msg_send![event, modifierFlags]
+            };
+            let shift_pressed = (flags & (1 << 17)) != 0;
+            table::activate_selected_row_or_first_with_alternate(shift_pressed);
         }
     }
 
@@ -476,8 +498,6 @@ unsafe fn register_escape_textfield_class() {
                 std::ffi::CStr::from_ptr(objc::runtime::sel_getName(command_selector))
                     .to_str()
                     .unwrap_or("");
-
-            eprintln!("Command: {}", selector_name); // Debug
 
             match selector_name {
                 "moveDown:" => {
@@ -533,8 +553,16 @@ unsafe fn register_escape_textfield_class() {
                     }
                     YES // Handled
                 }
-                "insertNewline:" => {
-                    table::activate_selected_row_or_first();
+                "insertNewline:" | "insertLineBreak:" => {
+                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let event: id = msg_send![app, currentEvent];
+                    let flags: u64 = if event == nil {
+                        0
+                    } else {
+                        msg_send![event, modifierFlags]
+                    };
+                    let shift_pressed = (flags & (1 << 17)) != 0;
+                    table::activate_selected_row_or_first_with_alternate(shift_pressed);
                     YES // Handled
                 }
                 _ => NO, // Not handled, let NSTextField process it
@@ -554,8 +582,8 @@ unsafe fn register_escape_textfield_class() {
 
     extern "C" fn perform_key_equivalent(this: &Object, _cmd: Sel, event: id) -> BOOL {
         unsafe {
+            let superclass = class!(NSTextField);
             if event == nil {
-                let superclass = class!(NSTextField);
                 return msg_send![super(this, superclass), performKeyEquivalent:event];
             }
 
@@ -563,7 +591,6 @@ unsafe fn register_escape_textfield_class() {
             let chars: id = msg_send![event, charactersIgnoringModifiers];
             let Some(s) = nsstring_to_rust_string(chars) else {
                 // Some AppKit events do not carry a UTF-8 text payload.
-                let superclass = class!(NSTextField);
                 return msg_send![super(this, superclass), performKeyEquivalent:event];
             };
 
@@ -574,19 +601,28 @@ unsafe fn register_escape_textfield_class() {
                     return YES;
                 }
                 if s == "c" {
-                    let _: () =
-                        msg_send![class!(NSApplication), sendAction:sel!(copy:) to:nil from:this];
-                    return YES;
+                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let handled: BOOL = msg_send![app, sendAction:sel!(copy:) to:nil from:this];
+                    if handled == YES {
+                        return YES;
+                    }
+                    return msg_send![super(this, superclass), performKeyEquivalent:event];
                 }
                 if s == "v" {
-                    let _: () =
-                        msg_send![class!(NSApplication), sendAction:sel!(paste:) to:nil from:this];
-                    return YES;
+                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let handled: BOOL = msg_send![app, sendAction:sel!(paste:) to:nil from:this];
+                    if handled == YES {
+                        return YES;
+                    }
+                    return msg_send![super(this, superclass), performKeyEquivalent:event];
                 }
                 if s == "x" {
-                    let _: () =
-                        msg_send![class!(NSApplication), sendAction:sel!(cut:) to:nil from:this];
-                    return YES;
+                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let handled: BOOL = msg_send![app, sendAction:sel!(cut:) to:nil from:this];
+                    if handled == YES {
+                        return YES;
+                    }
+                    return msg_send![super(this, superclass), performKeyEquivalent:event];
                 }
                 if s == "," {
                     settings_view::show_settings_panel();
@@ -595,7 +631,6 @@ unsafe fn register_escape_textfield_class() {
             }
 
             // Call super
-            let superclass = class!(NSTextField);
             msg_send![super(this, superclass), performKeyEquivalent:event]
         }
     }
@@ -616,6 +651,10 @@ unsafe fn register_escape_textfield_class() {
         decl.add_method(
             sel!(insertNewline:),
             insert_newline as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(insertLineBreak:),
+            insert_line_break as extern "C" fn(&Object, Sel, id),
         );
         // NSTextFieldDelegate method - called when field editor processes commands
         decl.add_method(
@@ -1145,6 +1184,11 @@ fn build_search_rows(results: &[search_engine::SearchResult]) -> Vec<(String, St
     let mut rows: Vec<(String, String)> = Vec::new();
     for r in results {
         match r {
+            search_engine::SearchResult::Link {
+                host, display_url, ..
+            } => {
+                rows.push((format!("Open {}", host), display_url.clone()));
+            }
             search_engine::SearchResult::App { name, path, .. } => {
                 rows.push((name.clone(), path.clone()));
             }
