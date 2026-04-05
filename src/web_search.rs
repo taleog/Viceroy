@@ -395,7 +395,9 @@ fn extract_icon_url(html: &str, base: &Url) -> Option<String> {
         }
     }
 
-    None
+    base.join("/favicon.ico")
+        .ok()
+        .map(|url| url.to_string())
 }
 
 fn clean_html_text(raw: &str) -> Option<String> {

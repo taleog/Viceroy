@@ -18,6 +18,15 @@ use std::thread;
 use tokio::task;
 use tokio::time::{sleep, Duration};
 
+#[cfg(target_os = "macos")]
+use cocoa::appkit::NSPasteboard;
+#[cfg(target_os = "macos")]
+use cocoa::base::{id, nil, BOOL, YES};
+#[cfg(target_os = "macos")]
+use cocoa::foundation::{NSAutoreleasePool, NSString};
+#[cfg(target_os = "macos")]
+use objc::{class, msg_send, sel, sel_impl};
+
 lazy_static! {
     static ref MONITOR_PAUSE_DEPTH: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
     static ref WS_RE: Regex = Regex::new(r"\s+").expect("failed to compile whitespace regex");
@@ -92,7 +101,7 @@ pub async fn start_monitor() -> Result<()> {
         if monitor_is_paused() {
             continue;
         }
-        let app_name = app_launcher::get_frontmost_app_name();
+        let app_name = clipboard_app_label(app_launcher::get_frontmost_app_name());
 
         // Text capture
         if let Ok(content) = clipboard.get_text() {
@@ -170,6 +179,205 @@ fn should_skip_app(app_name: &Option<String>) -> bool {
         PASSWORD_MANAGERS.iter().any(|pm| app.contains(pm))
     } else {
         false
+    }
+}
+
+fn clipboard_app_label(frontmost_app: Option<String>) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        return macos_clipboard_app_label(frontmost_app);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        frontmost_app
+    }
+}
+
+fn resolve_clipboard_source_label(
+    is_remote_clipboard: bool,
+    source_bundle_id: Option<&str>,
+    frontmost_app: Option<String>,
+) -> Option<String> {
+    let source_bundle_id = source_bundle_id
+        .map(str::trim)
+        .filter(|bundle_id| !bundle_id.is_empty());
+
+    if let Some(bundle_id) = source_bundle_id {
+        if let Some(name) = resolve_macos_bundle_display_name(bundle_id)
+            .or_else(|| infer_bundle_display_name(bundle_id))
+        {
+            if is_remote_clipboard {
+                return Some(format!("{name} (another device)"));
+            }
+            return Some(name);
+        }
+    }
+
+    if is_remote_clipboard {
+        return Some("Another Device".to_string());
+    }
+
+    frontmost_app
+}
+
+fn infer_bundle_display_name(bundle_id: &str) -> Option<String> {
+    let normalized = bundle_id.trim().to_ascii_lowercase();
+    let known = match normalized.as_str() {
+        "com.apple.mobilesafari" | "com.apple.safari" => Some("Safari"),
+        "com.apple.mobilemail" | "com.apple.mail" => Some("Mail"),
+        "com.apple.mobilenotes" | "com.apple.notes" => Some("Notes"),
+        "com.apple.mobilephone" => Some("Phone"),
+        "com.apple.facetime" => Some("FaceTime"),
+        "com.apple.mobilecal" | "com.apple.ical" => Some("Calendar"),
+        "com.apple.reminders" => Some("Reminders"),
+        "com.apple.mobiletimer" => Some("Clock"),
+        "com.apple.mobileslideshow" | "com.apple.photos" => Some("Photos"),
+        "com.apple.mobilesms" => Some("Messages"),
+        "com.apple.files" | "com.apple.documentsapp" => Some("Files"),
+        _ => None,
+    };
+    if let Some(name) = known {
+        return Some(name.to_string());
+    }
+
+    let tail = bundle_id
+        .rsplit('.')
+        .next()
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())?;
+    let cleaned = tail
+        .trim_start_matches("mobile")
+        .trim_start_matches("Mobile")
+        .trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let mut display = String::new();
+    let mut prev_is_lower = false;
+    for ch in cleaned.chars() {
+        if ch == '_' || ch == '-' {
+            if !display.ends_with(' ') {
+                display.push(' ');
+            }
+            prev_is_lower = false;
+            continue;
+        }
+        if ch.is_uppercase() && prev_is_lower && !display.ends_with(' ') {
+            display.push(' ');
+        }
+        display.push(ch);
+        prev_is_lower = ch.is_lowercase();
+    }
+
+    let collapsed = display.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        None
+    } else {
+        Some(
+            collapsed
+                .split(' ')
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        Some(first) => {
+                            first.to_uppercase().collect::<String>() + chars.as_str()
+                        }
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_clipboard_app_label(frontmost_app: Option<String>) -> Option<String> {
+    unsafe {
+        let _pool = NSAutoreleasePool::new(nil);
+        let pasteboard: id = NSPasteboard::generalPasteboard(nil);
+        if pasteboard == nil {
+            return frontmost_app;
+        }
+
+        let is_remote = pasteboard_has_type(pasteboard, "com.apple.is-remote-clipboard");
+        let source_bundle_id = pasteboard_string_for_type(pasteboard, "org.nspasteboard.source");
+        resolve_clipboard_source_label(is_remote, source_bundle_id.as_deref(), frontmost_app)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_macos_bundle_display_name(_bundle_id: &str) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_macos_bundle_display_name(bundle_id: &str) -> Option<String> {
+    unsafe {
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        if workspace == nil {
+            return None;
+        }
+
+        let bundle_id_ns = NSString::alloc(nil).init_str(bundle_id);
+        let app_url: id = msg_send![workspace, URLForApplicationWithBundleIdentifier: bundle_id_ns];
+        if app_url == nil {
+            return None;
+        }
+
+        let bundle: id = msg_send![class!(NSBundle), bundleWithURL: app_url];
+        if bundle == nil {
+            return None;
+        }
+
+        let display_name_key = NSString::alloc(nil).init_str("CFBundleDisplayName");
+        let display_name: id = msg_send![bundle, objectForInfoDictionaryKey: display_name_key];
+        if let Some(name) = nsstring_to_rust_string(display_name) {
+            if !name.trim().is_empty() {
+                return Some(name);
+            }
+        }
+
+        let name_key = NSString::alloc(nil).init_str("CFBundleName");
+        let name: id = msg_send![bundle, objectForInfoDictionaryKey: name_key];
+        nsstring_to_rust_string(name).filter(|value| !value.trim().is_empty())
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn pasteboard_has_type(pasteboard: id, type_name: &str) -> bool {
+    let types: id = msg_send![pasteboard, types];
+    if types == nil {
+        return false;
+    }
+
+    let type_name = NSString::alloc(nil).init_str(type_name);
+    let contains: BOOL = msg_send![types, containsObject: type_name];
+    contains == YES
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn pasteboard_string_for_type(pasteboard: id, type_name: &str) -> Option<String> {
+    let type_name = NSString::alloc(nil).init_str(type_name);
+    let value: id = msg_send![pasteboard, stringForType: type_name];
+    nsstring_to_rust_string(value)
+}
+
+#[cfg(target_os = "macos")]
+fn nsstring_to_rust_string(value: id) -> Option<String> {
+    if value == nil {
+        return None;
+    }
+
+    unsafe {
+        let cstr: *const std::os::raw::c_char = msg_send![value, UTF8String];
+        if cstr.is_null() {
+            None
+        } else {
+            Some(std::ffi::CStr::from_ptr(cstr).to_string_lossy().to_string())
+        }
     }
 }
 
@@ -878,8 +1086,8 @@ fn send_paste_keystroke() -> Result<()> {
 mod tests {
     use super::{
         find_duplicate_image_entry_id, find_duplicate_text_entry_id, history_image_hash,
-        latest_history_signature, normalize_text, promote_existing_entry, touch_existing_entry,
-        StoredClipboardSignature,
+        latest_history_signature, normalize_text, promote_existing_entry,
+        resolve_clipboard_source_label, touch_existing_entry, StoredClipboardSignature,
     };
     use anyhow::Result;
     use base64::engine::general_purpose::STANDARD;
@@ -928,6 +1136,39 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn remote_clipboard_without_source_app_uses_another_device_label() {
+        let label = resolve_clipboard_source_label(
+            true,
+            None,
+            Some("Safari".to_string()),
+        );
+
+        assert_eq!(label.as_deref(), Some("Another Device"));
+    }
+
+    #[test]
+    fn remote_clipboard_with_source_app_mentions_another_device() {
+        let label = resolve_clipboard_source_label(
+            true,
+            Some("com.apple.mobilesafari"),
+            Some("Notes".to_string()),
+        );
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(label.as_deref(), Some("Safari (another device)"));
+
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(label.as_deref(), Some("Another Device"));
+    }
+
+    #[test]
+    fn falls_back_to_frontmost_app_without_remote_marker() {
+        let label = resolve_clipboard_source_label(false, None, Some("Notes".to_string()));
+
+        assert_eq!(label.as_deref(), Some("Notes"));
     }
 
     #[test]

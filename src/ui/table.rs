@@ -23,10 +23,27 @@ use std::sync::OnceLock;
 
 use crate::app_launcher;
 use crate::ui::clipboard_view::{
-    icon_for_history_entry, refresh_clipboard_preview_layout, update_clipboard_preview_selection,
+    icon_for_history_entry, refresh_clipboard_preview_layout, shows_remote_badge_for_history_entry,
+    update_clipboard_preview_selection,
 };
 
 pub use crate::ui::helpers::style::ROW_HEIGHT;
+
+unsafe fn remote_badge_image() -> id {
+    let symbol_names = ["ipad.and.iphone", "dot.radiowaves.left.and.right"];
+    for symbol_name in symbol_names {
+        let symbol_name_ns = NSString::alloc(nil).init_str(symbol_name);
+        let image: id = msg_send![
+            class!(NSImage),
+            imageWithSystemSymbolName:symbol_name_ns
+            accessibilityDescription:nil
+        ];
+        if image != nil {
+            return image;
+        }
+    }
+    nil
+}
 
 fn sanitize_coordinate(value: f64) -> f64 {
     if value.is_finite() {
@@ -647,6 +664,7 @@ pub unsafe fn register_table_delegate_class() {
             let mut subtitle = raw_subtitle.clone();
             let mut type_label_str = String::new();
             let mut icon_image: id = nil;
+            let mut show_remote_badge = false;
 
             let mode = match TABLE_MODE.lock() {
                 Ok(m) => *m,
@@ -663,6 +681,7 @@ pub unsafe fn register_table_delegate_class() {
                         _ => "Text".to_string(),
                     };
                     icon_image = icon_for_history_entry(&results[row as usize], row);
+                    show_remote_badge = shows_remote_badge_for_history_entry(&results[row as usize]);
                     handled_history = true;
                 }
             }
@@ -817,6 +836,12 @@ pub unsafe fn register_table_delegate_class() {
                 let _: () = msg_send![icon_view, setImageScaling: 1];
                 let _: () = msg_send![new_container, addSubview: icon_view];
 
+                let badge_view: id = msg_send![class!(NSImageView), alloc];
+                let badge_view: id = msg_send![badge_view, initWithFrame: NSRect::new(NSPoint::new(style::ROW_INTERNAL_PADDING + style::ROW_ICON_SIZE - style::ROW_BADGE_SIZE + 2.0, style::ROW_VERTICAL_PADDING - 2.0), NSSize::new(style::ROW_BADGE_SIZE, style::ROW_BADGE_SIZE))];
+                let _: () = msg_send![badge_view, setImageScaling: 1];
+                let _: () = msg_send![badge_view, setHidden: YES];
+                let _: () = msg_send![new_container, addSubview: badge_view];
+
                 let title_field: id = msg_send![class!(NSTextField), alloc];
                 let title_initial_width = (container_width
                     - (style::ROW_INTERNAL_PADDING
@@ -872,7 +897,20 @@ pub unsafe fn register_table_delegate_class() {
                 let _: () = msg_send![icon_view, setImage: icon_image];
             }
 
-            let title_field: id = msg_send![subviews, objectAtIndex:1];
+            let badge_view: id = msg_send![subviews, objectAtIndex:1];
+            let badge_size = style::ROW_BADGE_SIZE;
+            let badge_x = style::ROW_INTERNAL_PADDING + icon_size - badge_size * 0.72;
+            let badge_y = icon_y - badge_size * 0.1;
+            let _: () = msg_send![badge_view, setFrame: NSRect::new(NSPoint::new(badge_x, badge_y), NSSize::new(badge_size, badge_size))];
+            let _: () = msg_send![badge_view, setHidden: if show_remote_badge { NO } else { YES }];
+            if show_remote_badge {
+                let badge_image = remote_badge_image();
+                if badge_image != nil {
+                    let _: () = msg_send![badge_view, setImage: badge_image];
+                }
+            }
+
+            let title_field: id = msg_send![subviews, objectAtIndex:2];
             let text_x =
                 style::ROW_INTERNAL_PADDING + style::ROW_ICON_SIZE + style::ROW_ICON_TEXT_PADDING;
             let type_label_width = style::ROW_TYPE_LABEL_WIDTH;
@@ -890,13 +928,13 @@ pub unsafe fn register_table_delegate_class() {
             let _: () =
                 msg_send![title_field, setStringValue: NSString::alloc(nil).init_str(&title)];
 
-            let subtitle_field: id = msg_send![subviews, objectAtIndex:2];
+            let subtitle_field: id = msg_send![subviews, objectAtIndex:3];
             let subtitle_y = text_block_origin_y;
             let _: () = msg_send![subtitle_field, setFrame: NSRect::new(NSPoint::new(text_x, subtitle_y), NSSize::new(text_width, style::ROW_SUBTITLE_HEIGHT))];
             let _: () =
                 msg_send![subtitle_field, setStringValue: NSString::alloc(nil).init_str(&subtitle)];
 
-            let type_field: id = msg_send![subviews, objectAtIndex:3];
+            let type_field: id = msg_send![subviews, objectAtIndex:4];
             let type_x = container_width - type_label_width - style::ROW_TRAILING_PADDING;
             let type_height = style::ROW_SUBTITLE_HEIGHT;
             let type_y = (container_height - type_height - style::ROW_CONTENT_TOP_INSET)
@@ -999,19 +1037,40 @@ pub unsafe fn register_table_delegate_class() {
             let _: () = msg_send![icon_view, setContentTintColor: icon_tint];
         }
 
-        let title_field: id = msg_send![subviews, objectAtIndex:1];
+        let badge_view: id = msg_send![subviews, objectAtIndex:1];
+        if badge_view != nil {
+            let _: () = msg_send![badge_view, setWantsLayer: YES];
+            let badge_layer: id = msg_send![badge_view, layer];
+            let badge_bg: id = if is_selected {
+                msg_send![class!(NSColor), colorWithCalibratedWhite:0.12f64 alpha:0.95f64]
+            } else {
+                msg_send![class!(NSColor), colorWithCalibratedWhite:0.08f64 alpha:0.92f64]
+            };
+            let badge_bg_cg: id = msg_send![badge_bg, CGColor];
+            let _: () = msg_send![badge_layer, setCornerRadius: style::ROW_BADGE_SIZE / 2.0];
+            let _: () = msg_send![badge_layer, setMasksToBounds: YES];
+            let _: () = msg_send![badge_layer, setBackgroundColor: badge_bg_cg];
+            let badge_tint: id = if is_selected {
+                msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.95f64]
+            } else {
+                msg_send![class!(NSColor), colorWithCalibratedRed:0.76f64 green:0.9f64 blue:1.0f64 alpha:0.95f64]
+            };
+            let _: () = msg_send![badge_view, setContentTintColor: badge_tint];
+        }
+
+        let title_field: id = msg_send![subviews, objectAtIndex:2];
         if title_field != nil {
             let primary_color: id =
                 msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.96f64];
             let _: () = msg_send![title_field, setTextColor: primary_color];
         }
-        let subtitle_field: id = msg_send![subviews, objectAtIndex:2];
+        let subtitle_field: id = msg_send![subviews, objectAtIndex:3];
         if subtitle_field != nil {
             let secondary_color: id =
                 msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.66f64];
             let _: () = msg_send![subtitle_field, setTextColor: secondary_color];
         }
-        let type_field: id = msg_send![subviews, objectAtIndex:3];
+        let type_field: id = msg_send![subviews, objectAtIndex:4];
         if type_field != nil {
             let pill_text: id = if is_selected {
                 msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.9f64]

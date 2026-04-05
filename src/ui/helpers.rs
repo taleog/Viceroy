@@ -23,6 +23,8 @@ pub mod style {
     pub const ROW_TRAILING_PADDING: f64 = 16.0;
     /// Default icon size inside a row card.
     pub const ROW_ICON_SIZE: f64 = 44.0;
+    /// Small overlay badge size for special row-state indicators.
+    pub const ROW_BADGE_SIZE: f64 = 16.0;
     /// Row title text field height.
     pub const ROW_TITLE_HEIGHT: f64 = 24.0;
     /// Row subtitle text field height.

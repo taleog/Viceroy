@@ -83,6 +83,36 @@ fn truncate_text(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
 
+fn is_remote_clipboard_source(app_name: &Option<String>) -> bool {
+    app_name
+        .as_deref()
+        .map(|name| {
+            let trimmed = name.trim();
+            trimmed == "Another Device" || trimmed.ends_with("(another device)")
+        })
+        .unwrap_or(false)
+}
+
+fn history_source_label(app_name: &Option<String>) -> String {
+    match app_name.as_deref().map(str::trim) {
+        Some("Another Device") => "Another Device".to_string(),
+        Some(name) if name.ends_with("(another device)") => name.to_string(),
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => "Unknown App".to_string(),
+    }
+}
+
+fn display_host_label(host: &str) -> String {
+    truncate_text(host.trim_start_matches("www."), 52)
+}
+
+fn history_link_title(content: &str, custom_name: Option<&String>) -> Option<String> {
+    if let Some(name) = custom_name {
+        return Some(name.clone());
+    }
+    web_search::detect_direct_link(content).map(|target| display_host_label(&target.host))
+}
+
 pub fn build_clipboard_history_payload(
     entries: Vec<clipboard::ClipboardEntry>,
 ) -> (Vec<(String, String)>, Vec<search_engine::SearchResult>) {
@@ -91,10 +121,7 @@ pub fn build_clipboard_history_payload(
     let mut results = Vec::with_capacity(entries.len());
 
     for entry in entries.into_iter() {
-        let app_label = entry
-            .app_name
-            .clone()
-            .unwrap_or_else(|| "Unknown App".to_string());
+        let app_label = history_source_label(&entry.app_name);
         let time_label = format_clipboard_relative_time(entry.timestamp, now);
         let detail_label = if entry.content_type == "image" {
             if let (Some(width), Some(height)) = (entry.image_width, entry.image_height) {
@@ -126,13 +153,15 @@ pub fn build_clipboard_history_payload(
             truncate_text(&entry.content, 100)
         };
 
-        let title = entry.custom_name.clone().unwrap_or_else(|| {
-            if entry.content_type == "image" {
-                image_title.clone()
-            } else {
-                truncate_text(&entry.content, 60)
-            }
-        });
+        let title = if entry.content_type == "image" {
+            entry
+                .custom_name
+                .clone()
+                .unwrap_or_else(|| image_title.clone())
+        } else {
+            history_link_title(&entry.content, entry.custom_name.as_ref())
+                .unwrap_or_else(|| truncate_text(&entry.content, 60))
+        };
 
         rows.push((title, subtitle));
         results.push(search_engine::SearchResult::Clipboard {
@@ -731,9 +760,7 @@ fn labels_for_clipboard_entry(
     image_height: Option<i64>,
 ) -> (String, String, String) {
     let now = Utc::now().timestamp();
-    let app_label = app_name
-        .clone()
-        .unwrap_or_else(|| "Unknown App".to_string());
+    let app_label = history_source_label(app_name);
     let time_label = format_clipboard_relative_time(timestamp, now);
     let detail_label = if content_type == "image" {
         if let (Some(width), Some(height)) = (image_width, image_height) {
@@ -762,13 +789,12 @@ fn labels_for_clipboard_entry(
         truncate_text(content, 100)
     };
 
-    let title = custom_name.cloned().unwrap_or_else(|| {
-        if content_type == "image" {
-            image_title.clone()
-        } else {
-            truncate_text(content, 60)
-        }
-    });
+    let title = if content_type == "image" {
+        custom_name.cloned().unwrap_or_else(|| image_title.clone())
+    } else {
+        history_link_title(content, custom_name)
+            .unwrap_or_else(|| truncate_text(content, 60))
+    };
 
     (title, subtitle, preview)
 }
@@ -855,7 +881,7 @@ fn refresh_preview_link_interactivity() {
                 active_clipboard_link_url()
             };
             let tooltip: id = if let Some(url) = interactive_url.as_deref() {
-                NSString::alloc(nil).init_str(&format!("Open in browser ({url}) - Click preview or press Shift+Enter"))
+                NSString::alloc(nil).init_str(&format!("Open in browser ({url}) - Use Open Link or press Shift+Enter"))
             } else {
                 nil
             };
@@ -1266,9 +1292,7 @@ fn load_clipboard_link_preview(
             None => None,
         };
         let icon_bytes = match metadata.icon_url.as_deref() {
-            Some(icon_url) if image_bytes.is_none() => {
-                web_search::fetch_link_preview_image(icon_url).await
-            }
+            Some(icon_url) => web_search::fetch_link_preview_image(icon_url).await,
             _ => None,
         };
         let cached = CachedClipboardLinkPreview {
@@ -1817,11 +1841,6 @@ pub unsafe fn create_clipboard_preview_view(content_view: id, frame: NSRect) {
     ];
     let _: () = msg_send![preview, addTrackingArea: tracking];
 
-    let link_click: id = msg_send![class!(NSClickGestureRecognizer), alloc];
-    let link_click: id =
-        msg_send![link_click, initWithTarget:actions_target action:sel!(openClipboardLink:)];
-    let _: () = msg_send![preview, addGestureRecognizer: link_click];
-
     let _: () = msg_send![content_view, addSubview: preview];
 
     let _ = CLIPBOARD_PREVIEW.set(ClipboardPreviewRefs {
@@ -1854,6 +1873,13 @@ pub fn placeholder_clipboard_icon() -> id {
 fn placeholder_image_icon() -> id {
     unsafe {
         let symbol_name = NSString::alloc(nil).init_str("photo.on.rectangle");
+        msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil]
+    }
+}
+
+fn placeholder_link_icon() -> id {
+    unsafe {
+        let symbol_name = NSString::alloc(nil).init_str("globe");
         msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil]
     }
 }
@@ -2017,13 +2043,84 @@ fn app_icon_for_name(app_name: &str, row: isize) -> id {
     placeholder_clipboard_icon()
 }
 
+fn link_icon_cache_key(target: &LinkTarget) -> String {
+    format!("link-icon:{}", target.url)
+}
+
+fn schedule_link_icon_fetch(target: LinkTarget, cache_key: String, row: isize) {
+    SEARCH_RT.spawn(async move {
+        let cached_preview = CLIPBOARD_LINK_PREVIEW_CACHE
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&target.url).cloned());
+
+        let icon_bytes = if let Some(cached) = cached_preview {
+            match (&cached.icon_bytes, cached.metadata.icon_url.as_deref()) {
+                (Some(bytes), _) => Some(bytes.clone()),
+                (None, Some(icon_url)) => web_search::fetch_link_preview_image(icon_url).await,
+                (None, None) => None,
+            }
+        } else {
+            let metadata = web_search::fetch_link_preview(&target).await;
+            let icon_bytes = match metadata.icon_url.as_deref() {
+                Some(icon_url) => web_search::fetch_link_preview_image(icon_url).await,
+                None => None,
+            };
+            let cached = CachedClipboardLinkPreview {
+                metadata: metadata.clone(),
+                image_bytes: None,
+                icon_bytes: icon_bytes.clone(),
+            };
+            if let Ok(mut cache) = CLIPBOARD_LINK_PREVIEW_CACHE.lock() {
+                cache.insert(metadata.url.clone(), cached);
+            }
+            icon_bytes
+        };
+
+        run_on_main(move || unsafe {
+            let image = icon_bytes
+                .as_deref()
+                .and_then(image_from_bytes)
+                .unwrap_or_else(placeholder_link_icon);
+            if image != nil {
+                let _: id = msg_send![image, retain];
+                if let Ok(mut cache) = ICON_CACHE.lock() {
+                    cache.insert(cache_key.clone(), image as usize);
+                }
+                crate::ui::table::set_icon_for_row_from_cache(&cache_key, row);
+            }
+        });
+    });
+}
+
 pub fn icon_for_history_entry(entry: &search_engine::SearchResult, row: isize) -> id {
     if let search_engine::SearchResult::Clipboard {
+        content,
         content_type,
         app_name,
         ..
     } = entry
     {
+        if content_type == "text" {
+            if let Some(target) = web_search::detect_direct_link(content) {
+                let cache_key = link_icon_cache_key(&target);
+                if let Ok(cache) = ICON_CACHE.lock() {
+                    if let Some(&cached) = cache.get(&cache_key) {
+                        return cached as id;
+                    }
+                }
+
+                let placeholder = placeholder_link_icon();
+                if placeholder != nil {
+                    let _: id = unsafe { msg_send![placeholder, retain] };
+                    if let Ok(mut cache) = ICON_CACHE.lock() {
+                        cache.insert(cache_key.clone(), placeholder as usize);
+                    }
+                }
+                schedule_link_icon_fetch(target, cache_key, row);
+                return placeholder;
+            }
+        }
         if let Some(name) = app_name.as_ref() {
             return app_icon_for_name(name, row);
         }
@@ -2032,4 +2129,12 @@ pub fn icon_for_history_entry(entry: &search_engine::SearchResult, row: isize) -
         }
     }
     placeholder_clipboard_icon()
+}
+
+pub fn shows_remote_badge_for_history_entry(entry: &search_engine::SearchResult) -> bool {
+    matches!(
+        entry,
+        search_engine::SearchResult::Clipboard { app_name, .. }
+            if is_remote_clipboard_source(app_name)
+    )
 }
