@@ -13,10 +13,8 @@ use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 
 use crate::app_launcher;
-use crate::clipboard;
 use crate::database;
 use crate::macos_search;
-use crate::search_engine;
 use crate::settings;
 use crate::sync;
 use crate::ui;
@@ -24,10 +22,10 @@ use log::{error, info};
 use std::ffi::{c_char, CStr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use ui::clipboard_view::{
-    apply_clipboard_history_state, build_clipboard_history_payload, create_clipboard_preview_view,
-    show_clipboard_history_view, update_clipboard_preview_selection,
+    create_clipboard_preview_view, show_clipboard_history_view,
+    update_clipboard_preview_selection,
 };
-use ui::helpers::{run_on_main, scale_bounce_show, style};
+use ui::helpers::{scale_bounce_show, style};
 use ui::settings_view;
 use ui::state::*;
 use ui::table;

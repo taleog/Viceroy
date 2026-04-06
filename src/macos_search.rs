@@ -1,7 +1,6 @@
 #![allow(unexpected_cfgs)]
 
 use cocoa::base::{id, nil, YES};
-use cocoa::foundation::NSString;
 use objc::declare::ClassDecl;
 use objc::runtime::{Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
@@ -14,7 +13,6 @@ use crate::ui::clipboard_view::{
     update_clipboard_preview_selection,
 };
 use crate::ui::helpers::run_on_main;
-use crate::ui::settings_view;
 use crate::ui::state::{
     TableMode, CURRENT_SEARCH, SEARCH_FIELD, SEARCH_RT, SEARCH_VERSION, TABLE_DATA, TABLE_MODE,
     TABLE_RESULTS,
