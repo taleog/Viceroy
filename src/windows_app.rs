@@ -10,7 +10,8 @@ use viceroy::search_engine::{self, SearchResult};
 use viceroy::{
     app_launcher,
     clipboard::{self, ClipboardEntry},
-    database, dictionary, settings, sync, system_commands, updater, usage, web_search,
+    database, dictionary, obsidian, settings, sync, system_commands, updater, usage,
+    web_search,
 };
 
 use crate::windows_preview::{self, PreviewCard, PreviewPanelState, PreviewSource};
@@ -48,6 +49,7 @@ impl DisplayItem {
                     preview,
                     ..
                 } => custom_name.clone().unwrap_or_else(|| preview.clone()),
+                SearchResult::Note { title, .. } => title.clone(),
                 SearchResult::Command { name, .. } => name.clone(),
                 SearchResult::Calculator {
                     expression, result, ..
@@ -82,6 +84,14 @@ impl DisplayItem {
                     *image_width,
                     *image_height,
                 ),
+                SearchResult::Note {
+                    relative_path,
+                    vault_name,
+                    ..
+                } => vault_name
+                    .as_ref()
+                    .map(|vault| format!("{} | {}", vault, relative_path))
+                    .unwrap_or_else(|| relative_path.clone()),
                 SearchResult::Command { description, .. } => description.clone(),
                 SearchResult::Calculator { formats, .. } => formats
                     .first()
@@ -108,6 +118,7 @@ impl DisplayItem {
                         "CLIP"
                     }
                 }
+                SearchResult::Note { .. } => "NOTE",
                 SearchResult::Command { .. } => "CMD",
                 SearchResult::Calculator { .. } => "CALC",
                 SearchResult::Emoji { .. } => "EMOJI",
@@ -131,6 +142,7 @@ impl DisplayItem {
                 SearchResult::App { .. } => BadgeTone::Accent,
                 SearchResult::File { .. } => BadgeTone::Neutral,
                 SearchResult::Clipboard { .. } => BadgeTone::Accent,
+                SearchResult::Note { .. } => BadgeTone::Accent,
                 SearchResult::Command { .. } => BadgeTone::Warning,
                 SearchResult::Calculator { .. } => BadgeTone::Success,
                 SearchResult::Emoji { .. } => BadgeTone::Accent,
@@ -503,6 +515,9 @@ impl ViceroyWindowsApp {
                     PreviewCacheKey::SearchApp(stable_preview_hash(path))
                 }
                 SearchResult::File { path, .. } => {
+                    PreviewCacheKey::SearchFile(stable_preview_hash(path))
+                }
+                SearchResult::Note { path, .. } => {
                     PreviewCacheKey::SearchFile(stable_preview_hash(path))
                 }
                 SearchResult::Command { command, .. } => {
@@ -1685,6 +1700,28 @@ fn execute_search_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Re
             app_launcher::open_file(path)?;
             Ok(format!("Opened {name}"))
         }
+        SearchResult::Note {
+            title,
+            path,
+            vault_name,
+            ..
+        } => {
+            let obsidian_settings = settings::load().unwrap_or_default().obsidian;
+            if obsidian_settings.open_in_obsidian {
+                if let Some(vault_path) = obsidian_settings.vault_path {
+                    obsidian::open_note_in_obsidian(
+                        path,
+                        &vault_path,
+                        vault_name.as_deref().or(obsidian_settings.vault_name.as_deref()),
+                    )?;
+                } else {
+                    app_launcher::open_file(path)?;
+                }
+            } else {
+                app_launcher::open_file(path)?;
+            }
+            Ok(format!("Opened note {title}"))
+        }
         SearchResult::Clipboard {
             id,
             content,
@@ -1749,6 +1786,10 @@ fn copy_search_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Resul
         SearchResult::App { path, .. } | SearchResult::File { path, .. } => {
             copy_text(path)?;
             Ok("Path copied to the clipboard".to_string())
+        }
+        SearchResult::Note { path, .. } => {
+            copy_text(path)?;
+            Ok("Note path copied to the clipboard".to_string())
         }
         SearchResult::Clipboard {
             id,

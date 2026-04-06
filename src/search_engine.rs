@@ -1,6 +1,6 @@
 use crate::{
-    app_launcher, calculator, clipboard, dictionary, emoji, file_search, system_commands, usage,
-    web_search,
+    app_launcher, calculator, clipboard, dictionary, emoji, file_search, obsidian, settings,
+    system_commands, usage, web_search,
 };
 use anyhow::Result;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -69,6 +69,13 @@ pub enum SearchResult {
         emoji: String,
         name: String,
         keywords: Vec<String>,
+    },
+    Note {
+        title: String,
+        path: String,
+        relative_path: String,
+        vault_name: Option<String>,
+        score: i64,
     },
     Dictionary {
         word: String,
@@ -275,6 +282,44 @@ async fn run_search(
         results
     };
 
+    // Note search future
+    let note_future = async {
+        let mut results = Vec::new();
+        if mode_clone == SearchMode::All || mode_clone == SearchMode::Files {
+            if let Ok(app_settings) = settings::load() {
+                if app_settings.obsidian.enabled {
+                    if let Some(vault_path) = app_settings.obsidian.vault_path.clone() {
+                        let vault_name = app_settings.obsidian.vault_name.clone();
+                        let query_inner = query_clone.clone();
+                        let notes_result = tokio::task::spawn_blocking(move || {
+                            obsidian::search_notes(&query_inner, &vault_path, vault_name.as_deref())
+                        })
+                        .await;
+
+                        if let Ok(Ok(notes)) = notes_result {
+                            let matcher = SkimMatcherV2::default().ignore_case();
+                            for note in notes {
+                                if let Some(score) = matcher
+                                    .fuzzy_match(&note.title, &query_clone)
+                                    .or_else(|| matcher.fuzzy_match(&note.relative_path, &query_clone))
+                                {
+                                    results.push(SearchResult::Note {
+                                        title: note.title,
+                                        path: note.path,
+                                        relative_path: note.relative_path,
+                                        vault_name: note.vault_name,
+                                        score,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        results
+    };
+
     // Command search future (fast, can run inline or async)
     let command_future = async {
         let mut results = Vec::new();
@@ -316,9 +361,10 @@ async fn run_search(
     };
 
     // Execute all searches in parallel
-    let (app_results, file_results, clip_results, cmd_results, calc_results) = tokio::join!(
+    let (app_results, file_results, note_results, clip_results, cmd_results, calc_results) = tokio::join!(
         app_future,
         file_future,
+        note_future,
         clipboard_future,
         command_future,
         calc_future
@@ -372,6 +418,7 @@ async fn run_search(
     // Score once per result to keep ranking stable and lightweight
     let mut scored_apps = score_and_sort(app_results, query, &matcher, &query_context);
     let mut scored_files = score_and_sort(file_results, query, &matcher, &query_context);
+    let mut scored_notes = score_and_sort(note_results, query, &matcher, &query_context);
     let mut scored_clips = score_and_sort(clip_results, query, &matcher, &query_context);
     let mut scored_cmds = score_and_sort(cmd_results, query, &matcher, &query_context);
     let mut scored_calcs = score_and_sort(calc_results, query, &matcher, &query_context);
@@ -392,12 +439,14 @@ async fn run_search(
 
     truncate_scored(&mut scored_apps, max_per_category.0);
     truncate_scored(&mut scored_files, max_per_category.1);
+    truncate_scored(&mut scored_notes, max_per_category.1);
     truncate_scored(&mut scored_clips, max_per_category.2);
 
     // Combine scored results
     let mut results: Vec<(i64, SearchResult)> = Vec::new();
     results.append(&mut scored_apps);
     results.append(&mut scored_files);
+    results.append(&mut scored_notes);
     results.append(&mut scored_clips);
     results.append(&mut scored_cmds);
     results.append(&mut scored_calcs);
@@ -898,6 +947,40 @@ fn get_smart_score(
             }
 
             boost - 15000 // Clipboard lower priority unless very relevant
+        }
+        SearchResult::Note {
+            title,
+            relative_path,
+            score,
+            ..
+        } => {
+            let title_lower = title.to_lowercase();
+            let relative_lower = relative_path.to_lowercase();
+            let mut boost = *score;
+
+            if title_lower == query_lower {
+                boost += 95_000;
+            } else if title_lower.starts_with(&query_lower) {
+                boost += 48_000 + (query_len as i64 * 900);
+            } else if title_lower.contains(&query_lower) {
+                boost += 16_000;
+            } else if relative_lower.contains(&query_lower) {
+                boost += 8_000;
+            }
+
+            if relative_lower.starts_with("projects/")
+                || relative_lower.starts_with("inbox/")
+                || relative_lower.starts_with("daily/")
+                || relative_lower.starts_with("ideas/")
+            {
+                boost += 4_000;
+            }
+
+            if context.is_short_query {
+                boost -= 5_000;
+            }
+
+            boost - 2_000
         }
         SearchResult::Command { name, score, .. } => {
             let name_lower = name.to_lowercase();

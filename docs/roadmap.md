@@ -47,26 +47,32 @@
    - Restore fast file search without permission prompts
    - Target: File search working as fast as original Spotlight
 
-3. **Add automated tests**
+3. **Obsidian integration MVP**
+   - Add vault settings and markdown note indexing
+   - Add first-class note results with Obsidian open + Finder reveal actions
+   - Distinguish notes from generic file results in the UI
+   - Target: fast native vault search that feels like a real Viceroy feature
+
+4. **Add automated tests**
    - Clipboard paste and duplicate detection tests
    - Search ranking tests
    - Integration tests for window focus/paste flow
    - Target: 80%+ coverage of critical paths
 
 ### Medium Priority
-4. **Integrate animation improvements**
+5. **Integrate animation improvements**
    - Use slide+spring animation for window show
    - Use fade+scale animation for window hide
    - Add row hover/selection visual feedback
    - Target: Make transitions feel smooth and responsive
 
-5. **Expand search sources**
+6. **Expand search sources**
    - Add macOS Contacts search
    - Add Safari/Chrome tab search
    - Add clipboard image OCR (via Vision framework)
    - Target: Richer search results for power users
 
-6. **Settings UI improvements**
+7. **Settings UI improvements**
    - Add sync connection test button
    - Add file search enable/disable toggle
    - Add keyboard shortcuts help panel
@@ -82,6 +88,9 @@
 - [ ] Reduce memory footprint
 
 ### Feature Completeness
+- [ ] Obsidian note search with richer metadata support (frontmatter, headings, recency)
+- [ ] Quick note capture actions for Obsidian vaults
+- [ ] OpenClaw-powered note transforms and vault write-back flows
 - [ ] Full contact/email search integration
 - [ ] Browser tab search across Safari/Chrome/Firefox
 - [ ] Quick actions/macro support
@@ -121,7 +130,8 @@
 4. **Error handling** - limited user-facing error messages
 5. **Testing** - minimal automated test coverage
 6. **Documentation** - keep branch capabilities and setup docs aligned across platforms
-7. **Sync auth model** - current personal setup uses a shared bearer token; per-device revocation is still future work
+7. **Obsidian settings UX** - vault path currently belongs in config first; full settings UI still needed
+8. **Sync auth model** - current personal setup uses a shared bearer token; per-device revocation is still future work
 
 ## Success Metrics
 

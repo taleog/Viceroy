@@ -25,6 +25,7 @@ pub struct Settings {
     pub dismiss_on_click_away: bool,
     pub paste_after_restore: bool,
     pub sync: SyncSettings,
+    pub obsidian: ObsidianSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +47,15 @@ pub struct SyncSettings {
     pub auth_token: Option<String>,
     pub poll_interval_seconds: u64,
     pub mirror_clipboard: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObsidianSettings {
+    pub enabled: bool,
+    pub vault_path: Option<String>,
+    pub vault_name: Option<String>,
+    pub open_in_obsidian: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +81,7 @@ impl Default for Settings {
             dismiss_on_click_away: true,
             paste_after_restore: true,
             sync: SyncSettings::default(),
+            obsidian: ObsidianSettings::default(),
         }
     }
 }
@@ -96,6 +107,17 @@ impl Default for SyncSettings {
             auth_token: None,
             poll_interval_seconds: 15,
             mirror_clipboard: false,
+        }
+    }
+}
+
+impl Default for ObsidianSettings {
+    fn default() -> Self {
+        ObsidianSettings {
+            enabled: false,
+            vault_path: None,
+            vault_name: None,
+            open_in_obsidian: true,
         }
     }
 }
@@ -344,6 +366,23 @@ fn normalize_settings(settings: &mut Settings) -> bool {
         .clamp(MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS);
     if settings.sync.poll_interval_seconds != clamped_poll_interval {
         settings.sync.poll_interval_seconds = clamped_poll_interval;
+        changed = true;
+    }
+
+    let normalized_vault_path = normalize_optional_text(settings.obsidian.vault_path.as_deref());
+    if settings.obsidian.vault_path != normalized_vault_path {
+        settings.obsidian.vault_path = normalized_vault_path;
+        changed = true;
+    }
+
+    let normalized_vault_name = normalize_optional_text(settings.obsidian.vault_name.as_deref());
+    if settings.obsidian.vault_name != normalized_vault_name {
+        settings.obsidian.vault_name = normalized_vault_name;
+        changed = true;
+    }
+
+    if settings.obsidian.enabled && settings.obsidian.vault_path.is_none() {
+        settings.obsidian.enabled = false;
         changed = true;
     }
 

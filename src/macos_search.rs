@@ -209,6 +209,18 @@ pub fn build_search_rows(results: &[search_engine::SearchResult]) -> Vec<(String
                     rows.push((title, preview.chars().take(80).collect()));
                 }
             }
+            search_engine::SearchResult::Note {
+                title,
+                relative_path,
+                vault_name,
+                ..
+            } => {
+                let subtitle = vault_name
+                    .as_ref()
+                    .map(|vault| format!("{}  •  {}", vault, relative_path))
+                    .unwrap_or_else(|| relative_path.clone());
+                rows.push((title.clone(), subtitle));
+            }
             search_engine::SearchResult::Command {
                 name, description, ..
             } => {

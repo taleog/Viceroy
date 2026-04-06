@@ -775,6 +775,12 @@ pub unsafe fn register_table_delegate_class() {
                             icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
                             type_label_str = "Clipboard".to_string();
                         }
+                        search_engine::SearchResult::Note { relative_path, .. } => {
+                            subtitle = relative_path.clone();
+                            let symbol_name = NSString::alloc(nil).init_str("note.text");
+                            icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
+                            type_label_str = "Note".to_string();
+                        }
                         search_engine::SearchResult::Calculator { .. } => {
                             let symbol_name = NSString::alloc(nil).init_str("function");
                             icon_image = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
@@ -1264,6 +1270,36 @@ unsafe fn perform_result_action(index: usize, open_link_if_available: bool) -> b
         }
         search_engine::SearchResult::File { path, .. } => {
             let _ = app_launcher::open_file(&path);
+        }
+        search_engine::SearchResult::Note {
+            path,
+            vault_name,
+            ..
+        } => {
+            if open_link_if_available {
+                let _ = crate::obsidian::reveal_note_in_finder(&path);
+                hide_window_immediately();
+                return true;
+            }
+
+            let obsidian_settings = settings::load().ok().map(|s| s.obsidian);
+            if let Some(obsidian) = obsidian_settings {
+                if obsidian.open_in_obsidian {
+                    if let Some(vault_path) = obsidian.vault_path {
+                        let _ = crate::obsidian::open_note_in_obsidian(
+                            &path,
+                            &vault_path,
+                            vault_name.as_deref().or(obsidian.vault_name.as_deref()),
+                        );
+                    } else {
+                        let _ = app_launcher::open_file(&path);
+                    }
+                } else {
+                    let _ = app_launcher::open_file(&path);
+                }
+            } else {
+                let _ = app_launcher::open_file(&path);
+            }
         }
         search_engine::SearchResult::Clipboard {
             id,

@@ -4,8 +4,8 @@ use std::thread;
 use tokio::runtime::Runtime;
 use viceroy::search_engine::{self, SearchResult};
 use viceroy::{
-    app_launcher, clipboard, database, dictionary, sync, system_commands, updater, usage,
-    web_search,
+    app_launcher, clipboard, database, dictionary, obsidian, settings, sync, system_commands,
+    updater, usage, web_search,
 };
 
 pub fn run() {
@@ -211,6 +211,18 @@ fn render_result(result: &SearchResult) -> String {
             let title = custom_name.as_deref().unwrap_or(preview);
             format!("[clipboard:{content_type}] {title}")
         }
+        SearchResult::Note {
+            title,
+            relative_path,
+            vault_name,
+            ..
+        } => {
+            let vault_prefix = vault_name
+                .as_ref()
+                .map(|vault| format!("{vault}: "))
+                .unwrap_or_default();
+            format!("[note] {title} ({vault_prefix}{relative_path})")
+        }
         SearchResult::Command {
             name, description, ..
         } => format!("[command] {name} - {description}"),
@@ -264,6 +276,28 @@ fn execute_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Result<St
             app_launcher::open_file(path)?;
             Ok(format!("Opened {name}"))
         }
+        SearchResult::Note {
+            title,
+            path,
+            vault_name,
+            ..
+        } => {
+            let obsidian_settings = settings::load().unwrap_or_default().obsidian;
+            if obsidian_settings.open_in_obsidian {
+                if let Some(vault_path) = obsidian_settings.vault_path {
+                    obsidian::open_note_in_obsidian(
+                        path,
+                        &vault_path,
+                        vault_name.as_deref().or(obsidian_settings.vault_name.as_deref()),
+                    )?;
+                } else {
+                    app_launcher::open_file(path)?;
+                }
+            } else {
+                app_launcher::open_file(path)?;
+            }
+            Ok(format!("Opened note {title}"))
+        }
         SearchResult::Clipboard {
             id,
             content,
@@ -312,6 +346,10 @@ fn copy_result_payload(runtime: &Runtime, result: &SearchResult) -> anyhow::Resu
         SearchResult::App { path, .. } | SearchResult::File { path, .. } => {
             copy_text(path)?;
             Ok("Path copied to the clipboard".to_string())
+        }
+        SearchResult::Note { path, .. } => {
+            copy_text(path)?;
+            Ok("Note path copied to the clipboard".to_string())
         }
         SearchResult::Clipboard {
             id,
