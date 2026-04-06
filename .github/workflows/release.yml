@@ -56,7 +56,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -76,7 +76,7 @@ jobs:
           ./scripts/build_macos_dmg.sh "${{ needs.prepare.outputs.tag }}"
 
       - name: Upload macOS package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-macos-client
           path: dist/*
@@ -95,7 +95,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~\.cargo\registry
@@ -129,7 +129,7 @@ jobs:
             "$PWD\\scripts\\windows_installer.iss"
 
       - name: Upload Windows package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-windows-client
           path: dist/*
@@ -148,7 +148,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -184,7 +184,7 @@ jobs:
           tar -czf "dist/$ASSET" -C package .
 
       - name: Upload Linux server package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-linux-server
           path: dist/*
@@ -206,7 +206,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download packaged assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: dist
           merge-multiple: true
