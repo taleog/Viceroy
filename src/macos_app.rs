@@ -22,8 +22,7 @@ use log::{error, info};
 use std::ffi::{c_char, CStr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use ui::clipboard_view::{
-    create_clipboard_preview_view, show_clipboard_history_view,
-    update_clipboard_preview_selection,
+    create_clipboard_preview_view, show_clipboard_history_view, update_clipboard_preview_selection,
 };
 use ui::helpers::{scale_bounce_show, style};
 use ui::settings_view;
