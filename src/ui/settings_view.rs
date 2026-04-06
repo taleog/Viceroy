@@ -141,6 +141,26 @@ unsafe fn apply_settings_surface(view: id, background: id, corner_radius: f64, b
     let _: () = msg_send![layer, setBorderColor: border_cg];
 }
 
+unsafe fn style_segmented_control(control: id) {
+    let _: () = msg_send![control, setSegmentStyle: 4];
+    let _: () = msg_send![control, setControlSize: 1];
+    let _: () = msg_send![control, setFocusRingType: 0];
+
+    let accent: id = color_rgb(0.72, 0.74, 0.79);
+    let text_color: id = settings_white(0.92);
+    let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
+    let font: id = msg_send![class!(NSFont), systemFontOfSize:12.5 weight:0.52];
+    let _: () = msg_send![attrs, setObject: font forKey: NSString::alloc(nil).init_str("NSFont")];
+    let _: () = msg_send![attrs, setObject: text_color forKey: NSString::alloc(nil).init_str("NSColor")];
+    let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("General") forSegment: 0];
+    let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("Behavior") forSegment: 1];
+    let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("Obsidian") forSegment: 2];
+    let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("Sync") forSegment: 3];
+    let _: () = msg_send![control, setContentTintColor: accent];
+    let _: () = msg_send![control, setTitleTextAttributes: attrs forState: 0usize];
+    let _: () = msg_send![control, setTitleTextAttributes: attrs forState: 1usize];
+}
+
 unsafe fn set_button_title(button: id, title: &str, size: f64, weight: f64, alpha: f64) {
     let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
     let font: id = msg_send![class!(NSFont), systemFontOfSize:size weight:weight];
@@ -283,29 +303,9 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let tab_control: id = msg_send![class!(NSSegmentedControl), alloc];
     let tab_control: id = msg_send![tab_control, initWithFrame: tab_control_frame];
     let _: () = msg_send![tab_control, setSegmentCount: 4];
-    let _: () = msg_send![
-        tab_control,
-        setLabel: NSString::alloc(nil).init_str("General")
-        forSegment: 0
-    ];
-    let _: () = msg_send![
-        tab_control,
-        setLabel: NSString::alloc(nil).init_str("Behavior")
-        forSegment: 1
-    ];
-    let _: () = msg_send![
-        tab_control,
-        setLabel: NSString::alloc(nil).init_str("Obsidian")
-        forSegment: 2
-    ];
-    let _: () = msg_send![
-        tab_control,
-        setLabel: NSString::alloc(nil).init_str("Sync")
-        forSegment: 3
-    ];
     let _: () = msg_send![tab_control, setTrackingMode: 0];
     let _: () = msg_send![tab_control, setSelectedSegment: SETTINGS_ACTIVE_TAB.load(Ordering::SeqCst) as isize];
-    let _: () = msg_send![tab_control, setControlSize: 1];
+    style_segmented_control(tab_control);
     let _: () = msg_send![tab_control, setTarget: target];
     let _: () = msg_send![tab_control, setAction: sel!(changeSettingsTab:)];
 
