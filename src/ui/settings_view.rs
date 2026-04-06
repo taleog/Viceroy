@@ -1,4 +1,3 @@
-use cocoa::appkit::NSApp;
 use cocoa::base::{id, nil, NO, YES};
 use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc::declare::ClassDecl;
@@ -142,23 +141,12 @@ unsafe fn apply_settings_surface(view: id, background: id, corner_radius: f64, b
 }
 
 unsafe fn style_segmented_control(control: id) {
-    let _: () = msg_send![control, setSegmentStyle: 4];
     let _: () = msg_send![control, setControlSize: 1];
     let _: () = msg_send![control, setFocusRingType: 0];
-
-    let accent: id = color_rgb(0.72, 0.74, 0.79);
-    let text_color: id = settings_white(0.92);
-    let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
-    let font: id = msg_send![class!(NSFont), systemFontOfSize:12.5 weight:0.52];
-    let _: () = msg_send![attrs, setObject: font forKey: NSString::alloc(nil).init_str("NSFont")];
-    let _: () = msg_send![attrs, setObject: text_color forKey: NSString::alloc(nil).init_str("NSColor")];
     let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("General") forSegment: 0];
     let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("Behavior") forSegment: 1];
     let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("Obsidian") forSegment: 2];
     let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("Sync") forSegment: 3];
-    let _: () = msg_send![control, setContentTintColor: accent];
-    let _: () = msg_send![control, setTitleTextAttributes: attrs forState: 0usize];
-    let _: () = msg_send![control, setTitleTextAttributes: attrs forState: 1usize];
 }
 
 unsafe fn set_button_title(button: id, title: &str, size: f64, weight: f64, alpha: f64) {
@@ -1427,17 +1415,7 @@ unsafe fn choose_obsidian_vault_folder() -> Option<String> {
     let _: () = msg_send![panel, setCanChooseDirectories: YES];
     let _: () = msg_send![panel, setAllowsMultipleSelection: NO];
     let _: () = msg_send![panel, setCanCreateDirectories: YES];
-
-    let app: id = NSApp();
-    let key_window: id = if app != nil { msg_send![app, keyWindow] } else { nil };
-    let main_window: id = if app != nil { msg_send![app, mainWindow] } else { nil };
-    let host_window = if key_window != nil { key_window } else { main_window };
-
-    let response: i64 = if host_window != nil {
-        msg_send![panel, runModalForWindow: host_window]
-    } else {
-        msg_send![panel, runModal]
-    };
+    let response: i64 = msg_send![panel, runModal];
     if response != 1 {
         return None;
     }
