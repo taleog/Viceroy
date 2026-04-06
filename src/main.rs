@@ -13,6 +13,8 @@ mod emoji;
 #[cfg(target_os = "macos")]
 mod file_search;
 #[cfg(target_os = "macos")]
+mod obsidian;
+#[cfg(target_os = "macos")]
 mod macos_app;
 #[cfg(target_os = "macos")]
 mod macos_search;

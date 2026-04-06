@@ -22,6 +22,7 @@ use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 
 use crate::app_launcher;
+use crate::obsidian;
 use crate::ui::clipboard_view::{
     icon_for_history_entry, refresh_clipboard_preview_layout, shows_remote_badge_for_history_entry,
     update_clipboard_preview_selection,
@@ -1277,7 +1278,7 @@ unsafe fn perform_result_action(index: usize, open_link_if_available: bool) -> b
             ..
         } => {
             if open_link_if_available {
-                let _ = crate::obsidian::reveal_note_in_finder(&path);
+                let _ = obsidian::reveal_note_in_finder(&path);
                 hide_window_immediately();
                 return true;
             }
@@ -1286,7 +1287,7 @@ unsafe fn perform_result_action(index: usize, open_link_if_available: bool) -> b
             if let Some(obsidian) = obsidian_settings {
                 if obsidian.open_in_obsidian {
                     if let Some(vault_path) = obsidian.vault_path {
-                        let _ = crate::obsidian::open_note_in_obsidian(
+                        let _ = obsidian::open_note_in_obsidian(
                             &path,
                             &vault_path,
                             vault_name.as_deref().or(obsidian.vault_name.as_deref()),
