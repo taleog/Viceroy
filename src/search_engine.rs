@@ -325,32 +325,15 @@ async fn run_search(
     );
 
     // Detect query intent
-    let query_lower = query.to_lowercase();
-    let is_file_query = query.contains('.')
-        && (query.contains('/')
-            || query_lower.ends_with(".txt")
-            || query_lower.ends_with(".md")
-            || query_lower.ends_with(".pdf")
-            || query_lower.ends_with(".rs")
-            || query_lower.ends_with(".js")
-            || query_lower.ends_with(".py"));
-    let is_url = direct_link.is_some();
-    let is_short_query = query.len() <= 3;
-
-    let query_context = QueryContext {
-        is_file_query,
-        is_url,
-        is_short_query,
-        length: query.len(),
-    };
+    let query_context = QueryContext::from_query(query, direct_link.is_some());
 
     // Cap results per category to ensure diversity
     let max_per_category = if mode == SearchMode::All {
-        if is_short_query {
+        if query_context.is_short_query {
             (10, 3, 2) // (apps, files, clipboard) - apps dominate for short queries
-        } else if is_file_query {
+        } else if query_context.is_file_query {
             (5, 15, 3) // files dominate for file queries
-        } else if is_url {
+        } else if query_context.is_url {
             (3, 3, 10) // clipboard dominates for URLs
         } else {
             (8, 8, 5) // balanced
@@ -446,6 +429,101 @@ struct QueryContext {
     is_url: bool,
     is_short_query: bool,
     length: usize,
+}
+
+impl QueryContext {
+    fn from_query(query: &str, is_url: bool) -> Self {
+        let trimmed = query.trim();
+        let trimmed_lower = trimmed.to_lowercase();
+        let length = trimmed.chars().count();
+
+        Self {
+            is_file_query: looks_like_file_query(trimmed, &trimmed_lower),
+            is_url,
+            is_short_query: length <= 3,
+            length,
+        }
+    }
+}
+
+fn looks_like_file_query(query: &str, _query_lower: &str) -> bool {
+    if query.is_empty() {
+        return false;
+    }
+
+    if query.contains('/') || query.contains('\\') || query.starts_with('~') {
+        return true;
+    }
+
+    let last_segment = query
+        .rsplit(|ch| ch == '/' || ch == '\\')
+        .next()
+        .unwrap_or(query)
+        .trim();
+    if last_segment.is_empty() {
+        return false;
+    }
+
+    let lower_segment = last_segment.to_lowercase();
+    let stem = lower_segment
+        .rsplit_once('.')
+        .map(|(name, _)| name)
+        .unwrap_or(lower_segment.as_str());
+
+    if lower_segment.starts_with('.') && !lower_segment[1..].contains('.') {
+        return true;
+    }
+
+    if let Some((name, ext)) = lower_segment.rsplit_once('.') {
+        let ext_len = ext.len();
+        if !name.is_empty()
+            && (1..=8).contains(&ext_len)
+            && ext.chars().all(|c| c.is_ascii_alphanumeric())
+            && !matches!(
+                ext,
+                "com"
+                    | "net"
+                    | "org"
+                    | "dev"
+                    | "app"
+                    | "ai"
+                    | "gg"
+                    | "io"
+                    | "me"
+                    | "ca"
+                    | "uk"
+                    | "co"
+            )
+        {
+            return true;
+        }
+    }
+
+    let file_hints = [
+        "cargo.toml",
+        "cargo.lock",
+        "package.json",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "dockerfile",
+        "compose.yml",
+        "compose.yaml",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "makefile",
+        "readme",
+        "readme.md",
+        ".env",
+        ".gitignore",
+        ".zshrc",
+        ".bashrc",
+        ".bash_profile",
+        "tsconfig",
+        "tsconfig.json",
+    ];
+
+    file_hints.contains(&lower_segment.as_str()) || file_hints.contains(&stem)
 }
 
 fn score_and_sort(
@@ -875,7 +953,7 @@ mod tests {
             is_file_query,
             is_url,
             is_short_query,
-            length: query.len(),
+            length: query.chars().count(),
         }
     }
 
@@ -968,5 +1046,32 @@ mod tests {
             result,
             SearchResult::Link { host, .. } if host == "example.com"
         )));
+    }
+
+    #[test]
+    fn query_context_marks_common_file_names_as_file_queries() {
+        let ctx = QueryContext::from_query("Cargo.toml", false);
+        assert!(ctx.is_file_query);
+        assert!(!ctx.is_url);
+        assert!(!ctx.is_short_query);
+    }
+
+    #[test]
+    fn query_context_marks_hidden_dotfiles_as_file_queries() {
+        let ctx = QueryContext::from_query(".env", false);
+        assert!(ctx.is_file_query);
+    }
+
+    #[test]
+    fn query_context_marks_paths_as_file_queries() {
+        let ctx = QueryContext::from_query("src/search_engine.rs", false);
+        assert!(ctx.is_file_query);
+    }
+
+    #[test]
+    fn query_context_does_not_treat_domains_as_file_queries() {
+        let ctx = QueryContext::from_query("example.com", true);
+        assert!(!ctx.is_file_query);
+        assert!(ctx.is_url);
     }
 }
