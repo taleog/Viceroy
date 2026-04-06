@@ -21,7 +21,8 @@ static SETTINGS_ACTIVE_TAB: AtomicUsize = AtomicUsize::new(0);
 
 const SETTINGS_TAB_GENERAL: usize = 0;
 const SETTINGS_TAB_BEHAVIOR: usize = 1;
-const SETTINGS_TAB_SYNC: usize = 2;
+const SETTINGS_TAB_OBSIDIAN: usize = 2;
+const SETTINGS_TAB_SYNC: usize = 3;
 const SETTINGS_CARD_RADIUS: f64 = 22.0;
 const SETTINGS_GROUP_RADIUS: f64 = 16.0;
 const SETTINGS_SECTION_INSET: f64 = 24.0;
@@ -32,6 +33,7 @@ struct SettingsControls {
     tab_control: usize,
     general_card: usize,
     behavior_card: usize,
+    obsidian_card: usize,
     sync_card: usize,
     hotkey_field: usize,
     max_slider: usize,
@@ -39,6 +41,11 @@ struct SettingsControls {
     toggle_paste_after_restore: usize,
     toggle_escape: usize,
     toggle_click: usize,
+    obsidian_enabled_toggle: usize,
+    obsidian_open_in_obsidian_toggle: usize,
+    obsidian_vault_path_field: usize,
+    obsidian_vault_name_field: usize,
+    obsidian_status_label: usize,
     sync_enabled_toggle: usize,
     sync_mirror_clipboard_toggle: usize,
     sync_device_name_field: usize,
@@ -274,7 +281,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let tab_control_frame = NSRect::new(NSPoint::new(4.0, 6.0), NSSize::new(306.0, 28.0));
     let tab_control: id = msg_send![class!(NSSegmentedControl), alloc];
     let tab_control: id = msg_send![tab_control, initWithFrame: tab_control_frame];
-    let _: () = msg_send![tab_control, setSegmentCount: 3];
+    let _: () = msg_send![tab_control, setSegmentCount: 4];
     let _: () = msg_send![
         tab_control,
         setLabel: NSString::alloc(nil).init_str("General")
@@ -287,8 +294,13 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     ];
     let _: () = msg_send![
         tab_control,
-        setLabel: NSString::alloc(nil).init_str("Sync")
+        setLabel: NSString::alloc(nil).init_str("Obsidian")
         forSegment: 2
+    ];
+    let _: () = msg_send![
+        tab_control,
+        setLabel: NSString::alloc(nil).init_str("Sync")
+        forSegment: 3
     ];
     let _: () = msg_send![tab_control, setTrackingMode: 1];
     let _: () = msg_send![tab_control, setSelectedSegment: SETTINGS_ACTIVE_TAB.load(Ordering::SeqCst) as isize];
@@ -301,7 +313,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
         tab_shell,
         initWithFrame: NSRect::new(
             NSPoint::new(card_margin - 4.0, height - 156.0),
-            NSSize::new(314.0, 40.0)
+            NSSize::new(410.0, 40.0)
         )
     ];
     apply_settings_surface(
@@ -467,6 +479,134 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![behavior_card, addSubview: paste_toggle];
     let _: () = msg_send![behavior_card, addSubview: esc_toggle];
     let _: () = msg_send![behavior_card, addSubview: click_toggle];
+
+    // Obsidian card
+    let obsidian_card_height = 334.0;
+    let obsidian_card_y = (card_top - obsidian_card_height).max(card_margin);
+    let obsidian_card: id = msg_send![class!(NSView), alloc];
+    let obsidian_card: id = msg_send![obsidian_card, initWithFrame:NSRect::new(NSPoint::new(card_margin, obsidian_card_y), NSSize::new(card_width, obsidian_card_height))];
+    let _: () = msg_send![obsidian_card, setWantsLayer: YES];
+    let obsidian_layer: id = msg_send![obsidian_card, layer];
+    let obsidian_bg: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:0.11f64 alpha:0.84f64];
+    let obsidian_bg_cg: id = msg_send![obsidian_bg, CGColor];
+    let _: () = msg_send![obsidian_layer, setCornerRadius: SETTINGS_CARD_RADIUS];
+    let _: () = msg_send![obsidian_layer, setBackgroundColor: obsidian_bg_cg];
+    let _: () = msg_send![obsidian_layer, setBorderWidth: 1.0f64];
+    let obsidian_border: id =
+        msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.08f64];
+    let obsidian_border_cg: id = msg_send![obsidian_border, CGColor];
+    let _: () = msg_send![obsidian_layer, setBorderColor: obsidian_border_cg];
+
+    let obsidian_heading: id = msg_send![class!(NSTextField), alloc];
+    let obsidian_heading: id = msg_send![obsidian_heading, initWithFrame:NSRect::new(NSPoint::new(card_inset, obsidian_card_height - card_inset - 24.0), NSSize::new(card_width - card_inset * 2.0, 22.0))];
+    let _: () = msg_send![obsidian_heading, setBezeled: NO];
+    let _: () = msg_send![obsidian_heading, setEditable: NO];
+    let _: () = msg_send![obsidian_heading, setDrawsBackground: NO];
+    let _: () = msg_send![obsidian_heading, setBordered: NO];
+    let _: () = msg_send![obsidian_heading, setFont: general_font];
+    let _: () = msg_send![obsidian_heading, setTextColor: heading_color];
+    let _: () = msg_send![
+        obsidian_heading,
+        setStringValue: NSString::alloc(nil).init_str("Obsidian vault")
+    ];
+
+    let obsidian_caption: id = msg_send![class!(NSTextField), alloc];
+    let obsidian_caption: id = msg_send![obsidian_caption, initWithFrame:NSRect::new(NSPoint::new(card_inset, obsidian_card_height - card_inset - 48.0), NSSize::new(card_width - card_inset * 2.0, 18.0))];
+    let _: () = msg_send![obsidian_caption, setBezeled: NO];
+    let _: () = msg_send![obsidian_caption, setEditable: NO];
+    let _: () = msg_send![obsidian_caption, setDrawsBackground: NO];
+    let _: () = msg_send![obsidian_caption, setBordered: NO];
+    let _: () = msg_send![obsidian_caption, setFont: caption_font];
+    let _: () = msg_send![obsidian_caption, setTextColor: caption_color];
+    let _: () = msg_send![
+        obsidian_caption,
+        setStringValue: NSString::alloc(nil).init_str("Choose a vault so notes show up as first-class search results with note-specific actions.")
+    ];
+
+    let obsidian_enabled_toggle: id = msg_send![class!(NSButton), alloc];
+    let obsidian_enabled_toggle: id = msg_send![obsidian_enabled_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 224.0), NSSize::new(card_width - card_inset * 2.0, 28.0))];
+    style_toggle(obsidian_enabled_toggle, "Enable Obsidian note search");
+    let _: () = msg_send![obsidian_enabled_toggle, setTarget: target];
+    let _: () = msg_send![obsidian_enabled_toggle, setAction: sel!(toggleSetting:)];
+
+    let obsidian_open_toggle: id = msg_send![class!(NSButton), alloc];
+    let obsidian_open_toggle: id = msg_send![obsidian_open_toggle, initWithFrame:NSRect::new(NSPoint::new(card_inset, 188.0), NSSize::new(card_width - card_inset * 2.0, 28.0))];
+    style_toggle(
+        obsidian_open_toggle,
+        "Open note results in Obsidian when possible",
+    );
+    let _: () = msg_send![obsidian_open_toggle, setTarget: target];
+    let _: () = msg_send![obsidian_open_toggle, setAction: sel!(toggleSetting:)];
+
+    let obsidian_path_label: id = msg_send![class!(NSTextField), alloc];
+    let obsidian_path_label: id = msg_send![obsidian_path_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 152.0), NSSize::new(card_width - card_inset * 2.0, 20.0))];
+    let _: () = msg_send![obsidian_path_label, setBezeled: NO];
+    let _: () = msg_send![obsidian_path_label, setEditable: NO];
+    let _: () = msg_send![obsidian_path_label, setDrawsBackground: NO];
+    let _: () = msg_send![obsidian_path_label, setBordered: NO];
+    let _: () = msg_send![obsidian_path_label, setFont: caption_font];
+    let _: () = msg_send![obsidian_path_label, setTextColor: caption_color];
+    let _: () =
+        msg_send![obsidian_path_label, setStringValue: NSString::alloc(nil).init_str("Vault folder")];
+
+    let obsidian_path_field_width = card_width - card_inset * 2.0 - 214.0;
+    let obsidian_vault_path_field: id = msg_send![class!(NSTextField), alloc];
+    let obsidian_vault_path_field: id = msg_send![obsidian_vault_path_field, initWithFrame:NSRect::new(NSPoint::new(card_inset, 116.0), NSSize::new(obsidian_path_field_width, 30.0))];
+    style_input(obsidian_vault_path_field, true, true, false);
+
+    let choose_vault_button: id = msg_send![class!(NSButton), alloc];
+    let choose_vault_button: id = msg_send![choose_vault_button, initWithFrame:NSRect::new(NSPoint::new(card_width - card_inset - 202.0, 116.0), NSSize::new(96.0, 30.0))];
+    style_action_button(choose_vault_button, "Choose", false);
+    let _: () = msg_send![choose_vault_button, setTarget: target];
+    let _: () = msg_send![choose_vault_button, setAction: sel!(chooseObsidianVault:)];
+
+    let clear_vault_button: id = msg_send![class!(NSButton), alloc];
+    let clear_vault_button: id = msg_send![clear_vault_button, initWithFrame:NSRect::new(NSPoint::new(card_width - card_inset - 98.0, 116.0), NSSize::new(96.0, 30.0))];
+    style_action_button(clear_vault_button, "Clear", false);
+    let _: () = msg_send![clear_vault_button, setTarget: target];
+    let _: () = msg_send![clear_vault_button, setAction: sel!(clearObsidianVault:)];
+
+    let obsidian_name_label: id = msg_send![class!(NSTextField), alloc];
+    let obsidian_name_label: id = msg_send![obsidian_name_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 82.0), NSSize::new(card_width - card_inset * 2.0, 20.0))];
+    let _: () = msg_send![obsidian_name_label, setBezeled: NO];
+    let _: () = msg_send![obsidian_name_label, setEditable: NO];
+    let _: () = msg_send![obsidian_name_label, setDrawsBackground: NO];
+    let _: () = msg_send![obsidian_name_label, setBordered: NO];
+    let _: () = msg_send![obsidian_name_label, setFont: caption_font];
+    let _: () = msg_send![obsidian_name_label, setTextColor: caption_color];
+    let _: () = msg_send![
+        obsidian_name_label,
+        setStringValue: NSString::alloc(nil).init_str("Vault name override (optional)")
+    ];
+
+    let obsidian_vault_name_field: id = msg_send![class!(NSTextField), alloc];
+    let obsidian_vault_name_field: id = msg_send![obsidian_vault_name_field, initWithFrame:NSRect::new(NSPoint::new(card_inset, 46.0), NSSize::new(card_width - card_inset * 2.0, 30.0))];
+    style_input(obsidian_vault_name_field, true, true, false);
+
+    let obsidian_status_label: id = msg_send![class!(NSTextField), alloc];
+    let obsidian_status_label: id = msg_send![obsidian_status_label, initWithFrame:NSRect::new(NSPoint::new(card_inset, 10.0), NSSize::new(card_width - card_inset * 2.0, 30.0))];
+    let _: () = msg_send![obsidian_status_label, setBezeled: NO];
+    let _: () = msg_send![obsidian_status_label, setEditable: NO];
+    let _: () = msg_send![obsidian_status_label, setDrawsBackground: NO];
+    let _: () = msg_send![obsidian_status_label, setBordered: NO];
+    let _: () = msg_send![obsidian_status_label, setSelectable: NO];
+    let _: () = msg_send![obsidian_status_label, setUsesSingleLineMode: NO];
+    let _: () = msg_send![obsidian_status_label, setLineBreakMode: 4];
+    let _: () = msg_send![obsidian_status_label, setFont: caption_font];
+    let _: () = msg_send![obsidian_status_label, setTextColor: color_rgb(0.51, 0.76, 1.0)];
+
+    let _: () = msg_send![obsidian_card, addSubview: obsidian_heading];
+    let _: () = msg_send![obsidian_card, addSubview: obsidian_caption];
+    let _: () = msg_send![obsidian_card, addSubview: obsidian_enabled_toggle];
+    let _: () = msg_send![obsidian_card, addSubview: obsidian_open_toggle];
+    let _: () = msg_send![obsidian_card, addSubview: obsidian_path_label];
+    let _: () = msg_send![obsidian_card, addSubview: obsidian_vault_path_field];
+    let _: () = msg_send![obsidian_card, addSubview: choose_vault_button];
+    let _: () = msg_send![obsidian_card, addSubview: clear_vault_button];
+    let _: () = msg_send![obsidian_card, addSubview: obsidian_name_label];
+    let _: () = msg_send![obsidian_card, addSubview: obsidian_vault_name_field];
+    let _: () = msg_send![obsidian_card, addSubview: obsidian_status_label];
 
     // Sync card
     let sync_card_height = 466.0;
@@ -779,6 +919,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![panel, addSubview: tab_shell];
     let _: () = msg_send![panel, addSubview: general_card];
     let _: () = msg_send![panel, addSubview: behavior_card];
+    let _: () = msg_send![panel, addSubview: obsidian_card];
     let _: () = msg_send![panel, addSubview: sync_card];
     let _: () = msg_send![footer, addSubview: button];
     let _: () = msg_send![footer, addSubview: save_button];
@@ -787,6 +928,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
         tab_control: tab_control as usize,
         general_card: general_card as usize,
         behavior_card: behavior_card as usize,
+        obsidian_card: obsidian_card as usize,
         sync_card: sync_card as usize,
         hotkey_field: hotkey_field as usize,
         max_slider: max_slider as usize,
@@ -794,6 +936,11 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
         toggle_paste_after_restore: paste_toggle as usize,
         toggle_escape: esc_toggle as usize,
         toggle_click: click_toggle as usize,
+        obsidian_enabled_toggle: obsidian_enabled_toggle as usize,
+        obsidian_open_in_obsidian_toggle: obsidian_open_toggle as usize,
+        obsidian_vault_path_field: obsidian_vault_path_field as usize,
+        obsidian_vault_name_field: obsidian_vault_name_field as usize,
+        obsidian_status_label: obsidian_status_label as usize,
         sync_enabled_toggle: sync_enabled_toggle as usize,
         sync_mirror_clipboard_toggle: sync_mirror_toggle as usize,
         sync_device_name_field: sync_device_name_field as usize,
@@ -836,6 +983,29 @@ fn populate_controls_from_settings() {
                 ];
                 let _: () = msg_send![id_from(controls.toggle_escape), setState: esc_state];
                 let _: () = msg_send![id_from(controls.toggle_click), setState: click_state];
+                let obsidian_enabled_state: i64 = if settings.obsidian.enabled { 1 } else { 0 };
+                let obsidian_open_state: i64 = if settings.obsidian.open_in_obsidian { 1 } else { 0 };
+                let _: () = msg_send![
+                    id_from(controls.obsidian_enabled_toggle),
+                    setState: obsidian_enabled_state
+                ];
+                let _: () = msg_send![
+                    id_from(controls.obsidian_open_in_obsidian_toggle),
+                    setState: obsidian_open_state
+                ];
+                set_string(
+                    id_from(controls.obsidian_vault_path_field),
+                    settings.obsidian.vault_path.as_deref().unwrap_or(""),
+                );
+                set_string(
+                    id_from(controls.obsidian_vault_name_field),
+                    settings.obsidian.vault_name.as_deref().unwrap_or(""),
+                );
+                set_obsidian_message(if settings.obsidian.enabled {
+                    "Obsidian note search is enabled. Save after changing the configured vault."
+                } else {
+                    "Choose a vault folder to enable Obsidian note search."
+                });
                 let sync_enabled_state: i64 = if settings.sync.enabled { 1 } else { 0 };
                 let sync_mirror_state: i64 = if settings.sync.mirror_clipboard { 1 } else { 0 };
                 let _: () =
@@ -921,6 +1091,10 @@ unsafe fn apply_active_settings_tab() {
         setHidden: if active == SETTINGS_TAB_BEHAVIOR { NO } else { YES }
     ];
     let _: () = msg_send![
+        id_from(controls.obsidian_card),
+        setHidden: if active == SETTINGS_TAB_OBSIDIAN { NO } else { YES }
+    ];
+    let _: () = msg_send![
         id_from(controls.sync_card),
         setHidden: if active == SETTINGS_TAB_SYNC { NO } else { YES }
     ];
@@ -934,6 +1108,7 @@ pub unsafe fn focus_active_settings_control(window: id) {
     let first_responder = match SETTINGS_ACTIVE_TAB.load(Ordering::SeqCst) {
         SETTINGS_TAB_GENERAL => id_from(controls.hotkey_field),
         SETTINGS_TAB_BEHAVIOR => id_from(controls.max_slider),
+        SETTINGS_TAB_OBSIDIAN => id_from(controls.obsidian_vault_path_field),
         SETTINGS_TAB_SYNC => id_from(controls.sync_device_name_field),
         _ => id_from(controls.tab_control),
     };
@@ -957,13 +1132,31 @@ unsafe fn apply_settings_from_ui() {
         let paste_state: i16 = msg_send![id_from(controls.toggle_paste_after_restore), state];
         let esc_state: i16 = msg_send![id_from(controls.toggle_escape), state];
         let click_state: i16 = msg_send![id_from(controls.toggle_click), state];
+        let obsidian_enabled_state: i16 =
+            msg_send![id_from(controls.obsidian_enabled_toggle), state];
+        let obsidian_open_state: i16 =
+            msg_send![id_from(controls.obsidian_open_in_obsidian_toggle), state];
         let sync_enabled_state: i16 = msg_send![id_from(controls.sync_enabled_toggle), state];
         let sync_mirror_state: i16 =
             msg_send![id_from(controls.sync_mirror_clipboard_toggle), state];
+        let obsidian_enabled = obsidian_enabled_state == 1;
+        let obsidian_vault_path = get_string(id_from(controls.obsidian_vault_path_field));
+        let obsidian_vault_name = get_string(id_from(controls.obsidian_vault_name_field));
         let sync_enabled = sync_enabled_state == 1;
         let sync_device_name = get_string(id_from(controls.sync_device_name_field));
         let sync_server_url_input = get_string(id_from(controls.sync_server_url_field));
         let sync_auth_token = get_string(id_from(controls.sync_auth_token_field));
+        let prepared_obsidian = match settings::prepare_obsidian_settings(
+            obsidian_enabled,
+            &obsidian_vault_path,
+            &obsidian_vault_name,
+        ) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                set_obsidian_message(&format!("{err:#}"));
+                return;
+            }
+        };
         let old_enabled = current_settings.sync.enabled;
         let old_server_url = current_settings.sync.server_url.clone().unwrap_or_default();
         let old_auth_token = current_settings.sync.auth_token.clone().unwrap_or_default();
@@ -984,6 +1177,10 @@ unsafe fn apply_settings_from_ui() {
         current_settings.paste_after_restore = paste_state == 1;
         current_settings.dismiss_on_escape = esc_state == 1;
         current_settings.dismiss_on_click_away = click_state == 1;
+        current_settings.obsidian.enabled = obsidian_enabled;
+        current_settings.obsidian.vault_path = prepared_obsidian.vault_path;
+        current_settings.obsidian.vault_name = prepared_obsidian.vault_name;
+        current_settings.obsidian.open_in_obsidian = obsidian_open_state == 1;
         current_settings.sync.enabled = sync_enabled;
         current_settings.sync.mirror_clipboard = sync_mirror_state == 1;
         current_settings.sync.device_name = prepared_sync.device_name;
@@ -1024,6 +1221,29 @@ unsafe fn apply_settings_from_ui() {
             id_from(controls.sync_auth_token_field),
             current_settings.sync.auth_token.as_deref().unwrap_or(""),
         );
+        set_string(
+            id_from(controls.obsidian_vault_path_field),
+            current_settings.obsidian.vault_path.as_deref().unwrap_or(""),
+        );
+        set_string(
+            id_from(controls.obsidian_vault_name_field),
+            current_settings.obsidian.vault_name.as_deref().unwrap_or(""),
+        );
+        let obsidian_enabled_state: i64 = if current_settings.obsidian.enabled { 1 } else { 0 };
+        let obsidian_open_state: i64 = if current_settings.obsidian.open_in_obsidian { 1 } else { 0 };
+        let _: () = msg_send![
+            id_from(controls.obsidian_enabled_toggle),
+            setState: obsidian_enabled_state
+        ];
+        let _: () = msg_send![
+            id_from(controls.obsidian_open_in_obsidian_toggle),
+            setState: obsidian_open_state
+        ];
+        set_obsidian_message(if current_settings.obsidian.enabled {
+            "Obsidian settings saved."
+        } else {
+            "Obsidian note search is off until you enable it again."
+        });
         match sync::init() {
             Ok(status) => {
                 set_sync_summary(&status);
@@ -1144,6 +1364,14 @@ unsafe fn set_sync_message(message: &str) {
     }
 }
 
+unsafe fn set_obsidian_message(message: &str) {
+    if let Some(controls) = SETTINGS_CONTROLS.get() {
+        let message_view = id_from(controls.obsidian_status_label);
+        set_string(message_view, message);
+        let _: () = msg_send![message_view, setTextColor: sync_message_color(message)];
+    }
+}
+
 unsafe fn id_from(ptr: usize) -> id {
     ptr as id
 }
@@ -1171,6 +1399,35 @@ fn non_empty(value: &str) -> Option<String> {
     } else {
         Some(value.to_string())
     }
+}
+
+unsafe fn choose_obsidian_vault_folder() -> Option<String> {
+    let panel: id = msg_send![class!(NSOpenPanel), openPanel];
+    let _: () = msg_send![panel, setCanChooseFiles: NO];
+    let _: () = msg_send![panel, setCanChooseDirectories: YES];
+    let _: () = msg_send![panel, setAllowsMultipleSelection: NO];
+    let _: () = msg_send![panel, setCanCreateDirectories: YES];
+    let response: i64 = msg_send![panel, runModal];
+    if response != 1 {
+        return None;
+    }
+
+    let url: id = msg_send![panel, URL];
+    if url == nil {
+        return None;
+    }
+
+    let path: id = msg_send![url, path];
+    if path == nil {
+        return None;
+    }
+
+    let cstr: *const c_char = msg_send![path, UTF8String];
+    if cstr.is_null() {
+        return None;
+    }
+
+    Some(CStr::from_ptr(cstr).to_string_lossy().to_string())
 }
 
 unsafe fn set_sync_summary(status: &sync::SyncStatus) {
@@ -1348,6 +1605,30 @@ unsafe fn register_action_class() -> id {
             }
         }
 
+        extern "C" fn choose_obsidian_vault_action(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                let Some(controls) = SETTINGS_CONTROLS.get() else {
+                    return;
+                };
+                if let Some(folder) = choose_obsidian_vault_folder() {
+                    set_string(id_from(controls.obsidian_vault_path_field), &folder);
+                    set_obsidian_message("Selected an Obsidian vault folder. Save to apply it.");
+                }
+            }
+        }
+
+        extern "C" fn clear_obsidian_vault_action(_this: &Object, _cmd: Sel, _sender: id) {
+            unsafe {
+                let Some(controls) = SETTINGS_CONTROLS.get() else {
+                    return;
+                };
+                set_string(id_from(controls.obsidian_vault_path_field), "");
+                set_string(id_from(controls.obsidian_vault_name_field), "");
+                let _: () = msg_send![id_from(controls.obsidian_enabled_toggle), setState: 0i64];
+                set_obsidian_message("Cleared the configured Obsidian vault. Save to apply it.");
+            }
+        }
+
         extern "C" fn save_settings_action(_this: &Object, _cmd: Sel, _sender: id) {
             unsafe {
                 apply_settings_from_ui();
@@ -1415,6 +1696,14 @@ unsafe fn register_action_class() -> id {
         decl.add_method(
             sel!(changeSettingsTab:),
             change_settings_tab as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(chooseObsidianVault:),
+            choose_obsidian_vault_action as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(clearObsidianVault:),
+            clear_obsidian_vault_action as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(
             sel!(saveSettings:),

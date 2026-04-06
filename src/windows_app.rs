@@ -2,6 +2,7 @@ use arboard::Clipboard;
 use eframe::egui::{self, Align, Key, Layout, RichText, ScrollArea, Slider, TextEdit};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -27,6 +28,7 @@ enum AppSurface {
 enum SettingsTab {
     General,
     Behavior,
+    Obsidian,
     Sync,
 }
 
@@ -318,6 +320,11 @@ struct ViceroyWindowsApp {
     sync_device_id: String,
     sync_server_url: String,
     sync_auth_token: String,
+    obsidian_enabled: bool,
+    obsidian_vault_path: String,
+    obsidian_vault_name: String,
+    obsidian_open_in_obsidian: bool,
+    obsidian_message: String,
     sync_status: Option<sync::SyncStatus>,
     sync_test_result: Option<sync::SyncConnectionTestResult>,
     sync_message: String,
@@ -354,6 +361,11 @@ impl ViceroyWindowsApp {
             sync_device_id: app_settings.sync.device_id.clone(),
             sync_server_url: app_settings.sync.server_url.unwrap_or_default(),
             sync_auth_token: app_settings.sync.auth_token.unwrap_or_default(),
+            obsidian_enabled: app_settings.obsidian.enabled,
+            obsidian_vault_path: app_settings.obsidian.vault_path.unwrap_or_default(),
+            obsidian_vault_name: app_settings.obsidian.vault_name.unwrap_or_default(),
+            obsidian_open_in_obsidian: app_settings.obsidian.open_in_obsidian,
+            obsidian_message: String::new(),
             sync_status: None,
             sync_test_result: None,
             sync_message: String::new(),
@@ -711,6 +723,17 @@ impl ViceroyWindowsApp {
                         return;
                     }
                 };
+                let prepared_obsidian = match settings::prepare_obsidian_settings(
+                    self.obsidian_enabled,
+                    &self.obsidian_vault_path,
+                    &self.obsidian_vault_name,
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(err) => {
+                        self.obsidian_message = format!("{err:#}");
+                        return;
+                    }
+                };
 
                 app_settings.hotkey = self.hotkey.trim().to_string();
                 app_settings.max_results = self.max_results.clamp(10, 200);
@@ -722,9 +745,15 @@ impl ViceroyWindowsApp {
                 app_settings.sync.device_name = prepared_sync.device_name.clone();
                 app_settings.sync.server_url = prepared_sync.server_url.clone();
                 app_settings.sync.auth_token = prepared_sync.auth_token.clone();
+                app_settings.obsidian.enabled = self.obsidian_enabled;
+                app_settings.obsidian.vault_path = prepared_obsidian.vault_path.clone();
+                app_settings.obsidian.vault_name = prepared_obsidian.vault_name.clone();
+                app_settings.obsidian.open_in_obsidian = self.obsidian_open_in_obsidian;
                 self.sync_device_name = prepared_sync.device_name;
                 self.sync_server_url = prepared_sync.server_url.unwrap_or_default();
                 self.sync_auth_token = prepared_sync.auth_token.unwrap_or_default();
+                self.obsidian_vault_path = prepared_obsidian.vault_path.unwrap_or_default();
+                self.obsidian_vault_name = prepared_obsidian.vault_name.unwrap_or_default();
 
                 if let Err(err) = settings::save(&app_settings) {
                     self.sync_message = format!("Failed to save settings: {err:#}");
@@ -748,6 +777,10 @@ impl ViceroyWindowsApp {
                 self.sync_device_name = app_settings.sync.device_name.clone();
                 self.sync_server_url = app_settings.sync.server_url.clone().unwrap_or_default();
                 self.sync_auth_token = app_settings.sync.auth_token.clone().unwrap_or_default();
+                self.obsidian_enabled = app_settings.obsidian.enabled;
+                self.obsidian_vault_path = app_settings.obsidian.vault_path.clone().unwrap_or_default();
+                self.obsidian_vault_name = app_settings.obsidian.vault_name.clone().unwrap_or_default();
+                self.obsidian_open_in_obsidian = app_settings.obsidian.open_in_obsidian;
                 match sync::init() {
                     Ok(status) => {
                         self.sync_status = Some(status.clone());
@@ -801,6 +834,20 @@ impl ViceroyWindowsApp {
                 } else {
                     self.sync_test_result = None;
                 }
+                let obsidian_label = if self.obsidian_vault_name.trim().is_empty() {
+                    Path::new(&self.obsidian_vault_path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("the selected vault")
+                        .to_string()
+                } else {
+                    self.obsidian_vault_name.trim().to_string()
+                };
+                self.obsidian_message = if self.obsidian_enabled {
+                    format!("Obsidian note search is ready for {obsidian_label}.")
+                } else {
+                    "Obsidian note search is off.".to_string()
+                };
                 self.status = "Settings saved.".to_string();
                 self.reload_items(true);
             }
@@ -1129,6 +1176,7 @@ impl ViceroyWindowsApp {
             for (tab, label) in [
                 (SettingsTab::General, "General"),
                 (SettingsTab::Behavior, "Behavior"),
+                (SettingsTab::Obsidian, "Obsidian"),
                 (SettingsTab::Sync, "Sync"),
             ] {
                 if ui
@@ -1187,6 +1235,80 @@ impl ViceroyWindowsApp {
                             &mut self.paste_after_restore,
                             "On macOS, paste immediately after restoring a clipboard item",
                         );
+                    }
+                    SettingsTab::Obsidian => {
+                        ui.label(windows_style::section_text("Obsidian Vault"));
+                        ui.label(windows_style::muted_text(
+                            "Point Viceroy at an Obsidian vault so notes show up as first-class results with note-aware open behavior.",
+                        ));
+                        ui.add_space(12.0);
+                        ui.checkbox(
+                            &mut self.obsidian_enabled,
+                            "Enable Obsidian note search",
+                        );
+                        ui.checkbox(
+                            &mut self.obsidian_open_in_obsidian,
+                            "Open note results in Obsidian when possible",
+                        );
+                        ui.add_space(8.0);
+                        ui.label(windows_style::muted_text("Vault folder"));
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [ui.available_width() - 104.0, 34.0],
+                                TextEdit::singleline(&mut self.obsidian_vault_path),
+                            );
+                            if ui.add(windows_style::ghost_button("Browse")).clicked() {
+                                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                    self.obsidian_vault_path = folder.display().to_string();
+                                    self.obsidian_message =
+                                        "Selected an Obsidian vault folder. Save to apply it."
+                                            .to_string();
+                                }
+                            }
+                        });
+                        ui.add_space(8.0);
+                        settings_field(
+                            ui,
+                            "Vault name (optional)",
+                            &mut self.obsidian_vault_name,
+                            false,
+                        );
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            let has_vault = !self.obsidian_vault_path.trim().is_empty();
+                            if ui
+                                .add_enabled(
+                                    has_vault,
+                                    windows_style::ghost_button("Open folder"),
+                                )
+                                .clicked()
+                            {
+                                match app_launcher::open_file(self.obsidian_vault_path.trim()) {
+                                    Ok(()) => {
+                                        self.obsidian_message =
+                                            "Opened the configured vault folder.".to_string();
+                                    }
+                                    Err(err) => {
+                                        self.obsidian_message =
+                                            format!("Failed to open the vault folder: {err:#}");
+                                    }
+                                }
+                            }
+                            if ui
+                                .add_enabled(has_vault, windows_style::ghost_button("Clear"))
+                                .clicked()
+                            {
+                                self.obsidian_vault_path.clear();
+                                self.obsidian_vault_name.clear();
+                                self.obsidian_enabled = false;
+                                self.obsidian_message =
+                                    "Cleared the configured Obsidian vault.".to_string();
+                            }
+                        });
+                        if !self.obsidian_message.is_empty() {
+                            ui.add_space(10.0);
+                            ui.label(windows_style::muted_text(&self.obsidian_message));
+                        }
                     }
                     SettingsTab::Sync => {
                         ui.label(windows_style::section_text("Cross-Device Sync"));

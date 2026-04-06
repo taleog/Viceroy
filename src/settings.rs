@@ -65,6 +65,12 @@ pub struct PreparedSyncSettings {
     pub auth_token: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedObsidianSettings {
+    pub vault_path: Option<String>,
+    pub vault_name: Option<String>,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -158,6 +164,34 @@ pub fn prepare_sync_settings(
         device_name,
         server_url,
         auth_token,
+    })
+}
+
+pub fn prepare_obsidian_settings(
+    enabled: bool,
+    vault_path_input: &str,
+    vault_name_input: &str,
+) -> Result<PreparedObsidianSettings> {
+    let vault_path = normalize_optional_text(Some(vault_path_input));
+    let vault_name = normalize_optional_text(Some(vault_name_input));
+
+    if enabled && vault_path.is_none() {
+        return Err(anyhow!("Choose an Obsidian vault before enabling note search."));
+    }
+
+    if let Some(path) = vault_path.as_deref() {
+        let vault = Path::new(path);
+        if !vault.exists() {
+            return Err(anyhow!("The selected Obsidian vault folder does not exist."));
+        }
+        if !vault.is_dir() {
+            return Err(anyhow!("The selected Obsidian vault path must be a folder."));
+        }
+    }
+
+    Ok(PreparedObsidianSettings {
+        vault_path,
+        vault_name,
     })
 }
 
@@ -458,8 +492,8 @@ fn invalid_settings_backup_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_from_path, parse_settings_content, prepare_sync_settings, save_to_path, Settings,
-        DEFAULT_HOTKEY,
+        load_from_path, parse_settings_content, prepare_obsidian_settings,
+        prepare_sync_settings, save_to_path, Settings, DEFAULT_HOTKEY,
     };
     use std::fs;
     use tempfile::tempdir;
@@ -615,5 +649,31 @@ mod tests {
             Some("http://sync.example.com")
         );
         assert_eq!(prepared.auth_token.as_deref(), Some("secret-token"));
+    }
+
+    #[test]
+    fn prepares_obsidian_settings_when_enabled_with_valid_vault() {
+        let dir = tempdir().expect("tempdir");
+        let prepared = prepare_obsidian_settings(
+            true,
+            &format!("  {}  ", dir.path().display()),
+            "  Work Vault  ",
+        )
+        .expect("prepare obsidian settings");
+
+        assert_eq!(
+            prepared.vault_path.as_deref(),
+            Some(dir.path().to_string_lossy().as_ref())
+        );
+        assert_eq!(prepared.vault_name.as_deref(), Some("Work Vault"));
+    }
+
+    #[test]
+    fn obsidian_settings_require_a_vault_when_enabled() {
+        let err = prepare_obsidian_settings(true, "   ", "").expect_err("expected error");
+
+        assert!(err
+            .to_string()
+            .contains("Choose an Obsidian vault before enabling note search."));
     }
 }
