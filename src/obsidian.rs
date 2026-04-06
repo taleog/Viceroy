@@ -82,7 +82,7 @@ pub fn reveal_note_in_finder(path: &str) -> Result<()> {
             .arg("-R")
             .arg(path)
             .spawn()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
