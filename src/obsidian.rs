@@ -30,7 +30,11 @@ const CACHE_TTL: Duration = Duration::from_secs(20);
 const MAX_SCAN_DEPTH: usize = 12;
 const MAX_NOTES: usize = 20_000;
 
-pub fn search_notes(query: &str, vault_path: &str, vault_name: Option<&str>) -> Result<Vec<NoteInfo>> {
+pub fn search_notes(
+    query: &str,
+    vault_path: &str,
+    vault_name: Option<&str>,
+) -> Result<Vec<NoteInfo>> {
     let notes = get_or_build_index(vault_path, vault_name)?;
     let query_lower = query.trim().to_lowercase();
     if query_lower.is_empty() {
@@ -91,7 +95,7 @@ fn open_target(target: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open").arg(target).spawn()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
@@ -99,13 +103,13 @@ fn open_target(target: &str) -> Result<()> {
         std::process::Command::new("cmd")
             .args(["/C", "start", "", target])
             .spawn()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     {
         std::process::Command::new("xdg-open").arg(target).spawn()?;
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -117,7 +121,9 @@ fn get_or_build_index(vault_path: &str, vault_name: Option<&str>) -> Result<Vec<
 
     if let Ok(cache) = NOTES_CACHE.lock() {
         if let Some(cache_entry) = cache.as_ref() {
-            if cache_entry.vault_path == normalized_vault_str && cache_entry.timestamp.elapsed() < CACHE_TTL {
+            if cache_entry.vault_path == normalized_vault_str
+                && cache_entry.timestamp.elapsed() < CACHE_TTL
+            {
                 return Ok(cache_entry.notes.clone());
             }
         }
@@ -137,9 +143,12 @@ fn get_or_build_index(vault_path: &str, vault_name: Option<&str>) -> Result<Vec<
 
 fn build_index(vault_path: &Path, vault_name: Option<&str>) -> Result<Vec<NoteInfo>> {
     let mut notes = Vec::new();
-    let derived_vault_name = vault_name
-        .map(|name| name.to_string())
-        .or_else(|| vault_path.file_name().and_then(|name| name.to_str()).map(|name| name.to_string()));
+    let derived_vault_name = vault_name.map(|name| name.to_string()).or_else(|| {
+        vault_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string())
+    });
 
     for entry in WalkDir::new(vault_path)
         .max_depth(MAX_SCAN_DEPTH)

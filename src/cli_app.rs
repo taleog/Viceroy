@@ -288,7 +288,9 @@ fn execute_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Result<St
                     obsidian::open_note_in_obsidian(
                         path,
                         &vault_path,
-                        vault_name.as_deref().or(obsidian_settings.vault_name.as_deref()),
+                        vault_name
+                            .as_deref()
+                            .or(obsidian_settings.vault_name.as_deref()),
                     )?;
                 } else {
                     app_launcher::open_file(path)?;

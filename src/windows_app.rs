@@ -10,8 +10,7 @@ use viceroy::search_engine::{self, SearchResult};
 use viceroy::{
     app_launcher,
     clipboard::{self, ClipboardEntry},
-    database, dictionary, obsidian, settings, sync, system_commands, updater, usage,
-    web_search,
+    database, dictionary, obsidian, settings, sync, system_commands, updater, usage, web_search,
 };
 
 use crate::windows_preview::{self, PreviewCard, PreviewPanelState, PreviewSource};
@@ -1712,7 +1711,9 @@ fn execute_search_result(runtime: &Runtime, result: &SearchResult) -> anyhow::Re
                     obsidian::open_note_in_obsidian(
                         path,
                         &vault_path,
-                        vault_name.as_deref().or(obsidian_settings.vault_name.as_deref()),
+                        vault_name
+                            .as_deref()
+                            .or(obsidian_settings.vault_name.as_deref()),
                     )?;
                 } else {
                     app_launcher::open_file(path)?;

@@ -299,9 +299,10 @@ async fn run_search(
                         if let Ok(Ok(notes)) = notes_result {
                             let matcher = SkimMatcherV2::default().ignore_case();
                             for note in notes {
-                                if let Some(score) = matcher
-                                    .fuzzy_match(&note.title, &query_clone)
-                                    .or_else(|| matcher.fuzzy_match(&note.relative_path, &query_clone))
+                                if let Some(score) =
+                                    matcher.fuzzy_match(&note.title, &query_clone).or_else(|| {
+                                        matcher.fuzzy_match(&note.relative_path, &query_clone)
+                                    })
                                 {
                                     results.push(SearchResult::Note {
                                         title: note.title,
@@ -504,11 +505,7 @@ fn looks_like_file_query(query: &str, _query_lower: &str) -> bool {
         return true;
     }
 
-    let last_segment = query
-        .rsplit(|ch| ch == '/' || ch == '\\')
-        .next()
-        .unwrap_or(query)
-        .trim();
+    let last_segment = query.rsplit(['/', '\\']).next().unwrap_or(query).trim();
     if last_segment.is_empty() {
         return false;
     }

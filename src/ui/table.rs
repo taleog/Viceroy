@@ -1273,9 +1273,7 @@ unsafe fn perform_result_action(index: usize, open_link_if_available: bool) -> b
             let _ = app_launcher::open_file(&path);
         }
         search_engine::SearchResult::Note {
-            path,
-            vault_name,
-            ..
+            path, vault_name, ..
         } => {
             if open_link_if_available {
                 let _ = obsidian::reveal_note_in_finder(&path);
