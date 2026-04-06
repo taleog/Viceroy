@@ -778,8 +778,10 @@ impl ViceroyWindowsApp {
                 self.sync_server_url = app_settings.sync.server_url.clone().unwrap_or_default();
                 self.sync_auth_token = app_settings.sync.auth_token.clone().unwrap_or_default();
                 self.obsidian_enabled = app_settings.obsidian.enabled;
-                self.obsidian_vault_path = app_settings.obsidian.vault_path.clone().unwrap_or_default();
-                self.obsidian_vault_name = app_settings.obsidian.vault_name.clone().unwrap_or_default();
+                self.obsidian_vault_path =
+                    app_settings.obsidian.vault_path.clone().unwrap_or_default();
+                self.obsidian_vault_name =
+                    app_settings.obsidian.vault_name.clone().unwrap_or_default();
                 self.obsidian_open_in_obsidian = app_settings.obsidian.open_in_obsidian;
                 match sync::init() {
                     Ok(status) => {

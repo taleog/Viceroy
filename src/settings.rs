@@ -176,16 +176,22 @@ pub fn prepare_obsidian_settings(
     let vault_name = normalize_optional_text(Some(vault_name_input));
 
     if enabled && vault_path.is_none() {
-        return Err(anyhow!("Choose an Obsidian vault before enabling note search."));
+        return Err(anyhow!(
+            "Choose an Obsidian vault before enabling note search."
+        ));
     }
 
     if let Some(path) = vault_path.as_deref() {
         let vault = Path::new(path);
         if !vault.exists() {
-            return Err(anyhow!("The selected Obsidian vault folder does not exist."));
+            return Err(anyhow!(
+                "The selected Obsidian vault folder does not exist."
+            ));
         }
         if !vault.is_dir() {
-            return Err(anyhow!("The selected Obsidian vault path must be a folder."));
+            return Err(anyhow!(
+                "The selected Obsidian vault path must be a folder."
+            ));
         }
     }
 
@@ -492,8 +498,8 @@ fn invalid_settings_backup_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_from_path, parse_settings_content, prepare_obsidian_settings,
-        prepare_sync_settings, save_to_path, Settings, DEFAULT_HOTKEY,
+        load_from_path, parse_settings_content, prepare_obsidian_settings, prepare_sync_settings,
+        save_to_path, Settings, DEFAULT_HOTKEY,
     };
     use std::fs;
     use tempfile::tempdir;

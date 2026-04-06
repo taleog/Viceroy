@@ -547,8 +547,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
     let _: () = msg_send![obsidian_path_label, setBordered: NO];
     let _: () = msg_send![obsidian_path_label, setFont: caption_font];
     let _: () = msg_send![obsidian_path_label, setTextColor: caption_color];
-    let _: () =
-        msg_send![obsidian_path_label, setStringValue: NSString::alloc(nil).init_str("Vault folder")];
+    let _: () = msg_send![obsidian_path_label, setStringValue: NSString::alloc(nil).init_str("Vault folder")];
 
     let obsidian_path_field_width = card_width - card_inset * 2.0 - 214.0;
     let obsidian_vault_path_field: id = msg_send![class!(NSTextField), alloc];
@@ -984,7 +983,11 @@ fn populate_controls_from_settings() {
                 let _: () = msg_send![id_from(controls.toggle_escape), setState: esc_state];
                 let _: () = msg_send![id_from(controls.toggle_click), setState: click_state];
                 let obsidian_enabled_state: i64 = if settings.obsidian.enabled { 1 } else { 0 };
-                let obsidian_open_state: i64 = if settings.obsidian.open_in_obsidian { 1 } else { 0 };
+                let obsidian_open_state: i64 = if settings.obsidian.open_in_obsidian {
+                    1
+                } else {
+                    0
+                };
                 let _: () = msg_send![
                     id_from(controls.obsidian_enabled_toggle),
                     setState: obsidian_enabled_state
@@ -1223,14 +1226,30 @@ unsafe fn apply_settings_from_ui() {
         );
         set_string(
             id_from(controls.obsidian_vault_path_field),
-            current_settings.obsidian.vault_path.as_deref().unwrap_or(""),
+            current_settings
+                .obsidian
+                .vault_path
+                .as_deref()
+                .unwrap_or(""),
         );
         set_string(
             id_from(controls.obsidian_vault_name_field),
-            current_settings.obsidian.vault_name.as_deref().unwrap_or(""),
+            current_settings
+                .obsidian
+                .vault_name
+                .as_deref()
+                .unwrap_or(""),
         );
-        let obsidian_enabled_state: i64 = if current_settings.obsidian.enabled { 1 } else { 0 };
-        let obsidian_open_state: i64 = if current_settings.obsidian.open_in_obsidian { 1 } else { 0 };
+        let obsidian_enabled_state: i64 = if current_settings.obsidian.enabled {
+            1
+        } else {
+            0
+        };
+        let obsidian_open_state: i64 = if current_settings.obsidian.open_in_obsidian {
+            1
+        } else {
+            0
+        };
         let _: () = msg_send![
             id_from(controls.obsidian_enabled_toggle),
             setState: obsidian_enabled_state
