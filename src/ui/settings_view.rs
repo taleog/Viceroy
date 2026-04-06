@@ -1,3 +1,4 @@
+use cocoa::appkit::NSApp;
 use cocoa::base::{id, nil, NO, YES};
 use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc::declare::ClassDecl;
@@ -302,7 +303,7 @@ unsafe fn create_panel(content_view: id, bounds: NSRect) -> id {
         setLabel: NSString::alloc(nil).init_str("Sync")
         forSegment: 3
     ];
-    let _: () = msg_send![tab_control, setTrackingMode: 1];
+    let _: () = msg_send![tab_control, setTrackingMode: 0];
     let _: () = msg_send![tab_control, setSelectedSegment: SETTINGS_ACTIVE_TAB.load(Ordering::SeqCst) as isize];
     let _: () = msg_send![tab_control, setControlSize: 1];
     let _: () = msg_send![tab_control, setTarget: target];
@@ -1426,7 +1427,17 @@ unsafe fn choose_obsidian_vault_folder() -> Option<String> {
     let _: () = msg_send![panel, setCanChooseDirectories: YES];
     let _: () = msg_send![panel, setAllowsMultipleSelection: NO];
     let _: () = msg_send![panel, setCanCreateDirectories: YES];
-    let response: i64 = msg_send![panel, runModal];
+
+    let app: id = NSApp();
+    let key_window: id = if app != nil { msg_send![app, keyWindow] } else { nil };
+    let main_window: id = if app != nil { msg_send![app, mainWindow] } else { nil };
+    let host_window = if key_window != nil { key_window } else { main_window };
+
+    let response: i64 = if host_window != nil {
+        msg_send![panel, runModalForWindow: host_window]
+    } else {
+        msg_send![panel, runModal]
+    };
     if response != 1 {
         return None;
     }
