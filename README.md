@@ -6,6 +6,10 @@
 
 Viceroy is a fast launcher and clipboard tool built in Rust.
 
+![Viceroy clipboard history and preview](./assets/screenshots/viceroy-clipboard-hero.png)
+
+![Viceroy search view](./assets/screenshots/viceroy-search-view.png)
+
 It combines:
 - a native macOS launcher
 - a Windows desktop client
