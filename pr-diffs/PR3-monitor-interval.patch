@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: src/clipboard.rs (proposal)
+@@
+-    loop {
+-        sleep(Duration::from_millis(200)).await;
++    loop {
++        // Reduced polling frequency to lower syscall and CPU pressure; make configurable via settings
++        sleep(Duration::from_secs(2)).await; // configurable default: 2s
+*** End Patch

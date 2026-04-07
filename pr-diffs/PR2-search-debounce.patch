@@ -1,0 +1,13 @@
+*** Begin Patch
+*** Update File: src/ui/clipboard_view.rs (proposal)
+@@
+-// current inline search handler
+-fn on_search_change(query: &str) {
+-    // search immediately
+-    schedule_search(query);
+-}
++// Proposed: debounce search input by 250ms
++fn on_search_change_debounced(query: &str) {
++    // debounce implementation: push query into debounce timer; only execute after 250ms of no changes
++}
+*** End Patch

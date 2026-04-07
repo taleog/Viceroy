@@ -1,0 +1,20 @@
+*** Begin Patch
+*** Add File: src/cache.rs (proposal)
++// Minimal LRU cache for previews with size accounting
++use std::collections::HashMap;
++use std::collections::VecDeque;
++
++pub struct LruCache {
++    capacity_bytes: usize,
++    size_bytes: usize,
++    map: HashMap<i64, Vec<u8>>,
++    order: VecDeque<i64>,
++}
++
++impl LruCache {
++    pub fn new(capacity: usize) -> Self { /* ... */ }
++    pub fn insert(&mut self, id: i64, data: Vec<u8>) { /* ... */ }
++    pub fn get(&mut self, id: &i64) -> Option<&Vec<u8>> { /* ... */ }
++}
++
+*** End Patch

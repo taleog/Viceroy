@@ -1,0 +1,13 @@
+*** Begin Patch
+*** Update File: src/ui/table.rs (proposal)
+@@
+-// naive renderer that maps over all entries
+-for entry in entries.iter() {
+-    render_row(entry);
+-}
++// Proposed: windowed renderer – only render visible slice + buffer
++let (start, end) = compute_visible_range(scroll_pos, viewport_height);
++for entry in entries[start..end].iter() {
++    render_row(entry);
++}
+*** End Patch

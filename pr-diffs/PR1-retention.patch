@@ -1,0 +1,6 @@
+*** Begin Patch
+*** Add File: src/settings.rs (patch proposal - do not apply automatically)
++// Proposed: add MAX_CLIPBOARD_HISTORY setting with default 500
++pub const DEFAULT_MAX_CLIPBOARD_HISTORY: usize = 500;
++
+*** End Patch

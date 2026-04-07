@@ -1,0 +1,20 @@
+*** Begin Patch
+*** Update File: src/clipboard.rs (proposal)
+@@
+-    // store image b64 directly in content column
+-    let b64 = STANDARD.encode(&png_bytes);
+-    conn.execute(
+-        "INSERT INTO clipboard_history (content, content_type, app_name, timestamp, image_width, image_height) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+-        params![
+-            b64,
+-            "image",
+-            app_name,
+-            timestamp,
+-            Some(image.width as i64),
+-            Some(image.height as i64)
+-        ],
+-    )?;
++    // Proposed: store image on disk or blob table and keep a lightweight reference in the row
++    // let blob_path = store_image_blob(&png_bytes)?;
++    // conn.execute("INSERT INTO clipboard_history (content, content_type, app_name, timestamp, image_width, image_height, blob_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![blob_path, "image", app_name, timestamp, Some(...), Some(...), blob_path])?;
+*** End Patch
