@@ -116,6 +116,10 @@ pub fn init() -> Result<()> {
         [],
     )?;
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_clipboard_visible_history_order ON clipboard_history(deleted_at, is_pinned DESC, timestamp DESC)",
+        [],
+    )?;
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_sync_outbox_pending ON sync_outbox(sent_at, created_at)",
         [],
     )?;

@@ -628,13 +628,51 @@ async fn save_clipboard_image(image: &ImageData<'_>, app_name: &Option<String>) 
 
 fn prune_old(conn: &rusqlite::Connection) -> Result<()> {
     conn.execute(
-        "DELETE FROM clipboard_history WHERE id NOT IN (SELECT id FROM clipboard_history ORDER BY timestamp DESC LIMIT 1000)",
+        "DELETE FROM clipboard_history
+         WHERE is_pinned = 0
+           AND is_favorite = 0
+           AND deleted_at IS NULL
+           AND id NOT IN (
+               SELECT id FROM clipboard_history
+               WHERE is_pinned = 0 AND is_favorite = 0 AND deleted_at IS NULL
+               ORDER BY timestamp DESC
+               LIMIT 1000
+           )",
         [],
     )?;
     Ok(())
 }
 
-pub async fn get_history(limit: usize) -> Result<Vec<ClipboardEntry>> {
+fn history_display_content(content_type: &str, content: &str) -> String {
+    if content_type == "image" {
+        String::new()
+    } else {
+        content.to_string()
+    }
+}
+
+fn map_history_entry_row(row: &rusqlite::Row<'_>, defer_image_payloads: bool) -> rusqlite::Result<ClipboardEntry> {
+    let content_type: String = row.get(2)?;
+    let content: String = row.get(1)?;
+    Ok(ClipboardEntry {
+        id: row.get(0)?,
+        content: if defer_image_payloads {
+            history_display_content(&content_type, &content)
+        } else {
+            content
+        },
+        content_type,
+        app_name: row.get(3)?,
+        timestamp: row.get(4)?,
+        custom_name: row.get(5)?,
+        is_favorite: row.get::<_, i64>(6)? == 1,
+        is_pinned: row.get::<_, i64>(7)? == 1,
+        image_width: row.get::<_, Option<i64>>(8)?,
+        image_height: row.get::<_, Option<i64>>(9)?,
+    })
+}
+
+fn get_history_blocking(limit: usize) -> Result<Vec<ClipboardEntry>> {
     let conn = database::get_connection()?;
     let mut stmt = conn.prepare(
         "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned, image_width, image_height 
@@ -645,23 +683,37 @@ pub async fn get_history(limit: usize) -> Result<Vec<ClipboardEntry>> {
     )?;
 
     let entries = stmt
-        .query_map([limit], |row| {
-            Ok(ClipboardEntry {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                content_type: row.get(2)?,
-                app_name: row.get(3)?,
-                timestamp: row.get(4)?,
-                custom_name: row.get(5)?,
-                is_favorite: row.get::<_, i64>(6)? == 1,
-                is_pinned: row.get::<_, i64>(7)? == 1,
-                image_width: row.get::<_, Option<i64>>(8)?,
-                image_height: row.get::<_, Option<i64>>(9)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+        .query_map([limit], |row| map_history_entry_row(row, true))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok(entries)
+}
+
+pub async fn get_history(limit: usize) -> Result<Vec<ClipboardEntry>> {
+    task::spawn_blocking(move || get_history_blocking(limit))
+        .await
+        .map_err(|e| anyhow!("clipboard history task failed: {e}"))?
+}
+
+pub async fn get_entry(id: i64) -> Result<Option<ClipboardEntry>> {
+    task::spawn_blocking(move || get_entry_blocking(id))
+        .await
+        .map_err(|e| anyhow!("clipboard history entry task failed: {e}"))?
+}
+
+fn get_entry_blocking(id: i64) -> Result<Option<ClipboardEntry>> {
+    let conn = database::get_connection()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, content, content_type, app_name, timestamp, custom_name, is_favorite, is_pinned, image_width, image_height
+         FROM clipboard_history
+         WHERE id = ?1 AND deleted_at IS NULL
+         LIMIT 1"
+    )?;
+
+    let entry = stmt
+        .query_row([id], |row| map_history_entry_row(row, false))
+        .optional()?;
+    Ok(entry)
 }
 
 pub async fn search_history(query: &str) -> Result<Vec<ClipboardEntry>> {
@@ -807,6 +859,32 @@ pub async fn restore_history_entry_to_clipboard(
     Ok(())
 }
 
+async fn resolve_saved_history_entry_payload(
+    id: i64,
+    content: &str,
+    content_type: &str,
+    image_width: Option<i64>,
+    image_height: Option<i64>,
+) -> Result<(String, String, Option<i64>, Option<i64>)> {
+    if content.is_empty() {
+        if let Some(entry) = get_entry(id).await? {
+            return Ok((
+                entry.content,
+                entry.content_type,
+                entry.image_width,
+                entry.image_height,
+            ));
+        }
+    }
+
+    Ok((
+        content.to_string(),
+        content_type.to_string(),
+        image_width,
+        image_height,
+    ))
+}
+
 pub async fn restore_saved_history_entry_to_clipboard(
     id: i64,
     content: &str,
@@ -814,7 +892,17 @@ pub async fn restore_saved_history_entry_to_clipboard(
     image_width: Option<i64>,
     image_height: Option<i64>,
 ) -> Result<()> {
-    restore_history_entry_to_clipboard(content, content_type, image_width, image_height).await?;
+    let (resolved_content, resolved_content_type, resolved_image_width, resolved_image_height) =
+        resolve_saved_history_entry_payload(id, content, content_type, image_width, image_height)
+            .await?;
+
+    restore_history_entry_to_clipboard(
+        &resolved_content,
+        &resolved_content_type,
+        resolved_image_width,
+        resolved_image_height,
+    )
+    .await?;
     touch_history_entry(id).await?;
     Ok(())
 }
@@ -871,7 +959,18 @@ pub async fn paste_saved_history_entry(
     image_height: Option<i64>,
     target_app: Option<app_launcher::FrontmostApp>,
 ) -> Result<()> {
-    paste_history_entry(content, content_type, image_width, image_height, target_app).await?;
+    let (resolved_content, resolved_content_type, resolved_image_width, resolved_image_height) =
+        resolve_saved_history_entry_payload(id, content, content_type, image_width, image_height)
+            .await?;
+
+    paste_history_entry(
+        &resolved_content,
+        &resolved_content_type,
+        resolved_image_width,
+        resolved_image_height,
+        target_app,
+    )
+    .await?;
     touch_history_entry(id).await?;
     Ok(())
 }
@@ -1085,14 +1184,14 @@ fn send_paste_keystroke() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_duplicate_image_entry_id, find_duplicate_text_entry_id, history_image_hash,
-        latest_history_signature, normalize_text, promote_existing_entry,
-        resolve_clipboard_source_label, touch_existing_entry, StoredClipboardSignature,
+        find_duplicate_image_entry_id, find_duplicate_text_entry_id, history_display_content,
+        history_image_hash, latest_history_signature, normalize_text, promote_existing_entry,
+        prune_old, resolve_clipboard_source_label, touch_existing_entry, StoredClipboardSignature,
     };
     use anyhow::Result;
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    use rusqlite::{params, Connection};
+    use rusqlite::{params, Connection, OptionalExtension};
 
     #[test]
     fn latest_history_signature_matches_normalized_text() -> Result<()> {
@@ -1195,6 +1294,16 @@ mod tests {
     }
 
     #[test]
+    fn history_display_content_keeps_text_inline() {
+        assert_eq!(history_display_content("text", "hello world"), "hello world");
+    }
+
+    #[test]
+    fn history_display_content_defers_image_payloads() {
+        assert_eq!(history_display_content("image", "base64-image-data"), "");
+    }
+
+    #[test]
     fn promoting_existing_entry_moves_it_to_the_top() -> Result<()> {
         let conn = Connection::open_in_memory()?;
         create_history_table(&conn)?;
@@ -1260,6 +1369,85 @@ mod tests {
                 deleted_at INTEGER
             );",
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn prune_old_preserves_pinned_favorited_and_deleted_entries() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        create_history_table(&conn)?;
+
+        // Insert 1002 ordinary entries (timestamps 1..=1002)
+        for i in 1..=1002 {
+            conn.execute(
+                "INSERT INTO clipboard_history (content, content_type, timestamp)
+                 VALUES (?1, 'text', ?2)",
+                params![format!("entry-{i}"), i],
+            )?;
+        }
+
+        // Insert a pinned entry with the oldest timestamp (should survive pruning)
+        conn.execute(
+            "INSERT INTO clipboard_history (content, content_type, timestamp, is_pinned)
+             VALUES ('pinned-old', 'text', 0, 1)",
+            [],
+        )?;
+
+        // Insert a favorited entry with the oldest timestamp (should survive pruning)
+        conn.execute(
+            "INSERT INTO clipboard_history (content, content_type, timestamp, is_favorite)
+             VALUES ('fav-old', 'text', 0, 1)",
+            [],
+        )?;
+
+        // Insert a soft-deleted entry (should survive pruning — not our job to remove)
+        conn.execute(
+            "INSERT INTO clipboard_history (content, content_type, timestamp, deleted_at)
+             VALUES ('deleted-old', 'text', 0, 99999)",
+            [],
+        )?;
+
+        prune_old(&conn)?;
+
+        // The 2 oldest ordinary entries (timestamps 1 and 2) should be pruned
+        let ordinary_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM clipboard_history
+             WHERE is_pinned = 0 AND is_favorite = 0 AND deleted_at IS NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(ordinary_count, 1000);
+
+        // Pinned entry survives
+        let pinned: Option<String> = conn
+            .query_row(
+                "SELECT content FROM clipboard_history WHERE content = 'pinned-old'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        assert_eq!(pinned.as_deref(), Some("pinned-old"));
+
+        // Favorited entry survives
+        let fav: Option<String> = conn
+            .query_row(
+                "SELECT content FROM clipboard_history WHERE content = 'fav-old'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        assert_eq!(fav.as_deref(), Some("fav-old"));
+
+        // Soft-deleted entry survives
+        let deleted: Option<String> = conn
+            .query_row(
+                "SELECT content FROM clipboard_history WHERE content = 'deleted-old'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        assert_eq!(deleted.as_deref(), Some("deleted-old"));
+
         Ok(())
     }
 

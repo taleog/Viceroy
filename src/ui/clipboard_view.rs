@@ -166,7 +166,11 @@ pub fn build_clipboard_history_payload(
         rows.push((title, subtitle));
         results.push(search_engine::SearchResult::Clipboard {
             id: entry.id,
-            content: entry.content.clone(),
+            content: if entry.content_type == "image" {
+                String::new()
+            } else {
+                entry.content.clone()
+            },
             preview,
             content_type: entry.content_type.clone(),
             app_name: entry.app_name.clone(),
@@ -1361,6 +1365,7 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
     let selected_row = row.unwrap();
     if let Some(entry) = preview_data_for_row(selected_row) {
         if let search_engine::SearchResult::Clipboard {
+            id,
             content,
             content_type,
             app_name,
@@ -1374,8 +1379,37 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
                 if let Some((title, subtitle, _)) = detail_label_for_entry(&entry) {
                     let placeholder = placeholder_image_icon();
                     show_image_preview(&title, &subtitle, placeholder);
-                    if let Some(image) = image_from_clipboard_content(content) {
-                        show_image_preview(&title, &subtitle, image);
+                    if !content.is_empty() {
+                        if let Some(image) = image_from_clipboard_content(content) {
+                            show_image_preview(&title, &subtitle, image);
+                        }
+                    } else {
+                        let entry_id = *id;
+                        let title_clone = title.clone();
+                        let subtitle_clone = subtitle.clone();
+                        SEARCH_RT.spawn(async move {
+                            let image_bytes = clipboard::get_entry(entry_id)
+                                .await
+                                .ok()
+                                .flatten()
+                                .and_then(|full_entry| STANDARD.decode(&full_entry.content).ok());
+                            run_on_main(move || {
+                                let still_selected = PREVIEW_SELECTED_ROW.load(Ordering::SeqCst) >= 0
+                                    && current_selected_clipboard_entry_id() == Some(entry_id)
+                                    && TABLE_MODE
+                                        .lock()
+                                        .map(|mode| *mode == TableMode::ClipboardHistory)
+                                        .unwrap_or(false);
+                                if !still_selected {
+                                    return;
+                                }
+                                if let Some(bytes) = image_bytes.as_deref() {
+                                    if let Some(image) = image_from_bytes(bytes) {
+                                        show_image_preview(&title_clone, &subtitle_clone, image);
+                                    }
+                                }
+                            });
+                        });
                     }
                 }
                 return;
