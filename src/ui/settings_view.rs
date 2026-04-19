@@ -143,9 +143,12 @@ unsafe fn apply_settings_surface(view: id, background: id, corner_radius: f64, b
 unsafe fn style_segmented_control(control: id) {
     let _: () = msg_send![control, setControlSize: 1];
     let _: () = msg_send![control, setFocusRingType: 0];
-    let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("General") forSegment: 0];
-    let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("Behavior") forSegment: 1];
-    let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("Obsidian") forSegment: 2];
+    let _: () =
+        msg_send![control, setLabel: NSString::alloc(nil).init_str("General") forSegment: 0];
+    let _: () =
+        msg_send![control, setLabel: NSString::alloc(nil).init_str("Behavior") forSegment: 1];
+    let _: () =
+        msg_send![control, setLabel: NSString::alloc(nil).init_str("Obsidian") forSegment: 2];
     let _: () = msg_send![control, setLabel: NSString::alloc(nil).init_str("Sync") forSegment: 3];
 }
 
