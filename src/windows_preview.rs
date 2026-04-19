@@ -154,7 +154,7 @@ impl PreviewCard {
                 .clone()
                 .unwrap_or_else(|| "Unknown app".to_string()),
         });
-        metadata.extend(clipboard_metadata(entry));
+        metadata.extend(clipboard_metadata(&entry));
 
         let title = entry.custom_name.clone().unwrap_or_else(|| {
             if entry.content_type == "image" {
@@ -351,6 +351,43 @@ impl PreviewCard {
                 },
                 footer: Some("Press Enter to copy".to_string()),
             },
+            SearchResult::Note {
+                title,
+                path,
+                relative_path,
+                vault_name,
+                ..
+            } => {
+                let subtitle = match vault_name.as_deref() {
+                    Some(vault) if !vault.is_empty() => format!("{vault} | {relative_path}"),
+                    _ => relative_path.clone(),
+                };
+
+                let mut metadata = vec![PreviewMetadata {
+                    label: "Path".to_string(),
+                    value: path.clone(),
+                }];
+
+                if let Some(vault) = vault_name.clone() {
+                    if !vault.is_empty() {
+                        metadata.push(PreviewMetadata {
+                            label: "Vault".to_string(),
+                            value: vault,
+                        });
+                    }
+                }
+
+                Self {
+                    badge: "NOTE".to_string(),
+                    title: title.clone(),
+                    subtitle,
+                    metadata,
+                    body: PreviewBody::Empty {
+                        message: "Note results do not have a content preview.".to_string(),
+                    },
+                    footer: Some("Press Enter to open".to_string()),
+                }
+            }
             SearchResult::Dictionary { word, preview } => Self {
                 badge: "DICT".to_string(),
                 title: word.clone(),
