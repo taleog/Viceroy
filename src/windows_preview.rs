@@ -98,6 +98,21 @@ pub struct PreviewCard {
     pub footer: Option<String>,
 }
 
+fn hydrated_clipboard_entry<F>(
+    entry: &clipboard::ClipboardEntry,
+    fetch_entry: F,
+) -> clipboard::ClipboardEntry
+where
+    F: FnOnce(i64) -> Option<clipboard::ClipboardEntry>,
+{
+    if entry.content_type == "image" && entry.content.is_empty() && entry.id != 0 {
+        if let Some(full_entry) = fetch_entry(entry.id) {
+            return full_entry;
+        }
+    }
+    entry.clone()
+}
+
 impl PreviewCard {
     pub fn empty(message: impl Into<String>) -> Self {
         Self {
@@ -113,6 +128,8 @@ impl PreviewCard {
     }
 
     pub fn from_clipboard_entry(entry: &clipboard::ClipboardEntry) -> Self {
+        let entry =
+            hydrated_clipboard_entry(entry, |id| clipboard::get_entry_sync(id).ok().flatten());
         let now = Utc::now().timestamp();
         let badge = if entry.content_type == "image" {
             "IMAGE"
@@ -693,4 +710,79 @@ pub fn preview_card_from_search_result(result: &SearchResult) -> PreviewCard {
 #[allow(dead_code)]
 pub fn preview_card_from_source(source: PreviewSource<'_>) -> PreviewCard {
     preview_card(source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hydrated_clipboard_entry, PreviewBody, PreviewCard};
+    use viceroy::clipboard::ClipboardEntry;
+
+    #[test]
+    fn hydrates_deferred_image_entries_for_preview_consumers() {
+        let deferred = ClipboardEntry {
+            id: 42,
+            content: String::new(),
+            content_type: "image".to_string(),
+            app_name: Some("Snipping Tool".to_string()),
+            timestamp: 1_700_000_000,
+            custom_name: Some("Screenshot".to_string()),
+            is_favorite: false,
+            is_pinned: false,
+            image_width: Some(1),
+            image_height: Some(1),
+        };
+        let hydrated = ClipboardEntry {
+            content: sample_png_base64(),
+            ..deferred.clone()
+        };
+
+        let resolved = hydrated_clipboard_entry(&deferred, |id| {
+            assert_eq!(id, 42);
+            Some(hydrated.clone())
+        });
+
+        assert_eq!(resolved.content, hydrated.content);
+
+        let card = PreviewCard::from_clipboard_entry(&resolved);
+        assert!(matches!(card.body, PreviewBody::Image { .. }));
+    }
+
+    #[test]
+    fn does_not_fetch_for_non_image_entries() {
+        let text_entry = ClipboardEntry {
+            id: 7,
+            content: "hello world".to_string(),
+            content_type: "text".to_string(),
+            app_name: Some("Notes".to_string()),
+            timestamp: 1_700_000_000,
+            custom_name: None,
+            is_favorite: false,
+            is_pinned: false,
+            image_width: None,
+            image_height: None,
+        };
+
+        let resolved = hydrated_clipboard_entry(&text_entry, |_| {
+            panic!("text previews should not trigger hydration")
+        });
+
+        assert_eq!(resolved.content, "hello world");
+    }
+
+    fn sample_png_base64() -> String {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("png header");
+            writer
+                .write_image_data(&[255, 0, 0, 255])
+                .expect("png data");
+        }
+        STANDARD.encode(png_bytes)
+    }
 }

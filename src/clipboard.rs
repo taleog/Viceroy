@@ -704,6 +704,10 @@ pub async fn get_entry(id: i64) -> Result<Option<ClipboardEntry>> {
         .map_err(|e| anyhow!("clipboard history entry task failed: {e}"))?
 }
 
+pub fn get_entry_sync(id: i64) -> Result<Option<ClipboardEntry>> {
+    get_entry_blocking(id)
+}
+
 fn get_entry_blocking(id: i64) -> Result<Option<ClipboardEntry>> {
     let conn = database::get_connection()?;
     let mut stmt = conn.prepare(
