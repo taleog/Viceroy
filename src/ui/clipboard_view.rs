@@ -1394,7 +1394,8 @@ pub fn update_clipboard_preview_selection(row: Option<usize>) {
                                 .flatten()
                                 .and_then(|full_entry| STANDARD.decode(&full_entry.content).ok());
                             run_on_main(move || {
-                                let still_selected = PREVIEW_SELECTED_ROW.load(Ordering::SeqCst) >= 0
+                                let still_selected = PREVIEW_SELECTED_ROW.load(Ordering::SeqCst)
+                                    >= 0
                                     && current_selected_clipboard_entry_id() == Some(entry_id)
                                     && TABLE_MODE
                                         .lock()

@@ -651,7 +651,10 @@ fn history_display_content(content_type: &str, content: &str) -> String {
     }
 }
 
-fn map_history_entry_row(row: &rusqlite::Row<'_>, defer_image_payloads: bool) -> rusqlite::Result<ClipboardEntry> {
+fn map_history_entry_row(
+    row: &rusqlite::Row<'_>,
+    defer_image_payloads: bool,
+) -> rusqlite::Result<ClipboardEntry> {
     let content_type: String = row.get(2)?;
     let content: String = row.get(1)?;
     Ok(ClipboardEntry {
@@ -1295,7 +1298,10 @@ mod tests {
 
     #[test]
     fn history_display_content_keeps_text_inline() {
-        assert_eq!(history_display_content("text", "hello world"), "hello world");
+        assert_eq!(
+            history_display_content("text", "hello world"),
+            "hello world"
+        );
     }
 
     #[test]
