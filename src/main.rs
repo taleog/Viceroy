@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 #[cfg(target_os = "macos")]
 mod app_launcher;
 #[cfg(target_os = "macos")]
@@ -38,9 +40,7 @@ mod cli_app;
 #[cfg(target_os = "windows")]
 mod windows_app;
 #[cfg(target_os = "windows")]
-mod windows_preview;
-#[cfg(target_os = "windows")]
-mod windows_style;
+mod windows_dwm;
 #[cfg(target_os = "windows")]
 mod windows_hotkey;
 #[cfg(target_os = "windows")]
@@ -49,6 +49,12 @@ mod windows_hotkey_log;
 mod windows_hwnd;
 #[cfg(target_os = "windows")]
 mod windows_icon;
+#[cfg(target_os = "windows")]
+mod windows_native_glass;
+#[cfg(target_os = "windows")]
+mod windows_preview;
+#[cfg(target_os = "windows")]
+mod windows_style;
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -57,6 +63,10 @@ fn main() {
 
 #[cfg(target_os = "windows")]
 fn main() {
+    if std::env::args().any(|arg| arg == "--native-glass-prototype") {
+        windows_native_glass::run_prototype();
+        return;
+    }
     windows_app::run();
 }
 

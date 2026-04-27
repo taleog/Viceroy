@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use anyhow::{anyhow, Result};
 use std::ffi::OsStr;
 use std::iter::once;
@@ -112,7 +110,7 @@ pub fn load_file_icon_rgba(path: &str) -> Result<RgbaIcon> {
     let height = bmp.bmHeight.max(1) as u32;
 
     // Prepare DIB
-    let mut header = BITMAPINFOHEADER {
+    let header = BITMAPINFOHEADER {
         biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
         biWidth: width as i32,
         biHeight: -(height as i32), // top-down

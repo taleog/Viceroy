@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
-const DEFAULT_HOTKEY: &str = "Ctrl+Space";
+const DEFAULT_HOTKEY: &str = "Ctrl+Alt+Space";
 
 #[cfg(not(target_os = "windows"))]
 const DEFAULT_HOTKEY: &str = "Alt+Space";

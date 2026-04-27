@@ -708,14 +708,12 @@ fn render_empty_preview(ui: &mut Ui) {
 
 fn clip_text(value: &str, limit: usize) -> String {
     let mut clipped = String::new();
-    let mut count = 0usize;
-    for ch in value.chars() {
+    for (count, ch) in value.chars().enumerate() {
         if count >= limit {
             clipped.push_str("...");
             break;
         }
         clipped.push(ch);
-        count += 1;
     }
     clipped
 }

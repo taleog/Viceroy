@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::windows_hotkey_log as hklog;
 use crate::windows_hwnd;
@@ -34,89 +35,71 @@ pub fn start_hotkey_listener(hotkey: &str) -> Receiver<HotkeyEvent> {
         };
 
         unsafe {
-            use windows_sys::Win32::Foundation::{BOOL, GetLastError};
+            use windows_sys::Win32::Foundation::{GetLastError, BOOL};
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey};
-            use windows_sys::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetMessageW, IsIconic, MSG, ShowWindow, SW_RESTORE, WM_HOTKEY,
+            };
 
-            // Use a fixed hotkey ID for this process.
             let id: i32 = 1;
 
             hklog::append(&format!("hotkey: attempting RegisterHotKey('{pretty}')"));
-            let mut ok = RegisterHotKey(std::ptr::null_mut(), id, mods, vk);
+            let ok = RegisterHotKey(std::ptr::null_mut(), id, mods, vk);
 
             if ok == 0 {
                 let code = GetLastError();
-                hklog::append(&format!(
-                    "hotkey: RegisterHotKey failed for '{pretty}' (err={code})"
-                ));
+                hklog::append(&format!("hotkey: RegisterHotKey failed for '{pretty}' (err={code})"));
 
-                // Ctrl+Space is commonly taken by IME/input method toggles.
-                // If the user configured something taken, try a safe fallback.
                 let fallback = "Ctrl+Alt+Space";
                 if let Ok((fallback_mods, fallback_vk, fallback_pretty)) = parse_hotkey(fallback) {
-                    hklog::append(&format!(
-                        "hotkey: attempting fallback RegisterHotKey('{fallback_pretty}')"
-                    ));
-                    ok = RegisterHotKey(std::ptr::null_mut(), id, fallback_mods, fallback_vk);
-                    if ok != 0 {
-                        hklog::append(&format!(
-                            "hotkey: fallback registered OK ('{fallback_pretty}')"
-                        ));
+                    hklog::append(&format!("hotkey: attempting fallback RegisterHotKey('{fallback_pretty}')"));
+                    if RegisterHotKey(std::ptr::null_mut(), id, fallback_mods, fallback_vk) != 0 {
+                        hklog::append(&format!("hotkey: fallback registered OK ('{fallback_pretty}')"));
                         let _ = tx.send(HotkeyEvent::Error(format!(
-                            "Hotkey '{pretty}' could not be registered (error {code}). Using fallback '{fallback_pretty}'. Update Settings → Hotkey to keep it."
+                            "Hotkey '{pretty}' could not be registered (error {code}). Using fallback '{fallback_pretty}'. Update Settings > Hotkey to keep it."
                         )));
                     } else {
                         let code2 = GetLastError();
-                        hklog::append(&format!(
-                            "hotkey: fallback failed too ('{fallback_pretty}', err={code2})"
-                        ));
+                        hklog::append(&format!("hotkey: fallback failed too ('{fallback_pretty}', err={code2})"));
                         let _ = tx.send(HotkeyEvent::Error(format!(
                             "Failed to register global hotkey ({pretty}). Error code {code}. Tried fallback '{fallback}' but also failed (error {code2}). This usually means another app already uses it (PowerToys Run, IME, etc.)."
                         )));
-                        return;
                     }
                 } else {
-                    let _ = tx.send(HotkeyEvent::Error(format!(
-                        "Failed to register global hotkey ({pretty}). Error code {code}."
-                    )));
-                    return;
+                    let _ = tx.send(HotkeyEvent::Error(format!("Failed to register global hotkey ({pretty}). Error code {code}.")));
                 }
-            } else {
-                hklog::append(&format!("hotkey: registered OK ('{pretty}')"));
+                return;
             }
 
-            // Let the UI know registration succeeded (nice-to-have).
-            // (We reuse Error variant for status? No: keep quiet; UI can infer.)
+            hklog::append(&format!("hotkey: registered OK ('{pretty}')"));
 
             let mut msg: MSG = std::mem::zeroed();
+            let mut last_fire = Instant::now() - Duration::from_secs(1);
             loop {
                 let ret: BOOL = GetMessageW(&mut msg as *mut MSG, std::ptr::null_mut(), 0, 0);
-                if ret == 0 {
-                    // WM_QUIT
-                    break;
-                }
-                if ret == -1 {
-                    // error
+                if ret == 0 || ret == -1 {
                     break;
                 }
                 if msg.message == WM_HOTKEY && msg.wParam == id as usize {
-                    hklog::append("hotkey: WM_HOTKEY received");
+                    let now = Instant::now();
+                    if now.duration_since(last_fire) < Duration::from_millis(250) {
+                        hklog::append("hotkey: WM_HOTKEY ignored (debounced)");
+                        continue;
+                    }
+                    last_fire = now;
 
-                    // Restore/focus the actual Win32 window immediately.
-                    // This avoids relying on egui repaint/update loops, which may pause when minimized/hidden.
                     if let Some(hwnd) = windows_hwnd::get() {
-                        use windows_sys::Win32::UI::WindowsAndMessaging::{
-                            SetForegroundWindow, ShowWindow, SW_RESTORE,
-                        };
-                        unsafe {
+                        if IsIconic(hwnd as _) != 0 {
                             ShowWindow(hwnd as _, SW_RESTORE);
-                            SetForegroundWindow(hwnd as _);
+                            hklog::append("hotkey: ShowWindow(SW_RESTORE) attempted");
+                        } else {
+                            hklog::append("hotkey: window not iconic; skipping restore");
                         }
-                        hklog::append("hotkey: ShowWindow(SW_RESTORE) attempted");
                     } else {
                         hklog::append("hotkey: no HWND captured yet");
                     }
 
+                    hklog::append("hotkey: WM_HOTKEY received");
                     let _ = tx.send(HotkeyEvent::Pressed);
                 }
             }
@@ -172,38 +155,30 @@ fn parse_hotkey(hotkey: &str) -> Result<(u32, u32, String)> {
         "down" => VK_DOWN as u32,
         "left" => VK_LEFT as u32,
         "right" => VK_RIGHT as u32,
-        // Letters
         k if k.len() == 1 && k.chars().next().unwrap().is_ascii_alphabetic() => {
             let c = k.chars().next().unwrap().to_ascii_uppercase() as u8;
             (VK_A as u32) + (c - b'A') as u32
         }
-        // Digits
         k if k.len() == 1 && k.chars().next().unwrap().is_ascii_digit() => {
             let c = k.chars().next().unwrap() as u8;
             (VK_0 as u32) + (c - b'0') as u32
         }
-        // F-keys
         k if k.starts_with('f') => {
-            let n: u32 = k[1..]
-                .parse()
-                .map_err(|_| anyhow!("invalid function key '{key}'"))?;
+            let n: u32 = k[1..].parse().map_err(|_| anyhow!("invalid function key '{key}'"))?;
             if !(1..=24).contains(&n) {
                 return Err(anyhow!("function key out of range: {key}"));
             }
             (VK_F1 as u32) + (n - 1)
         }
         _ => {
-            return Err(anyhow!(
-                "unsupported key '{key}'. Supported examples: Ctrl+Space, Alt+Space, Ctrl+F1, Ctrl+K"
-            ))
+            return Err(anyhow!("unsupported key '{key}'. Supported examples: Ctrl+Space, Alt+Space, Ctrl+F1, Ctrl+K"))
         }
     };
 
     if mods == 0 {
-        // Force at least one modifier to avoid hijacking normal typing.
         return Err(anyhow!("hotkey needs a modifier (Ctrl/Alt/Shift/Win)"));
     }
 
-    let pretty = format!("{hotkey}");
+    let pretty = hotkey.to_string();
     Ok((mods, vk, pretty))
 }

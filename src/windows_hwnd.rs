@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 static HWND_VALUE: AtomicIsize = AtomicIsize::new(0);
