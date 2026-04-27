@@ -2,17 +2,17 @@ use eframe::egui::{
     self, vec2, Button, Color32, Context, CornerRadius, Frame, Margin, RichText, Stroke, Visuals,
 };
 
-pub const WINDOW_BG: Color32 = Color32::from_rgb(12, 14, 20);
-pub const WINDOW_BG_ELEVATED: Color32 = Color32::from_rgb(17, 20, 28);
-pub const SURFACE_BG: Color32 = Color32::from_rgb(20, 24, 32);
-pub const SURFACE_BG_HOVERED: Color32 = Color32::from_rgb(28, 36, 52);
-pub const SURFACE_BG_ACTIVE: Color32 = Color32::from_rgb(33, 48, 78);
-pub const CARD_BG_SELECTED: Color32 = Color32::from_rgb(33, 48, 78);
-pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(42, 47, 60);
-pub const BORDER_STRONG: Color32 = Color32::from_rgb(92, 162, 255);
-pub const ACCENT: Color32 = Color32::from_rgb(37, 76, 145);
-pub const ACCENT_SOFT: Color32 = Color32::from_rgb(59, 112, 208);
-pub const INFO: Color32 = Color32::from_rgb(120, 190, 255);
+pub const WINDOW_BG: Color32 = Color32::from_rgb(9, 11, 17);
+pub const WINDOW_BG_ELEVATED: Color32 = Color32::from_rgb(14, 17, 24);
+pub const SURFACE_BG: Color32 = Color32::from_rgb(23, 27, 36);
+pub const SURFACE_BG_HOVERED: Color32 = Color32::from_rgb(30, 36, 47);
+pub const SURFACE_BG_ACTIVE: Color32 = Color32::from_rgb(42, 52, 72);
+pub const CARD_BG_SELECTED: Color32 = Color32::from_rgb(42, 52, 72);
+pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(46, 50, 58);
+pub const BORDER_STRONG: Color32 = Color32::from_rgb(108, 156, 255);
+pub const ACCENT: Color32 = Color32::from_rgb(52, 88, 160);
+pub const ACCENT_SOFT: Color32 = Color32::from_rgb(92, 130, 214);
+pub const INFO: Color32 = Color32::from_rgb(145, 198, 255);
 pub const TEXT: Color32 = Color32::from_rgb(236, 240, 248);
 pub const TEXT_MUTED: Color32 = Color32::from_rgb(190, 195, 205);
 pub const TEXT_SUBTLE: Color32 = Color32::from_rgb(170, 176, 186);
@@ -20,20 +20,20 @@ pub const SUCCESS: Color32 = Color32::from_rgb(95, 201, 127);
 pub const WARNING: Color32 = Color32::from_rgb(239, 191, 76);
 pub const DANGER: Color32 = Color32::from_rgb(255, 145, 145);
 
-pub const WINDOW_PADDING: Margin = Margin::same(12);
-pub const PANEL_PADDING: Margin = Margin::same(14);
-pub const CARD_PADDING: Margin = Margin::same(12);
+pub const WINDOW_PADDING: Margin = Margin::same(18);
+pub const PANEL_PADDING: Margin = Margin::same(16);
+pub const CARD_PADDING: Margin = Margin::same(14);
 pub const BADGE_PADDING: Margin = Margin::symmetric(8, 3);
 
 pub const BUTTON_HEIGHT: f32 = 30.0;
 pub const TAB_HEIGHT: f32 = 28.0;
 
-pub const WINDOW_RADIUS: u8 = 12;
-pub const PANEL_RADIUS: u8 = 12;
-pub const CARD_RADIUS: u8 = 10;
-pub const BUTTON_RADIUS: u8 = 10;
-pub const TAB_RADIUS: u8 = 12;
-pub const BADGE_RADIUS: u8 = 10;
+pub const WINDOW_RADIUS: u8 = 24;
+pub const PANEL_RADIUS: u8 = 20;
+pub const CARD_RADIUS: u8 = 18;
+pub const BUTTON_RADIUS: u8 = 14;
+pub const TAB_RADIUS: u8 = 14;
+pub const BADGE_RADIUS: u8 = 12;
 
 pub const TITLE_SIZE: f32 = 30.0;
 pub const SECTION_TITLE_SIZE: f32 = 16.0;
@@ -120,9 +120,26 @@ pub fn launcher_visuals() -> Visuals {
     visuals
 }
 
-pub fn panel_frame() -> Frame {
+pub fn launcher_shell_frame() -> Frame {
     Frame::new()
         .fill(WINDOW_BG)
+        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+        .corner_radius(CornerRadius::same(WINDOW_RADIUS))
+        .inner_margin(WINDOW_PADDING)
+}
+
+pub fn search_shell_frame() -> Frame {
+    Frame::new()
+        .fill(WINDOW_BG_ELEVATED)
+        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+        .corner_radius(CornerRadius::same(20))
+        .inner_margin(Margin::symmetric(16, 14))
+}
+
+pub fn panel_frame() -> Frame {
+    Frame::new()
+        .fill(WINDOW_BG_ELEVATED)
+        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
         .corner_radius(CornerRadius::same(PANEL_RADIUS))
         .inner_margin(PANEL_PADDING)
 }
@@ -221,6 +238,12 @@ pub fn muted_text(text: impl Into<String>) -> RichText {
     RichText::new(text.into())
         .size(META_SIZE)
         .color(TEXT_SUBTLE)
+}
+
+pub fn shortcut_chip(ui: &mut egui::Ui, text: &str) {
+    badge_frame(BadgeTone::Neutral).show(ui, |ui| {
+        ui.label(muted_text(text));
+    });
 }
 
 pub fn badge_text(text: impl Into<String>, tone: BadgeTone) -> RichText {

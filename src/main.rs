@@ -41,6 +41,14 @@ mod windows_app;
 mod windows_preview;
 #[cfg(target_os = "windows")]
 mod windows_style;
+#[cfg(target_os = "windows")]
+mod windows_hotkey;
+#[cfg(target_os = "windows")]
+mod windows_hotkey_log;
+#[cfg(target_os = "windows")]
+mod windows_hwnd;
+#[cfg(target_os = "windows")]
+mod windows_icon;
 
 #[cfg(target_os = "macos")]
 fn main() {

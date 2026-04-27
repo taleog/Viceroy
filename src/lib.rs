@@ -1,6 +1,7 @@
 pub mod app_launcher;
 pub mod calculator;
 pub mod clipboard;
+pub mod clipboard_count;
 pub mod database;
 pub mod dictionary;
 pub mod emoji;

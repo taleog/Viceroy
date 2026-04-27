@@ -1,8 +1,22 @@
 use arboard::Clipboard;
-use eframe::egui::{self, Align, Key, Layout, RichText, ScrollArea, Slider, TextEdit};
+use eframe::egui::{
+    self,
+    vec2,
+    Align,
+    ColorImage,
+    Image,
+    Key,
+    Layout,
+    ScrollArea,
+    Slider,
+    TextEdit,
+    TextureOptions,
+};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -11,11 +25,16 @@ use viceroy::search_engine::{self, SearchResult};
 use viceroy::{
     app_launcher,
     clipboard::{self, ClipboardEntry},
+    clipboard_count,
     database, dictionary, obsidian, settings, sync, system_commands, updater, usage, web_search,
 };
 
+use crate::windows_hotkey::{HotkeyEvent, start_hotkey_listener};
 use crate::windows_preview::{self, PreviewCard, PreviewPanelState, PreviewSource};
 use crate::windows_style::{self, BadgeTone};
+use crate::windows_icon;
+
+use raw_window_handle::HasWindowHandle;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AppSurface {
@@ -238,9 +257,17 @@ pub fn run() {
     let initial_query = extract_query_args(&args).join(" ");
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1120.0, 780.0])
-            .with_min_inner_size([940.0, 640.0])
-            .with_title("Viceroy"),
+            .with_title("Viceroy")
+            .with_inner_size([960.0, 720.0])
+            .with_min_inner_size([900.0, 620.0])
+            .with_max_inner_size([960.0, 720.0])
+            .with_resizable(false)
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_taskbar(false)
+            .with_has_shadow(true)
+            .with_always_on_top()
+            .with_visible(true),
         ..Default::default()
     };
 
@@ -276,11 +303,9 @@ fn extract_query_args(args: &[String]) -> Vec<String> {
 fn start_clipboard_monitor() {
     thread::spawn(|| {
         let runtime = Runtime::new().expect("failed to create clipboard runtime");
-        runtime.block_on(async {
-            if let Err(err) = clipboard::start_monitor().await {
-                eprintln!("Clipboard monitor error: {err}");
-            }
-        });
+        if let Err(err) = runtime.block_on(clipboard::start_monitor()) {
+            eprintln!("Clipboard monitor error: {err}");
+        }
     });
 }
 
@@ -310,7 +335,15 @@ struct ViceroyWindowsApp {
     last_loaded_clipboard_revision: u64,
     status: String,
     hotkey: String,
+    hotkey_events: Receiver<HotkeyEvent>,
+    hotkey_message: Option<String>,
+    window_minimized: bool,
+    window_was_focused: bool,
+    focus_query_next_frame: bool,
+    clipboard_total_count: Option<usize>,
     max_results: usize,
+    icon_cache: HashMap<u64, eframe::egui::TextureHandle>,
+    icon_cache_failures: HashSet<u64>,
     paste_after_restore: bool,
     dismiss_on_escape: bool,
     dismiss_on_click_away: bool,
@@ -351,7 +384,15 @@ impl ViceroyWindowsApp {
             last_loaded_clipboard_revision: clipboard::history_revision(),
             status: "Search apps, files, clipboard snippets, commands, and the web.".to_string(),
             hotkey: app_settings.hotkey.clone(),
+            hotkey_events: start_hotkey_listener(&app_settings.hotkey),
+            hotkey_message: None,
+            window_minimized: false,
+            window_was_focused: false,
+            focus_query_next_frame: false,
+            clipboard_total_count: None,
             max_results: app_settings.max_results,
+            icon_cache: HashMap::new(),
+            icon_cache_failures: HashSet::new(),
             paste_after_restore: app_settings.paste_after_restore,
             dismiss_on_escape: app_settings.dismiss_on_escape,
             dismiss_on_click_away: app_settings.dismiss_on_click_away,
@@ -442,6 +483,9 @@ impl ViceroyWindowsApp {
                 }
             }
             AppSurface::Clipboard => {
+                // Total count is independent of the current display limit/filter.
+                self.clipboard_total_count = clipboard_count::total_history_count().ok();
+
                 let result = if self.query.trim().is_empty() {
                     self.runtime.block_on(clipboard::get_history(limit))
                 } else {
@@ -459,7 +503,12 @@ impl ViceroyWindowsApp {
                                 format!("No clipboard entries match \"{}\".", self.query)
                             }
                         } else {
-                            format!("Showing {} clipboard entries.", self.items.len())
+                            match self.clipboard_total_count {
+                                Some(total) => {
+                                    format!("Showing {} of {} clipboard entries.", self.items.len(), total)
+                                }
+                                None => format!("Showing {} clipboard entries.", self.items.len()),
+                            }
                         };
                     }
                     Err(err) => self.status = format!("Clipboard load failed: {err:#}"),
@@ -772,6 +821,10 @@ impl ViceroyWindowsApp {
                 self.paste_after_restore = app_settings.paste_after_restore;
                 self.dismiss_on_escape = app_settings.dismiss_on_escape;
                 self.dismiss_on_click_away = app_settings.dismiss_on_click_away;
+
+                // Restart global hotkey listener in case the hotkey was changed.
+                self.hotkey_events = start_hotkey_listener(&app_settings.hotkey);
+                self.hotkey_message = None;
                 self.sync_enabled = app_settings.sync.enabled;
                 self.sync_mirror_clipboard = app_settings.sync.mirror_clipboard;
                 self.sync_device_name = app_settings.sync.device_name.clone();
@@ -868,63 +921,112 @@ impl ViceroyWindowsApp {
             self.set_surface(AppSurface::Search);
             return;
         }
-        if !self.query.is_empty() {
-            self.query.clear();
-            self.reload_items(true);
-            self.status = "Cleared the current query.".to_string();
-            return;
-        }
         if self.surface == AppSurface::Clipboard {
             self.set_surface(AppSurface::Search);
+            self.query.clear();
             self.reload_items(true);
             return;
         }
         if self.dismiss_on_escape {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.query.clear();
+            self.window_minimized = true;
+            self.window_was_focused = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
+    }
+
+    fn hide_launcher(&mut self, ctx: &egui::Context) {
+        self.window_minimized = true;
+        self.window_was_focused = false;
+        // Avoid fully hiding the window: some event loops stop updating when invisible.
+        // Minimize instead, so the app can still process global hotkey events.
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+    }
+
+    fn icon_texture_for_item(
+        &mut self,
+        ctx: &egui::Context,
+        item: &DisplayItem,
+    ) -> Option<eframe::egui::TextureHandle> {
+        match item {
+            DisplayItem::Search(SearchResult::App { path, .. })
+            | DisplayItem::Search(SearchResult::File { path, .. }) => {
+                self.icon_texture_for_path(ctx, path)
+            }
+            _ => None,
+        }
+    }
+
+    fn icon_texture_for_path(
+        &mut self,
+        ctx: &egui::Context,
+        path: &str,
+    ) -> Option<eframe::egui::TextureHandle> {
+        let key = stable_preview_hash(path);
+        if let Some(texture) = self.icon_cache.get(&key) {
+            return Some(texture.clone());
+        }
+        if self.icon_cache_failures.contains(&key) {
+            return None;
+        }
+
+        let icon = match windows_icon::load_file_icon_rgba(path) {
+            Ok(icon) => icon,
+            Err(err) => {
+                log::debug!("icon load failed for {path}: {err:#}");
+                self.icon_cache_failures.insert(key);
+                return None;
+            }
+        };
+
+        let image = ColorImage::from_rgba_unmultiplied(
+            [icon.width as usize, icon.height as usize],
+            &icon.rgba,
+        );
+        let texture = ctx.load_texture(
+            format!("win_icon_{key}"),
+            image,
+            TextureOptions::LINEAR,
+        );
+        self.icon_cache.insert(key, texture.clone());
+        Some(texture)
     }
 
     fn render_header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label(windows_style::title_text("Viceroy"));
-                ui.label(windows_style::muted_text(match self.surface {
-                    AppSurface::Search => {
-                        "Launcher-style search for apps, files, clipboard, commands, and the web."
-                    }
-                    AppSurface::Clipboard => {
-                        "Clipboard history with preview, rename, and restore actions."
-                    }
-                    AppSurface::Settings => {
-                        "Mac-style settings tabs for general behavior and sync."
-                    }
-                }));
+            let mode_label = match self.surface {
+                AppSurface::Search => "Search",
+                AppSurface::Clipboard => "Clipboard",
+                AppSurface::Settings => "Settings",
+            };
+            windows_style::badge_frame(BadgeTone::Neutral).show(ui, |ui| {
+                ui.label(windows_style::badge_text(mode_label.to_uppercase(), BadgeTone::Neutral));
             });
+            ui.label(windows_style::muted_text(match self.surface {
+                AppSurface::Search => "Search-first launcher shell",
+                AppSurface::Clipboard => "Clipboard history mode",
+                AppSurface::Settings => "Preferences",
+            }));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add(windows_style::pill_button(RichText::new(format!(
-                        "Hotkey {}",
-                        if self.hotkey.trim().is_empty() {
-                            "Alt+Space"
-                        } else {
-                            self.hotkey.trim()
-                        }
-                    ))))
-                    .clicked()
-                {
+                if ui.add(windows_style::ghost_button("Settings")).clicked() {
                     self.set_surface(AppSurface::Settings);
                 }
-                for (surface, label) in [
-                    (AppSurface::Settings, "Settings"),
-                    (AppSurface::Clipboard, "Clipboard"),
-                    (AppSurface::Search, "Search"),
-                ] {
-                    if ui
-                        .add(windows_style::tab_button(label, self.surface == surface))
-                        .clicked()
-                    {
-                        self.set_surface(surface);
-                    }
+                if ui
+                    .add(windows_style::tab_button(
+                        "Clipboard",
+                        self.surface == AppSurface::Clipboard,
+                    ))
+                    .clicked()
+                {
+                    self.set_surface(AppSurface::Clipboard);
+                }
+                if ui
+                    .add(windows_style::tab_button("Search", self.surface == AppSurface::Search))
+                    .clicked()
+                {
+                    self.set_surface(AppSurface::Search);
                 }
             });
         });
@@ -932,35 +1034,53 @@ impl ViceroyWindowsApp {
 
     fn render_search_box(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        windows_style::card_frame(false).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                windows_style::badge_frame(BadgeTone::Accent).show(ui, |ui| {
-                    ui.label(windows_style::badge_text(
-                        if self.surface == AppSurface::Clipboard {
-                            "FILTER"
-                        } else {
-                            "SEARCH"
-                        },
-                        BadgeTone::Accent,
-                    ));
+        windows_style::search_shell_frame().show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    windows_style::badge_frame(BadgeTone::Neutral).show(ui, |ui| {
+                        ui.label(windows_style::badge_text("⌕", BadgeTone::Neutral));
+                    });
+                    let right_hint = if self.surface == AppSurface::Clipboard {
+                        "Ctrl+, Preferences"
+                    } else {
+                        "Tab Clipboard • Ctrl+, Preferences"
+                    };
+                    let input_width = (ui.available_width() - 186.0).max(220.0);
+                    let response = ui.add_sized(
+                        [input_width, 40.0],
+                        TextEdit::singleline(&mut self.query)
+                            .id_salt("launcher_query")
+                            .frame(false)
+                            .hint_text(if self.surface == AppSurface::Clipboard {
+                                "Filter clipboard history"
+                            } else {
+                                "Search apps, files, clipboard history, and more"
+                            }),
+                    );
+                    if self.focus_query_next_frame {
+                        response.request_focus();
+                        self.focus_query_next_frame = false;
+                    }
+                    changed |= response.changed();
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(windows_style::muted_text(right_hint));
+                    });
                 });
-                let response = ui.add_sized(
-                    [ui.available_width() - 80.0, 38.0],
-                    TextEdit::singleline(&mut self.query)
-                        .id_salt("launcher_query")
-                        .frame(false)
-                        .hint_text(if self.surface == AppSurface::Clipboard {
-                            "Filter clipboard history"
-                        } else {
-                            "Search apps, files, clipboard snippets, commands, and the web"
-                        }),
-                );
-                changed |= response.changed();
-                if !self.query.is_empty() && ui.add(windows_style::ghost_button("Clear")).clicked()
-                {
-                    self.query.clear();
-                    changed = true;
-                }
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    for hint in if self.surface == AppSurface::Clipboard {
+                        vec!["Tab = search", "Enter = restore", "Esc = hide"]
+                    } else {
+                        vec!["Tab = clipboard", "/ = web search", "Esc = hide"]
+                    } {
+                        windows_style::shortcut_chip(ui, hint);
+                    }
+                    if !self.query.is_empty() && ui.add(windows_style::ghost_button("Clear")).clicked()
+                    {
+                        self.query.clear();
+                        changed = true;
+                    }
+                });
             });
         });
         changed
@@ -978,10 +1098,15 @@ impl ViceroyWindowsApp {
                         },
                     ));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(windows_style::muted_text(format!(
-                            "{} items",
-                            self.items.len()
-                        )));
+                        let item_label = if self.surface == AppSurface::Clipboard {
+                            match self.clipboard_total_count {
+                                Some(total) => format!("{} shown / {} total", self.items.len(), total),
+                                None => format!("{} shown", self.items.len()),
+                            }
+                        } else {
+                            format!("{} items", self.items.len())
+                        };
+                        ui.label(windows_style::muted_text(item_label));
                     });
                 });
                 ui.add_space(8.0);
@@ -1015,20 +1140,25 @@ impl ViceroyWindowsApp {
                             let response = windows_style::card_frame(index == self.selected)
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        windows_style::badge_frame(item.badge_tone()).show(
-                                            ui,
-                                            |ui| {
+                                        let icon_texture = self.icon_texture_for_item(ui.ctx(), &item);
+                                        if let Some(texture) = icon_texture {
+                                            windows_style::badge_frame(BadgeTone::Neutral).show(ui, |ui| {
+                                                ui.add(
+                                                    Image::from_texture(&texture)
+                                                        .fit_to_exact_size(vec2(20.0, 20.0)),
+                                                );
+                                            });
+                                        } else {
+                                            windows_style::badge_frame(item.badge_tone()).show(ui, |ui| {
                                                 ui.label(windows_style::badge_text(
                                                     item.badge(),
                                                     item.badge_tone(),
                                                 ));
-                                            },
-                                        );
+                                            });
+                                        }
                                         ui.vertical(|ui| {
                                             ui.label(windows_style::body_text(item.primary_text()));
-                                            ui.label(windows_style::muted_text(
-                                                item.secondary_text(),
-                                            ));
+                                            ui.label(windows_style::muted_text(item.secondary_text()));
                                         });
                                         ui.with_layout(
                                             Layout::right_to_left(Align::Center),
@@ -1519,8 +1649,13 @@ impl ViceroyWindowsApp {
                     });
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let status_line = if let Some(msg) = &self.hotkey_message {
+                        format!("Hotkey error: {msg}")
+                    } else {
+                        self.status.clone()
+                    };
                     ui.label(windows_style::status_text(
-                        &self.status,
+                        status_line,
                         status_tone(&self.status),
                     ));
                 });
@@ -1530,7 +1665,45 @@ impl ViceroyWindowsApp {
 }
 
 impl eframe::App for ViceroyWindowsApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
+    }
+
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Capture HWND for Win32 hotkey thread to be able to restore/focus the window.
+        if let Ok(handle) = frame.window_handle() {
+            let raw = handle.as_raw();
+            if let raw_window_handle::RawWindowHandle::Win32(win) = raw {
+                crate::windows_hwnd::set(win.hwnd.get() as isize);
+            }
+        }
+
+        // Drain global hotkey events.
+        loop {
+            match self.hotkey_events.try_recv() {
+                Ok(HotkeyEvent::Pressed) => {
+                    // Treat the global hotkey as a summon/show action.
+                    // Hiding is handled by click-away / Escape, which avoids stale toggle state.
+                    self.window_minimized = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    self.window_was_focused = true;
+                    self.set_surface(AppSurface::Search);
+                    self.query.clear();
+                    self.focus_query_next_frame = true;
+                    self.reload_items(true);
+                }
+                Ok(HotkeyEvent::Error(msg)) => {
+                    // Treat this as a warning/status: keep listening so fallback hotkeys can still work.
+                    self.hotkey_message = Some(msg);
+                    continue;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+
         let mut reload = false;
         let editor_active = self.clipboard_editor.is_some();
         let settings_active = self.surface == AppSurface::Settings;
@@ -1539,16 +1712,18 @@ impl eframe::App for ViceroyWindowsApp {
         let mut activate = false;
         let mut handle_escape = false;
         let mut delete_history = false;
+        let has_focus = ctx.input(|input| input.focused);
 
         ctx.input(|input| {
-            if input.modifiers.ctrl && input.key_pressed(Key::Num1) {
-                surface_request = Some(AppSurface::Search);
-            }
-            if input.modifiers.ctrl && input.key_pressed(Key::Num2) {
-                surface_request = Some(AppSurface::Clipboard);
-            }
             if input.modifiers.ctrl && input.key_pressed(Key::Comma) {
                 surface_request = Some(AppSurface::Settings);
+            }
+            if !editor_active && !settings_active && input.key_pressed(Key::Tab) {
+                surface_request = Some(if self.surface == AppSurface::Clipboard {
+                    AppSurface::Search
+                } else {
+                    AppSurface::Clipboard
+                });
             }
             if input.key_pressed(Key::Escape) {
                 handle_escape = true;
@@ -1572,8 +1747,14 @@ impl eframe::App for ViceroyWindowsApp {
             }
         });
 
+        if self.dismiss_on_click_away && self.window_was_focused && !has_focus && !self.window_minimized {
+            self.hide_launcher(ctx);
+        }
+        self.window_was_focused = has_focus && !self.window_minimized;
+
         if let Some(surface) = surface_request {
             self.set_surface(surface);
+            self.focus_query_next_frame = self.surface != AppSurface::Settings;
             reload = true;
         }
         if handle_escape {
@@ -1593,24 +1774,26 @@ impl eframe::App for ViceroyWindowsApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(windows_style::WINDOW_BG_ELEVATED)
-                    .inner_margin(windows_style::WINDOW_PADDING),
+                    .fill(egui::Color32::TRANSPARENT)
+                    .inner_margin(egui::Margin::same(16)),
             )
             .show(ctx, |ui| {
-                windows_style::panel_frame().show(ui, |ui| {
-                    self.render_header(ui);
-                    ui.add_space(16.0);
+                windows_style::launcher_shell_frame().show(ui, |ui| {
                     if self.surface != AppSurface::Settings {
-                        reload |= self.render_search_box(ui);
-                        ui.add_space(16.0);
+                        self.render_search_box(ui);
+                        ui.add_space(14.0);
+                        self.render_header(ui);
+                        ui.add_space(14.0);
                         ui.columns(2, |columns| {
                             self.render_results(&mut columns[0]);
                             self.render_detail(&mut columns[1]);
                         });
                     } else {
+                        self.render_header(ui);
+                        ui.add_space(14.0);
                         self.render_settings(ui);
                     }
-                    ui.add_space(16.0);
+                    ui.add_space(14.0);
                     self.render_footer(ui);
                 });
             });
@@ -1692,18 +1875,20 @@ fn settings_field(ui: &mut egui::Ui, label: &str, value: &mut String, readonly: 
 fn footer_hints(surface: AppSurface) -> &'static [&'static str] {
     match surface {
         AppSurface::Search => &[
-            "Up/Down move",
-            "Enter open",
-            "Ctrl+2 clipboard",
-            "Esc dismiss",
+            "↑ / ↓ Navigate",
+            "Tab Clipboard",
+            "Ctrl+, Settings",
+            "↩ Launch",
+            "Esc Hide",
         ],
         AppSurface::Clipboard => &[
-            "Up/Down move",
-            "Enter restore",
-            "Delete remove",
-            "Ctrl+, settings",
+            "↑ / ↓ Navigate",
+            "Tab Search",
+            "Delete Remove",
+            "↩ Restore",
+            "Esc Hide",
         ],
-        AppSurface::Settings => &["Ctrl+1 search", "Ctrl+2 clipboard", "Esc back"],
+        AppSurface::Settings => &["Ctrl+, Settings", "Tab Clipboard", "Esc Back"],
     }
 }
 

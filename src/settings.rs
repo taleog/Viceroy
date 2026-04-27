@@ -7,6 +7,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "windows")]
+const DEFAULT_HOTKEY: &str = "Ctrl+Space";
+
+#[cfg(not(target_os = "windows"))]
 const DEFAULT_HOTKEY: &str = "Alt+Space";
 const MIN_RESULTS: usize = 10;
 const MAX_RESULTS: usize = 200;
