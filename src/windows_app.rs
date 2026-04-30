@@ -27,6 +27,7 @@ use crate::windows_style::{self, BadgeTone};
 use raw_window_handle::HasWindowHandle;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum AppSurface {
     Search,
     Clipboard,
@@ -449,6 +450,9 @@ struct ViceroyWindowsApp {
     window_was_focused: bool,
     focus_grace_frames: u8,
     focus_query_next_frame: bool,
+    scroll_to_selected: bool,
+    // (KNOWN BUG) Caret/cursor position in the search bar resets to the end when expanding from slim to full view.
+    // This is a limitation of egui/eframe 0.33.x, which does not support programmatic caret control.
     hotkey_toggle_cooldown_until: Option<Instant>,
     pending_reload: bool,
     last_query_edit: Option<Instant>,
@@ -510,6 +514,7 @@ impl ViceroyWindowsApp {
             window_was_focused: false,
             focus_grace_frames: 12,
             focus_query_next_frame: true,
+            scroll_to_selected: true,
             hotkey_toggle_cooldown_until: None,
             pending_reload: false,
             last_query_edit: None,
@@ -540,6 +545,7 @@ impl ViceroyWindowsApp {
             preview_cache_key: None,
             preview_cache_card: PreviewCard::empty("Loading preview..."),
             last_window_size: [0.0, 0.0],
+            query_cursor: None,
         };
         app.refresh_sync_status();
         app.pending_reload = true;
@@ -551,6 +557,7 @@ impl ViceroyWindowsApp {
         if self.surface != surface {
             self.surface = surface;
             self.selected = 0;
+            self.scroll_to_selected = true;
             if surface != AppSurface::Clipboard {
                 self.clipboard_editor = None;
             }
@@ -629,6 +636,7 @@ impl ViceroyWindowsApp {
         let len = self.items.len() as isize;
         self.selected = ((self.selected as isize + delta).rem_euclid(len)) as usize;
         self.preview_cache_key = None;
+        self.scroll_to_selected = true;
     }
 
     fn selected_item(&self) -> Option<&DisplayItem> {
@@ -1039,9 +1047,18 @@ impl ViceroyWindowsApp {
     }
 
     fn hide_launcher(&mut self, ctx: &egui::Context) {
+        eprintln!("[hide_launcher] called, surface={:?}", self.surface);
         self.window_minimized = true;
         self.window_was_focused = false;
         self.focus_grace_frames = 0;
+        // If hiding from clipboard view, always reset to Search and clear clipboard editor
+        if self.surface == AppSurface::Clipboard {
+            eprintln!("[hide_launcher] Resetting surface from Clipboard to Search and clearing clipboard_editor");
+            self.set_surface(AppSurface::Search);
+            self.clipboard_editor = None;
+            self.query.clear();
+            self.request_reload(true);
+        }
         // Avoid fully hiding the window: some event loops stop updating when invisible.
         // Minimize instead, so the app can still process global hotkey events.
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -1147,6 +1164,11 @@ impl ViceroyWindowsApp {
         });
     }
 
+    /// Renders the search bar and handles input.
+    ///
+    /// (KNOWN BUG) Caret/cursor position resets to the end when the search bar expands from slim to full view.
+    /// This is due to limitations in egui/eframe 0.33.x, which does not allow programmatic caret control.
+    /// Upgrading egui may allow a fix in the future.
     fn render_search_box(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         let slim = self.surface == AppSurface::Search
@@ -1166,25 +1188,31 @@ impl ViceroyWindowsApp {
                 };
                 let reserved_hint_width = if slim { 0.0 } else { 255.0 };
                 let input_width = (ui.available_width() - reserved_hint_width).max(260.0);
-                let response = ui.add_sized(
-                    [input_width, if slim { 54.0 } else { 42.0 }],
-                    TextEdit::singleline(&mut self.query)
-                        .id_salt("launcher_query")
-                        .font(if slim {
-                            egui::TextStyle::Heading
-                        } else {
-                            egui::TextStyle::Body
-                        })
-                        .frame(false)
-                        .hint_text(if self.surface == AppSurface::Clipboard {
-                            "Filter clipboard history"
-                        } else {
-                            "Search apps, files, clipboard history, and more"
-                        }),
-                );
+
+                let text_edit = TextEdit::singleline(&mut self.query)
+                    .id_salt("launcher_query")
+                    .font(if slim {
+                        egui::TextStyle::Heading
+                    } else {
+                        egui::TextStyle::Body
+                    })
+                    .frame(false)
+                    .hint_text(if self.surface == AppSurface::Clipboard {
+                        "Filter clipboard history"
+                    } else {
+                        "Search apps, files, clipboard history, and more"
+                    });
+
+                let response = ui.add_sized([
+                    input_width,
+                    if slim { 54.0 } else { 42.0 }
+                ], text_edit);
+
                 if self.focus_query_next_frame {
                     response.request_focus();
-                    self.focus_query_next_frame = false;
+                    if self.focus_grace_frames == 0 {
+                        self.focus_query_next_frame = false;
+                    }
                 }
                 if response.changed() {
                     changed = true;
@@ -1193,6 +1221,7 @@ impl ViceroyWindowsApp {
                     if self.surface == AppSurface::Search && self.query.trim().is_empty() {
                         self.items.clear();
                         self.selected = 0;
+                        self.scroll_to_selected = true;
                         self.preview_cache_key = None;
                         self.status =
                             "Search apps, files, clipboard snippets, commands, and the web."
@@ -1312,8 +1341,9 @@ impl ViceroyWindowsApp {
                                 })
                                 .response
                                 .interact(egui::Sense::click());
-                            if index == self.selected {
+                            if index == self.selected && self.scroll_to_selected {
                                 response.scroll_to_me(Some(egui::Align::Center));
+                                self.scroll_to_selected = false;
                             }
                             if response.clicked() {
                                 self.selected = index;
@@ -1835,10 +1865,8 @@ impl eframe::App for ViceroyWindowsApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        if self.focus_query_next_frame && !self.window_minimized {
-            // On Windows, scheduled-task launches can appear visually above other windows
-            // while another app still owns keyboard focus. Ask the viewport for focus before
-            // drawing the search box so typing immediately lands in Viceroy.
+        // Only send viewport focus when window is restored from minimized, not every frame.
+        if self.focus_query_next_frame && !self.window_minimized && self.window_was_focused == false && self.focus_grace_frames > 0 {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
 
@@ -1873,6 +1901,7 @@ impl eframe::App for ViceroyWindowsApp {
 
                     if self.selected >= self.items.len() {
                         self.selected = self.items.len().saturating_sub(1);
+                        self.scroll_to_selected = true;
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -1885,43 +1914,59 @@ impl eframe::App for ViceroyWindowsApp {
             match self.hotkey_events.try_recv() {
                 Ok(HotkeyEvent::Pressed) => {
                     let now = Instant::now();
-                    if self
-                        .hotkey_toggle_cooldown_until
-                        .is_some_and(|until| now < until)
-                    {
+                    eprintln!("[hotkey] Pressed at {:?}", now);
+                    eprintln!("[hotkey] State: minimized={}, was_focused={}, grace_frames={}, cooldown_until={:?}", self.window_minimized, self.window_was_focused, self.focus_grace_frames, self.hotkey_toggle_cooldown_until);
+                    if self.hotkey_toggle_cooldown_until.is_some_and(|until| now < until) {
+                        eprintln!("[hotkey] Ignored: cooldown");
                         continue;
                     }
 
-                    // Toggle behavior (match macOS): if the launcher is currently focused and visible,
-                    // hide it; otherwise summon and focus it.
                     let has_focus_now = ctx.input(|input| input.focused);
-                    if has_focus_now
-                        && !self.window_minimized
-                        && self.window_was_focused
-                        && self.focus_grace_frames == 0
-                    {
+                    let is_minimized = self.window_minimized;
+                    let can_hide = has_focus_now && !is_minimized && self.window_was_focused && self.focus_grace_frames == 0;
+
+                    if can_hide {
+                        eprintln!("[hotkey] Hiding launcher");
                         self.hide_launcher(ctx);
                         self.hotkey_toggle_cooldown_until = Some(now + Duration::from_millis(800));
                         continue;
                     }
 
+                    // If already visible and not minimized, do nothing (prevents double-show crash)
+                    if !is_minimized && has_focus_now {
+                        eprintln!("[hotkey] Ignored: already showing and focused");
+                        continue;
+                    }
+
+                    // Defensive: Only restore if not already restoring
+                    if !is_minimized && !has_focus_now {
+                        eprintln!("[hotkey] Warning: inconsistent state (not minimized, not focused)");
+                    }
+
+                    // Restore and focus the window
+                    eprintln!("[hotkey] Restoring and focusing window");
                     self.window_minimized = false;
                     self.window_was_focused = false;
-                    // After summoning, Windows may report !focused for a frame or two while the
-                    // OS negotiates foreground activation. Avoid immediately hiding again.
                     self.focus_grace_frames = 12;
 
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    // Extra guard: wrap in catch_unwind to log panics
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }));
+                    if let Err(e) = result {
+                        eprintln!("[hotkey] ERROR: panic during window restore: {:?}", e);
+                        continue;
+                    }
 
                     self.set_surface(AppSurface::Search);
                     self.query.clear();
                     self.items.clear();
                     self.selected = 0;
+                    self.scroll_to_selected = true;
                     self.preview_cache_key = None;
-                    self.status = "Search apps, files, clipboard snippets, commands, and the web."
-                        .to_string();
+                    self.status = "Search apps, files, clipboard snippets, commands, and the web.".to_string();
                     self.focus_query_next_frame = true;
                     self.pending_reload = true;
                     self.last_query_edit = Some(Instant::now());
@@ -1946,6 +1991,13 @@ impl eframe::App for ViceroyWindowsApp {
         let mut handle_escape = false;
         let mut delete_history = false;
         let has_focus = ctx.input(|input| input.focused);
+
+        // Suppress scroll-to-selected snapping while the user is actively scrolling
+        // with the mouse wheel, so free scrolling through the list is not interrupted.
+        let user_scrolling = ctx.input(|i| i.smooth_scroll_delta.y.abs() > 0.5);
+        if user_scrolling {
+            self.scroll_to_selected = false;
+        }
 
         ctx.input(|input| {
             if input.modifiers.ctrl && input.key_pressed(Key::Comma) {
@@ -2016,8 +2068,21 @@ impl eframe::App for ViceroyWindowsApp {
             self.remove_selected_history_entry();
         }
 
+        // Capture the previous window size before syncing, so we can detect the
+        // collapsed → full layout transition below.
+        let prev_window_size = self.last_window_size;
         self.sync_window_geometry(ctx);
         let collapsed_search = self.is_collapsed_search();
+
+        // When the layout transitions from collapsed (Spotlight-only, 960×124) to the
+        // full dashboard, the TextEdit is rendered inside a different parent Frame,
+        // giving it a new egui widget Id.  The old Id that had focus no longer exists,
+        // so focus is silently dropped.  Re-arm the focus request here so the new Id
+        // picks up focus on the very next frame without requiring a click.
+        let collapsed_size = [960.0_f32, 124.0_f32];
+        if prev_window_size == collapsed_size && !collapsed_search {
+            self.focus_query_next_frame = true;
+        }
 
         egui::CentralPanel::default()
             .frame(
