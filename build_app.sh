@@ -4,8 +4,8 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="${VICEROY_APP_NAME:-Viceroy}"
 BUNDLE_ID="com.viceroy.app"
-ICON_ICNS_SOURCE="$PROJECT_ROOT/icons/icon.icns"
 ICON_PNG_SOURCE="$PROJECT_ROOT/icons/icon.png"
+ICON_ICNS_SOURCE="$PROJECT_ROOT/icons/icon.icns"
 OUTPUT_ROOT="${VICEROY_APP_OUT_DIR:-$PROJECT_ROOT}"
 OUTPUT_APP_DIR="$OUTPUT_ROOT/$APP_NAME.app"
 BUILD_PROFILE="${VICEROY_BUILD_PROFILE:-release}"
@@ -86,12 +86,10 @@ EOF
 
 # Copy a tracked icon asset into the bundle so the generated app does not rely
 # on any files inside the ignored Viceroy.app directory.
-if [ -f "$ICON_ICNS_SOURCE" ]; then
-    echo "🎨 Copying app icon..."
-    /bin/cp -X "$ICON_ICNS_SOURCE" "$RESOURCES_DIR/AppIcon.icns"
-    /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string 'AppIcon'" "$CONTENTS_DIR/Info.plist" 2>/dev/null || \
-    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile 'AppIcon'" "$CONTENTS_DIR/Info.plist"
-elif [ -f "$ICON_PNG_SOURCE" ]; then
+#
+# Prefer the refined PNG source: macOS can convert it to AppIcon.icns during
+# bundle creation, while the legacy .icns file remains as a fallback.
+if [ -f "$ICON_PNG_SOURCE" ]; then
     echo "🎨 Converting PNG icon..."
     mkdir -p "$RESOURCES_DIR/AppIcon.iconset"
 
@@ -103,6 +101,11 @@ elif [ -f "$ICON_PNG_SOURCE" ]; then
     iconutil -c icns "$RESOURCES_DIR/AppIcon.iconset" -o "$RESOURCES_DIR/AppIcon.icns" 2>/dev/null || true
     rm -rf "$RESOURCES_DIR/AppIcon.iconset"
 
+    /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string 'AppIcon'" "$CONTENTS_DIR/Info.plist" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile 'AppIcon'" "$CONTENTS_DIR/Info.plist"
+elif [ -f "$ICON_ICNS_SOURCE" ]; then
+    echo "🎨 Copying legacy ICNS icon..."
+    /bin/cp -X "$ICON_ICNS_SOURCE" "$RESOURCES_DIR/AppIcon.icns"
     /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string 'AppIcon'" "$CONTENTS_DIR/Info.plist" 2>/dev/null || \
     /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile 'AppIcon'" "$CONTENTS_DIR/Info.plist"
 fi
