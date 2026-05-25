@@ -9,6 +9,7 @@ Current release downloads are split by use case:
 - macOS client: `Viceroy-macOS-<tag>.dmg`
 - Windows client: `Viceroy-Windows-Setup-<tag>.exe`
 - Linux sync server: `viceroy-sync-server-linux-x64-<tag>.tar.gz`
+- checksum manifest: `checksums-<tag>.txt`
 
 The desktop builds are currently unsigned.
 
@@ -64,6 +65,7 @@ If SmartScreen warns, use the normal Windows "More info" flow and allow the app 
 1. Download `viceroy-sync-server-linux-x64-<tag>.tar.gz`
 2. Extract it
 3. Run `./viceroy-sync-server`
+4. Optional: verify the download against `checksums-<tag>.txt` from the release page before you run it
 
 Important environment variables:
 

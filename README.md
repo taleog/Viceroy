@@ -1,10 +1,10 @@
 # Viceroy
 
 [![CI](https://github.com/taleog/Viceroy/actions/workflows/ci.yml/badge.svg)](https://github.com/taleog/Viceroy/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0--alpha.2-blue)](https://github.com/taleog/Viceroy/releases)
+[![Latest release](https://img.shields.io/github/v/release/taleog/Viceroy?include_prereleases)](https://github.com/taleog/Viceroy/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Viceroy is a fast launcher and clipboard tool built in Rust.
+Viceroy is a native launcher and clipboard history tool for macOS and Windows, with optional self-hosted sync.
 
 ![Viceroy clipboard history and preview](./assets/screenshots/viceroy-clipboard-hero.png)
 
@@ -53,6 +53,9 @@ Current release assets are:
 - `Viceroy-macOS-<tag>.dmg`
 - `Viceroy-Windows-Setup-<tag>.exe`
 - `viceroy-sync-server-linux-x64-<tag>.tar.gz`
+- `checksums-<tag>.txt`
+
+Each release also includes a checksum manifest so you can verify the download before you launch it.
 
 The builds are currently unsigned. That means:
 - macOS may show a Gatekeeper warning on first launch
@@ -65,7 +68,7 @@ For step-by-step install instructions, see [`docs/installing.md`](./docs/install
 ```bash
 git clone https://github.com/taleog/Viceroy.git
 cd Viceroy
-cargo run
+cargo run --bin viceroy
 ```
 
 Useful shortcuts from the repo root:

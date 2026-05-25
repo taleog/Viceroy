@@ -183,7 +183,7 @@ pub fn icon_badge_frame() -> Frame {
 }
 
 pub fn search_icon_text() -> RichText {
-    RichText::new("⌘")
+    RichText::new("V")
         .size(20.0)
         .strong()
         .color(Color32::from_rgba_unmultiplied(255, 255, 255, 238))

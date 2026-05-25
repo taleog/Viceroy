@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-05-25
+
+### Changed
+- Integrated the refined Viceroy logo into the macOS launcher badge and status bar, and the Windows launcher badge and app icon.
+- Updated the release version to alpha.3 so the next tagged build publishes the logo refresh.
+
 ## [0.1.0-alpha.2] - 2026-03-29
 
 ### Added
@@ -51,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File search disabled by default due to permission prompts
 - Animation helpers defined but not integrated
 
-[Unreleased]: https://github.com/taleog/Viceroy/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/taleog/Viceroy/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/taleog/Viceroy/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/taleog/Viceroy/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/taleog/Viceroy/releases/tag/v0.1.0-alpha.1

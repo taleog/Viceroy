@@ -28,6 +28,7 @@ use ui::helpers::{scale_bounce_show, style};
 use ui::settings_view;
 use ui::state::*;
 use ui::table;
+use viceroy::logo;
 use viceroy::updater;
 use viceroy::updater::{UPDATE_CHECK_DISABLED_ENV, UPDATE_METADATA_URL_ENV, UPDATE_SILENT_ENV};
 
@@ -46,6 +47,30 @@ unsafe fn nsstring_to_rust_string(value: id) -> Option<String> {
     }
 
     Some(CStr::from_ptr(cstr).to_string_lossy().into_owned())
+}
+
+unsafe fn nsimage_from_png_bytes(png_bytes: &[u8]) -> Option<id> {
+    if png_bytes.is_empty() {
+        return None;
+    }
+
+    let data: id = msg_send![
+        class!(NSData),
+        dataWithBytes: png_bytes.as_ptr()
+        length: png_bytes.len()
+    ];
+    if data == nil {
+        return None;
+    }
+
+    let image: id = msg_send![class!(NSImage), alloc];
+    let image: id = msg_send![image, initWithData: data];
+    if image == nil {
+        return None;
+    }
+
+    let _: () = msg_send![image, setSize: NSSize::new(20.0, 20.0)];
+    Some(image)
 }
 
 struct ViceroyApp;
@@ -727,9 +752,13 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     let _: () = msg_send![badge_layer, setBorderWidth: 0.0f64];
     let icon_view: id = msg_send![class!(NSImageView), alloc];
     let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(6.0, 6.0), NSSize::new(26.0, 26.0))];
-    let icon_name = NSString::alloc(nil).init_str("magnifyingglass");
-    let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName:icon_name accessibilityDescription:nil];
-    let _: () = msg_send![icon_view, setImage: image];
+    if let Some(image) = nsimage_from_png_bytes(logo::TRAY_ICON_PNG) {
+        let _: () = msg_send![icon_view, setImage: image];
+    } else {
+        let icon_name = NSString::alloc(nil).init_str("magnifyingglass");
+        let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName:icon_name accessibilityDescription:nil];
+        let _: () = msg_send![icon_view, setImage: image];
+    }
     let icon_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.5f64]; // Subtle gray
     let _: () = msg_send![icon_view, setContentTintColor: icon_color];
     let _: () = msg_send![icon_badge, addSubview: icon_view];
@@ -1064,18 +1093,13 @@ unsafe fn create_status_bar_item() {
     // Retain the status item so it doesn't get deallocated
     let _: id = msg_send![status_item, retain];
 
-    // Set icon (using SF Symbol or text for now)
+    // Set icon from the Viceroy logo, with a text fallback if image decoding fails.
     let button: id = msg_send![status_item, button];
 
-    // Try to use SF Symbol (macOS 11+), fallback to text
-    let symbol_name = NSString::alloc(nil).init_str("crown.fill");
-    let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName:symbol_name accessibilityDescription:nil];
-
-    if image != nil {
+    if let Some(image) = nsimage_from_png_bytes(logo::TRAY_ICON_PNG) {
         let _: () = msg_send![button, setImage: image];
     } else {
-        // Fallback: use text icon
-        let _: () = msg_send![button, setTitle: NSString::alloc(nil).init_str("👑")];
+        let _: () = msg_send![button, setTitle: NSString::alloc(nil).init_str("V")];
     }
 
     // Create menu
@@ -1085,10 +1109,10 @@ unsafe fn create_status_bar_item() {
     // Get the app for terminate action
     let app: id = msg_send![class!(NSApplication), sharedApplication];
 
-    // Menu item: Open ViceroyKiller with shortcut shown
+    // Menu item: Open Viceroy with shortcut shown
     let open_item: id = msg_send![class!(NSMenuItem), alloc];
     let open_item: id = msg_send![open_item,
-        initWithTitle: NSString::alloc(nil).init_str("Open ViceroyKiller")
+        initWithTitle: NSString::alloc(nil).init_str("Open Viceroy")
         action: sel!(showMainWindow:)
         keyEquivalent: NSString::alloc(nil).init_str(" ") // Space key
     ];
@@ -1104,7 +1128,7 @@ unsafe fn create_status_bar_item() {
     // Version number (grayed out, non-interactive)
     let version_item: id = msg_send![class!(NSMenuItem), alloc];
     let version_item: id = msg_send![version_item,
-        initWithTitle: NSString::alloc(nil).init_str("ViceroyKiller v1.0.0")
+        initWithTitle: NSString::alloc(nil).init_str(&format!("Viceroy v{}", env!("CARGO_PKG_VERSION")))
         action: nil
         keyEquivalent: NSString::alloc(nil).init_str("")
     ];
@@ -1114,7 +1138,7 @@ unsafe fn create_status_bar_item() {
     // About
     let about_item: id = msg_send![class!(NSMenuItem), alloc];
     let about_item: id = msg_send![about_item,
-        initWithTitle: NSString::alloc(nil).init_str("About ViceroyKiller")
+        initWithTitle: NSString::alloc(nil).init_str("About Viceroy")
         action: sel!(orderFrontStandardAboutPanel:)
         keyEquivalent: NSString::alloc(nil).init_str("")
     ];
@@ -1195,7 +1219,7 @@ unsafe fn create_status_bar_item() {
     // Quit with shortcut
     let quit_item: id = msg_send![class!(NSMenuItem), alloc];
     let quit_item: id = msg_send![quit_item,
-        initWithTitle: NSString::alloc(nil).init_str("Quit ViceroyKiller")
+        initWithTitle: NSString::alloc(nil).init_str("Quit Viceroy")
         action: sel!(terminate:)
         keyEquivalent: NSString::alloc(nil).init_str("q")
     ];

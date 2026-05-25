@@ -1,6 +1,7 @@
 use arboard::Clipboard;
 use eframe::egui::{
-    self, vec2, Align, ColorImage, Image, Key, Layout, ScrollArea, Slider, TextEdit, TextureOptions,
+    self, vec2, Align, ColorImage, Image, Key, Layout, ScrollArea, Slider, TextEdit,
+    TextureHandle, TextureOptions,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -23,6 +24,7 @@ use crate::windows_hotkey::{start_hotkey_listener, HotkeyEvent};
 use crate::windows_icon;
 use crate::windows_preview::{self, PreviewCard, PreviewPanelState, PreviewSource};
 use crate::windows_style::{self, BadgeTone};
+use viceroy::logo;
 
 use raw_window_handle::HasWindowHandle;
 
@@ -359,6 +361,8 @@ pub fn run() {
 
     let runtime = Arc::new(Runtime::new().expect("failed to create tokio runtime"));
     let initial_query = extract_query_args(&args).join(" ");
+    let icon_data = eframe::icon_data::from_png_bytes(logo::APP_ICON_PNG)
+        .expect("failed to decode Viceroy app icon");
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Viceroy")
@@ -370,7 +374,8 @@ pub fn run() {
             .with_taskbar(false)
             .with_has_shadow(true)
             .with_always_on_top()
-            .with_visible(true),
+            .with_visible(true)
+            .with_icon(icon_data),
         ..Default::default()
     };
 
@@ -460,6 +465,7 @@ struct ViceroyWindowsApp {
     max_results: usize,
     icon_cache: HashMap<u64, eframe::egui::TextureHandle>,
     icon_cache_failures: HashSet<u64>,
+    logo_badge: Option<TextureHandle>,
     paste_after_restore: bool,
     dismiss_on_escape: bool,
     dismiss_on_click_away: bool,
@@ -490,6 +496,23 @@ impl ViceroyWindowsApp {
         windows_style::apply_launcher_theme(&cc.egui_ctx);
         let app_settings = settings::load().unwrap_or_default();
         let (work_tx, work_rx) = start_work_thread();
+        let logo_badge = match logo::decode_png_rgba(logo::TRAY_ICON_PNG) {
+            Ok((width, height, rgba)) => {
+                let image = ColorImage::from_rgba_unmultiplied(
+                    [width as usize, height as usize],
+                    &rgba,
+                );
+                Some(cc.egui_ctx.load_texture(
+                    "viceroy_logo_badge",
+                    image,
+                    TextureOptions::LINEAR,
+                ))
+            }
+            Err(err) => {
+                log::warn!("failed to decode tray logo badge: {err:#}");
+                None
+            }
+        };
 
         let mut app = Self {
             runtime,
@@ -522,6 +545,7 @@ impl ViceroyWindowsApp {
             max_results: app_settings.max_results,
             icon_cache: HashMap::new(),
             icon_cache_failures: HashSet::new(),
+            logo_badge,
             paste_after_restore: app_settings.paste_after_restore,
             dismiss_on_escape: app_settings.dismiss_on_escape,
             dismiss_on_click_away: app_settings.dismiss_on_click_away,
@@ -545,7 +569,6 @@ impl ViceroyWindowsApp {
             preview_cache_key: None,
             preview_cache_card: PreviewCard::empty("Loading preview..."),
             last_window_size: [0.0, 0.0],
-            query_cursor: None,
         };
         app.refresh_sync_status();
         app.pending_reload = true;
@@ -1178,7 +1201,11 @@ impl ViceroyWindowsApp {
         windows_style::search_shell_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 windows_style::icon_badge_frame().show(ui, |ui| {
-                    ui.label(windows_style::search_icon_text());
+                    if let Some(logo_badge) = &self.logo_badge {
+                        ui.add(Image::new((logo_badge.id(), vec2(20.0, 20.0))));
+                    } else {
+                        ui.label(windows_style::search_icon_text());
+                    }
                 });
 
                 let right_hint = if self.surface == AppSurface::Clipboard {

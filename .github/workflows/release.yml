@@ -175,7 +175,7 @@ jobs:
           2. Run ./viceroy-sync-server
 
           Optional environment variables:
-          - VICEROY_SYNC_SERVER_BIND_ADDR
+          - VICEROY_SYNC_SERVER_BIND
           - VICEROY_SYNC_SERVER_DATABASE
           - VICEROY_SYNC_SERVER_AUTH_TOKEN
 
