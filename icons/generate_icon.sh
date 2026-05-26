@@ -1,35 +1,45 @@
 #!/bin/bash
-# Script to generate app icon from a PNG source
+# Generate app icon from the refined SVG source
+# Requirements: cairosvg (pip install cairosvg) on Linux, or on macOS just uses sips/iconutil
+set -euo pipefail
 
-# This is a placeholder script. To create a proper icon:
-# 1. Create a 1024x1024 PNG icon named "icon.png"
-# 2. Run this script to generate icon.icns
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SVG_SOURCE="$SCRIPT_DIR/viceroy-app-icon-transparent.svg"
+PNG_OUTPUT="$SCRIPT_DIR/icon.png"
 
-if [ ! -f "icon.png" ]; then
-    echo "Error: icon.png not found in icons directory"
-    echo "Please create a 1024x1024 PNG icon first"
+if [ ! -f "$SVG_SOURCE" ]; then
+    echo "Error: source SVG not found at $SVG_SOURCE"
     exit 1
 fi
 
-# Create iconset directory
-mkdir -p icon.iconset
+echo "🎨 Rendering icon from SVG..."
+if command -v python3 &>/dev/null && python3 -c "import cairosvg" 2>/dev/null; then
+    # Linux: use cairosvg for proper RGBA output
+    python3 -c "
+import cairosvg
+cairosvg.svg2png(url='$SVG_SOURCE', write_to='$PNG_OUTPUT', output_width=1024, output_height=1024)
+print('icon.png generated (1024x1024 RGBA)')
+"
+elif command -v sips &>/dev/null; then
+    # macOS: convert SVG via intermediate PNG (sips can't read SVG directly)
+    echo "sips-based conversion not available — use cairosvg or Inkscape"
+    exit 1
+else
+    echo "No SVG rasterizer available. Install cairosvg: pip install cairosvg"
+    exit 1
+fi
 
-# Generate different sizes
-sips -z 16 16     icon.png --out icon.iconset/icon_16x16.png
-sips -z 32 32     icon.png --out icon.iconset/icon_16x16@2x.png
-sips -z 32 32     icon.png --out icon.iconset/icon_32x32.png
-sips -z 64 64     icon.png --out icon.iconset/icon_32x32@2x.png
-sips -z 128 128   icon.png --out icon.iconset/icon_128x128.png
-sips -z 256 256   icon.png --out icon.iconset/icon_128x128@2x.png
-sips -z 256 256   icon.png --out icon.iconset/icon_256x256.png
-sips -z 512 512   icon.png --out icon.iconset/icon_256x256@2x.png
-sips -z 512 512   icon.png --out icon.iconset/icon_512x512.png
-sips -z 1024 1024 icon.png --out icon.iconset/icon_512x512@2x.png
+# If on macOS, also generate icon.icns
+if command -v iconutil &>/dev/null; then
+    echo "🍎 Generating icon.icns..."
+    mkdir -p icon.iconset
+    for size in 16 32 128 256 512; do
+        sips -z $size $size "$PNG_OUTPUT" --out "icon.iconset/icon_${size}x${size}.png" 2>/dev/null || true
+        sips -z $((size*2)) $((size*2)) "$PNG_OUTPUT" --out "icon.iconset/icon_${size}x${size}@2x.png" 2>/dev/null || true
+    done
+    iconutil -c icns icon.iconset
+    rm -rf icon.iconset
+    echo "icon.icns generated!"
+fi
 
-# Convert to icns
-iconutil -c icns icon.iconset
-
-# Clean up
-rm -rf icon.iconset
-
-echo "icon.icns generated successfully!"
+echo "✅ Done: $PNG_OUTPUT"

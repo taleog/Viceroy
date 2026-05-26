@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E8CB79"/>
+      <stop offset="1" stop-color="#C9A55F"/>
+    </linearGradient>
+    <linearGradient id="white" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D8D8D8"/>
+    </linearGradient>
+    <linearGradient id="gray" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9AA0A6"/>
+      <stop offset="1" stop-color="#686E75"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#000" flood-opacity="0.20"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)" transform="translate(512,512) scale(1.92, 1.65) translate(-512,-512)">
+    <path d="M 288 286 L 514 456 L 742 286 L 742 379 L 514 549 L 288 379 Z" fill="url(#gold)"/>
+    <path d="M 300 444 L 514 606 L 728 444 L 728 517 L 514 679 L 300 517 Z" fill="url(#white)"/>
+    <path d="M 316 586 L 514 736 L 712 586 L 712 638 L 514 788 L 316 638 Z" fill="url(#gray)"/>
+  </g>
+</svg>
