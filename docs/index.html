@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Viceroy is a desktop launcher with clipboard history for macOS and Windows, with optional self-hosted sync."
+    />
+    <meta name="theme-color" content="#0d1116" />
+    <link rel="icon" type="image/svg+xml" href="assets/brand/viceroy-favicon-refined.svg" />
+    <title>Viceroy - launcher and clipboard history</title>
+    <link rel="stylesheet" href="styles.css?v=2026-05-24-2" />
+  </head>
+  <body>
+    <header class="site-header" aria-label="Primary navigation">
+      <a class="brand" href="#top" aria-label="Viceroy home">
+        <img class="brand-mark" src="assets/brand/viceroy-symbol-refined.svg" alt="" aria-hidden="true" />
+        <span>Viceroy</span>
+      </a>
+      <nav class="nav-links" aria-label="Site sections">
+        <a href="#features">Product</a>
+        <a href="#sync">Sync</a>
+        <a href="#install">Download</a>
+      </nav>
+      <a class="header-cta" href="download/" rel="noreferrer">
+        Download
+      </a>
+    </header>
+
+    <main id="top">
+      <section class="hero section-shell">
+        <p class="eyebrow">Launcher for macOS and Windows</p>
+        <h1>Apps, files, and clipboard history in one place.</h1>
+        <p class="lede">
+          Search apps and paste from one shortcut.
+        </p>
+        <div class="hero-actions" aria-label="Primary actions">
+          <a class="button button-primary" href="download/" rel="noreferrer">
+            Download
+          </a>
+          <a class="button button-secondary" href="https://github.com/taleog/Viceroy#readme" rel="noreferrer">
+            View GitHub
+          </a>
+        </div>
+      </section>
+
+      <section class="product-stage section-shell" aria-label="Viceroy product preview">
+        <figure class="hero-media">
+          <div class="media-frame">
+            <div class="launcher-reference launcher-reference--search" role="img" aria-label="Viceroy launcher showing macOS-style search results for Safari, Settings, Shortcuts, Siri, and Sonos">
+              <div class="launcher-panel">
+                <div class="launcher-search-row">
+                  <div class="launcher-search-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8" /><path d="M15.8 15.8L20 20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+                  </div>
+                  <div class="launcher-query-block">
+                    <div class="launcher-query">s<span class="launcher-caret" aria-hidden="true"></span></div>
+                    <div class="launcher-subhint">Tab = clipboard · / = web search · Esc = hide</div>
+                  </div>
+                  <div class="launcher-pref">⌘ + , <span>Preferences</span></div>
+                </div>
+                <div class="launcher-result-list" aria-hidden="true">
+                  <div class="launcher-result is-selected">
+                    <span class="app-icon"><img src="assets/app-icons/safari.png" alt="" /></span>
+                    <span><strong>Safari</strong><small>/ › Applications › Safari.app</small></span>
+                    <em>Application</em>
+                  </div>
+                  <div class="launcher-result">
+                    <span class="app-icon"><img src="assets/app-icons/system-settings.png" alt="" /></span>
+                    <span><strong>System Settings</strong><small>/ › System › Applications › System Settings.app</small></span>
+                    <em>Application</em>
+                  </div>
+                  <div class="launcher-result">
+                    <span class="app-icon"><img src="assets/app-icons/shortcuts.png" alt="" /></span>
+                    <span><strong>Shortcuts</strong><small>/ › System › Applications › Shortcuts.app</small></span>
+                    <em>Application</em>
+                  </div>
+                  <div class="launcher-result">
+                    <span class="app-icon"><img src="assets/app-icons/siri.png" alt="" /></span>
+                    <span><strong>Siri</strong><small>/ › System › Applications › Siri.app</small></span>
+                    <em>Application</em>
+                  </div>
+                  <div class="launcher-result">
+                    <span class="app-icon"><img src="assets/app-icons/sonos.png" alt="" /></span>
+                    <span><strong>Sonos</strong><small>/ › Applications › Sonos.app</small></span>
+                    <em>Application</em>
+                  </div>
+                </div>
+                <div class="launcher-hints" aria-hidden="true">
+                  <span class="hint-key">↑</span><span>/</span><span class="hint-key">↓</span><span>Navigate</span><b>•</b><span>Tab</span><b>•</b><span class="hint-key">⌘⌫</span><span>Clear query</span><b>•</b><span class="hint-key">⌘,</span><span>Settings</span><b>•</b><span class="hint-key">↵</span><span>Launch / Paste</span><b>•</b>
+                </div>
+              </div>
+            </div>
+          </div>
+          <figcaption>
+            The same panel switches between search and history.
+          </figcaption>
+        </figure>
+      </section>
+
+
+      <section id="features" class="section-shell product-section" data-reveal>
+        <div class="section-intro">
+          <p class="section-label">Product</p>
+          <h2>Fast access to the stuff you use most.</h2>
+          <p>
+            Viceroy opens apps, finds files, and brings back clipboard items when you need them.
+          </p>
+        </div>
+
+        <div class="feature-list">
+          <article class="feature-row">
+            <span class="feature-index">01</span>
+            <div>
+              <h3>Launch apps and files</h3>
+              <p>Apps, files, commands, emoji, definitions, and quick calculations from one launcher.</p>
+            </div>
+          </article>
+          <article class="feature-row">
+            <span class="feature-index">02</span>
+            <div>
+              <h3>Search clipboard items</h3>
+              <p>Pin useful clips and keep enough context to know where something came from.</p>
+            </div>
+          </article>
+          <article class="feature-row">
+            <span class="feature-index">03</span>
+            <div>
+              <h3>Stay native</h3>
+              <p>Rust backend, native macOS shell, Windows support, and no hosted account for personal use.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="screenshot-section section-shell" data-reveal>
+        <figure class="screenshot-card">
+          <div class="launcher-reference launcher-reference--compact launcher-reference--clipboard" role="img" aria-label="Viceroy clipboard history with copied items and a link preview">
+            <div class="launcher-panel">
+              <div class="launcher-search-row">
+                <div class="launcher-search-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8" /><path d="M15.8 15.8L20 20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+                </div>
+                <div class="launcher-query-block">
+                  <div class="launcher-query launcher-query--placeholder">Search apps, files, clipboard history, and more</div>
+                  <div class="launcher-subhint">Tab = clipboard · / = web search · Esc = hide</div>
+                </div>
+                <div class="launcher-pref">⌘ + , <span>Preferences</span></div>
+              </div>
+              <div class="clipboard-layout" aria-hidden="true">
+                <div class="launcher-result-list clipboard-list">
+                  <div class="launcher-result is-selected">
+                    <span class="app-icon app-icon--github" aria-hidden="true">
+                      <svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="20" fill="#fff"/><path fill="#24292f" d="M24 9.5c-8 0-14.5 6.5-14.5 14.7 0 6.5 4.2 12 10 13.9.7.1 1-.3 1-.7v-2.7c-4.1.9-5-1.8-5-1.8-.7-1.7-1.7-2.2-1.7-2.2-1.3-.9.1-.9.1-.9 1.5.1 2.3 1.6 2.3 1.6 1.3 2.3 3.5 1.6 4.3 1.2.1-1 .5-1.6.9-2-3.3-.4-6.8-1.7-6.8-7.4 0-1.6.6-3 1.5-4-.2-.4-.7-2 .2-4.1 0 0 1.3-.4 4.2 1.5A14.3 14.3 0 0 1 24 16c1.3 0 2.6.2 3.8.5 2.9-1.9 4.1-1.5 4.1-1.5.9 2.1.4 3.7.2 4.1 1 1 1.5 2.4 1.5 4 0 5.8-3.5 7-6.8 7.4.5.5 1 1.4 1 2.8v4.1c0 .4.3.9 1 .7a14.6 14.6 0 0 0 9.9-13.9C38.5 16 32 9.5 24 9.5Z"/></svg>
+                    </span>
+                    <span><strong>github.com</strong><small>Safari · just now · 33 chars</small></span>
+                    <em>Text</em>
+                  </div>
+                  <div class="launcher-result">
+                    <span class="app-icon app-icon--messages" aria-hidden="true"><svg viewBox="0 0 48 48"><rect width="48" height="48" rx="11" fill="url(#msgGrad)"/><ellipse cx="24" cy="22" rx="15" ry="12" fill="#fff"/><path d="M15 31c-.5 3-2.7 4.8-5 5.9 4.6.4 8.1-1.2 10.5-3.4" fill="#fff"/><defs><linearGradient id="msgGrad" x1="24" x2="24" y1="0" y2="48"><stop stop-color="#6dff72"/><stop offset="1" stop-color="#08be20"/></linearGradient></defs></svg></span>
+                    <span><strong>2 pm Wednesday</strong><small>Messages · 1m ago · 14 chars</small></span>
+                    <em>Text</em>
+                  </div>
+                  <div class="launcher-result">
+                    <span class="app-icon app-icon--discord" aria-hidden="true"><svg viewBox="0 0 48 48"><rect width="48" height="48" rx="11" fill="#6672ff"/><path fill="#fff" d="M34.6 16.2a26 26 0 0 0-6.4-2l-.8 1.7a21 21 0 0 0-6.8 0l-.8-1.7a26 26 0 0 0-6.4 2c-4 6-5 11.8-4.5 17.5a26 26 0 0 0 7.8 4l1.6-2.6c-.9-.3-1.8-.8-2.6-1.3l.6-.5a18.8 18.8 0 0 0 15.4 0l.6.5c-.8.5-1.7 1-2.6 1.3l1.6 2.6a26 26 0 0 0 7.8-4c.6-6.6-1-12.4-4.5-17.5ZM19.2 30c-1.5 0-2.8-1.4-2.8-3.1s1.2-3.1 2.8-3.1c1.5 0 2.8 1.4 2.8 3.1S20.8 30 19.2 30Zm9.6 0c-1.5 0-2.8-1.4-2.8-3.1s1.2-3.1 2.8-3.1c1.5 0 2.8 1.4 2.8 3.1S30.4 30 28.8 30Z"/></svg></span>
+                    <span><strong>all mc</strong><small>Discord · 3m ago · 805 chars</small></span>
+                    <em>Text</em>
+                  </div>
+                  <div class="launcher-result">
+                    <span class="app-icon"><img src="assets/app-icons/safari.png" alt="" /></span>
+                    <span><strong>Viceroy is a fast launcher and</strong><small>Safari · 5m ago · 160 chars</small></span>
+                    <em>Text</em>
+                  </div>
+                  <div class="launcher-result">
+                    <span class="app-icon app-icon--vscode" aria-hidden="true"><svg viewBox="0 0 48 48"><rect width="48" height="48" rx="11" fill="#f6f8fb"/><path fill="#1689d9" d="M34.5 10.5 18.2 25l-7.6-5.8-3.1 2.3 7.4 6.5-7.4 6.5 3.1 2.3 7.6-5.8 16.3 14.5 6-2.6v-29.8l-6-2.6Zm-.3 11.1v12.8L25 28l9.2-6.4Z"/></svg></span>
+                    <span><strong>pub struct KnownSyncDevice {</strong><small>Code · 8m ago · 312 chars</small></span>
+                    <em>Text</em>
+                  </div>
+                </div>
+                <aside class="clipboard-preview" aria-label="Selected clipboard item preview">
+                  <div class="clip-preview-header">
+                    <strong>GitHub</strong>
+                    <button type="button" tabindex="-1">Open Link</button>
+                  </div>
+                  <p>Safari · just now · github.com</p>
+                  <div class="github-card">
+                    <div>
+                      <span>taleog/<strong>Viceroy</strong></span>
+                      <small>Lightweight native MacOS spotlight replacement</small>
+                    </div>
+                    <img class="github-card-mark" src="assets/brand/viceroy-app-icon-refined.svg" alt="" aria-hidden="true" />
+                    <ul>
+                      <li>1<br /><span>Contributor</span></li>
+                      <li>0<br /><span>Issues</span></li>
+                      <li>0<br /><span>Stars</span></li>
+                      <li>0<br /><span>Forks</span></li>
+                    </ul>
+                  </div>
+                </aside>
+              </div>
+              <div class="launcher-hints" aria-hidden="true"><span class="hint-key">↑</span><span>/</span><span class="hint-key">↓</span><span>Navigate</span><b>•</b><span>Tab</span><b>•</b><span class="hint-key">⌘⌫</span><span>Clear query</span><b>•</b><span class="hint-key">⌘,</span><span>Settings</span><b>•</b><span class="hint-key">↵</span><span>Launch / Paste</span><b>•</b></div>
+            </div>
+          </div>
+          <figcaption>
+            Clipboard history stays searchable, previewable, and close to the keyboard.
+          </figcaption>
+        </figure>
+      </section>
+
+      <section id="sync" class="section-shell sync-section" data-reveal>
+        <div class="section-intro compact">
+          <p class="section-label">Sync</p>
+          <h2>Run your own sync server.</h2>
+          <p>
+            The Linux sync server keeps clipboard history moving between your devices.
+          </p>
+        </div>
+
+        <div class="sync-grid" aria-label="Sync setup steps">
+          <article>
+            <span>1</span>
+            <strong>Host the server</strong>
+            <p>SQLite storage, WebSocket fanout, and no managed backend.</p>
+          </article>
+          <article>
+            <span>2</span>
+            <strong>Connect clients</strong>
+            <p>Use your server URL from each desktop client.</p>
+          </article>
+          <article>
+            <span>3</span>
+            <strong>Search everywhere</strong>
+            <p>Recover text, images, and pinned clips across machines.</p>
+          </article>
+        </div>
+
+        <a class="text-link" href="https://github.com/taleog/Viceroy/blob/main/docs/sync-server.md" rel="noreferrer">
+          Read sync docs
+        </a>
+      </section>
+
+      <section id="install" class="install-section section-shell" data-reveal>
+        <div class="install-card">
+          <div>
+            <p class="section-label">Download</p>
+            <h2>Download the latest build.</h2>
+            <p>
+              The download page has the current release links for macOS, Windows, and the sync server.
+            </p>
+          </div>
+          <div class="access-actions">
+            <a class="button button-primary" href="download/" rel="noreferrer">Download</a>
+            <a class="text-link" href="https://github.com/taleog/Viceroy/blob/main/docs/installing.md" rel="noreferrer">Install notes</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span class="footer-brand">
+        <img class="footer-mark" src="assets/brand/viceroy-symbol-refined.svg" alt="" aria-hidden="true" />
+        <span>Viceroy</span>
+      </span>
+      <a href="https://github.com/taleog/Viceroy" rel="noreferrer">GitHub</a>
+      <a href="https://github.com/taleog/Viceroy/blob/main/docs/installing.md" rel="noreferrer">Install docs</a>
+      <a href="https://github.com/taleog/Viceroy/issues" rel="noreferrer">Issues</a>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>
