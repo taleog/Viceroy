@@ -752,13 +752,11 @@ unsafe fn create_search_field(content_view: id, bounds: NSRect) {
     let _: () = msg_send![badge_layer, setBorderWidth: 0.0f64];
     let icon_view: id = msg_send![class!(NSImageView), alloc];
     let icon_view: id = msg_send![icon_view, initWithFrame: NSRect::new(NSPoint::new(6.0, 6.0), NSSize::new(26.0, 26.0))];
-    if let Some(image) = nsimage_from_png_bytes(logo::TRAY_ICON_PNG) {
-        let _: () = msg_send![icon_view, setImage: image];
-    } else {
-        let icon_name = NSString::alloc(nil).init_str("magnifyingglass");
-        let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName:icon_name accessibilityDescription:nil];
-        let _: () = msg_send![icon_view, setImage: image];
-    }
+    // Use system magnifying glass icon for the search bar badge
+    // (the tray/chevron icon stays in the menu bar only)
+    let icon_name = NSString::alloc(nil).init_str("magnifyingglass");
+    let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName:icon_name accessibilityDescription:nil];
+    let _: () = msg_send![icon_view, setImage: image];
     let icon_color: id = msg_send![class!(NSColor), colorWithCalibratedWhite:1.0f64 alpha:0.5f64]; // Subtle gray
     let _: () = msg_send![icon_view, setContentTintColor: icon_color];
     let _: () = msg_send![icon_badge, addSubview: icon_view];
